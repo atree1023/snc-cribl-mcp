@@ -1,0 +1,54 @@
+{
+  "id": "suppress",
+  "schema": {
+    "type": "object",
+    "title": "",
+    "required": ["keyExpr", "allow", "suppressPeriodSec"],
+    "properties": {
+      "keyExpr": {
+        "type": "string",
+        "title": "Key expression",
+        "description": "Suppression key expression used to uniquely identify events to suppress. For example, `${ip}:${port}` will use fields ip and port from each event to generate the key.",
+        "jsExpression": true
+      },
+      "allow": {
+        "type": "number",
+        "title": "Number to allow",
+        "default": 1,
+        "minimum": 1,
+        "description": "The number of events to allow per time period"
+      },
+      "suppressPeriodSec": {
+        "type": "number",
+        "title": "Suppression period (sec)",
+        "default": 30,
+        "minimum": 0,
+        "description": "The number of seconds to suppress events after 'Number to allow' events are received"
+      },
+      "dropEventsMode": {
+        "type": "boolean",
+        "title": "Drop suppressed events",
+        "default": true,
+        "description": "If disabled, suppressed events will be tagged with suppress=1 but not dropped"
+      },
+      "maxCacheSize": {
+        "type": "number",
+        "title": "Cache size limit",
+        "default": 50000,
+        "description": "The maximum number of keys that can be cached before idle entries are removed. Leave at default unless you understand the implications of changing."
+      },
+      "cacheIdleTimeoutPeriods": {
+        "type": "number",
+        "title": "Suppression period timeout",
+        "default": 2,
+        "description": "The number of suppression periods 'Suppression Period' of inactivity before a cache entry is considered idle. Leave at default unless you understand the implications of changing."
+      },
+      "numEventsIdleTimeoutTrigger": {
+        "type": "number",
+        "title": "Num events to trigger cache clean-up",
+        "default": 10000,
+        "description": "Check cache for idle sessions every N events when cache size is > 'Maximum Cache Size'. Leave at default unless you understand the implications of changing."
+      }
+    }
+  }
+}

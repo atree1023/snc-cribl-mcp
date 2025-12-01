@@ -1,0 +1,165 @@
+{
+  "id": "aggregate_metrics",
+  "schema": {
+    "type": "object",
+    "title": "",
+    "required": ["timeWindow", "aggregations"],
+    "properties": {
+      "passthrough": {
+        "type": "boolean",
+        "title": "Passthrough mode",
+        "description": "Pass through the original events along with the aggregation events",
+        "default": false
+      },
+      "preserveGroupBys": {
+        "type": "boolean",
+        "title": "Preserve group by fields",
+        "description": "Preserve the structure of the original aggregation event's groupby fields",
+        "default": false
+      },
+      "sufficientStatsOnly": {
+        "type": "boolean",
+        "title": "Sufficient stats mode",
+        "description": "Output only statistics that are sufficient for the supplied aggregations",
+        "default": false
+      },
+      "prefix": {
+        "type": "string",
+        "title": "Output prefix",
+        "description": "A prefix that is prepended to all of the fields output by this Aggregations Function"
+      },
+      "timeWindow": {
+        "pattern": "\\d+[sm]$",
+        "type": "string",
+        "title": "Time window",
+        "description": "The time span of the tumbling window for aggregating events. Must be a valid time string (such as 10s).",
+        "default": "10s"
+      },
+      "aggregations": {
+        "type": "array",
+        "title": "Aggregates",
+        "description": "Combination of Aggregation function and output metric type",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": ["agg", "metricType"],
+          "additionalProperties": false,
+          "properties": {
+            "metricType": {
+              "title": "Metric type",
+              "description": "The output metric type",
+              "type": "string",
+              "enum": [
+                "automatic",
+                "counter",
+                "distribution",
+                "gauge",
+                "histogram",
+                "summary",
+                "timer"
+              ],
+              "default": "automatic"
+            },
+            "agg": {
+              "title": "Aggregation",
+              "type": "string",
+              "description": "Aggregate function to perform on events. Example: sum(bytes).where(action=='REJECT').as(TotalBytes)",
+              "aggregationExpression": true
+            }
+          }
+        }
+      },
+      "groupbys": {
+        "type": "array",
+        "title": "Group by dimensions",
+        "description": "Optional: One or more dimensions to group aggregates by. Supports wildcard expressions. Wrap dimension names in quotes if using literal identifiers, such as 'service.name'. Warning: Using wildcard '*' causes all dimensions in the event to be included, which can result in high cardinality and increased memory usage. Exclude dimensions that can result in high cardinality before using wildcards. Example: !_time, !_numericValue, *",
+        "items": {
+          "type": "string"
+        }
+      },
+      "flushEventLimit": {
+        "type": "number",
+        "title": "Aggregation event limit",
+        "description": "The maximum number of events to include in any given aggregation event",
+        "minimum": 1
+      },
+      "flushMemLimit": {
+        "type": "string",
+        "title": "Aggregation memory limit",
+        "description": "The memory usage limit to impose upon aggregations. Defaults to unlimited (all available system memory). Accepts numerals with units like KB and MB (example: 4GB).",
+        "pattern": "^\\d+\\s*(?:\\w{2})?$"
+      },
+      "cumulative": {
+        "type": "boolean",
+        "title": "Cumulative aggregations",
+        "description": "Enable to retain aggregations for cumulative aggregations when flushing out an aggregation table event. When disabled (the default), aggregations are reset to 0 on flush.",
+        "default": false
+      },
+      "shouldTreatDotsAsLiterals": {
+        "type": "boolean",
+        "title": "Treat dots as literals",
+        "description": "Treat dots in dimension names as literals. This is useful for top-level dimensions that contain dots, such as 'service.name'.",
+        "default": true
+      },
+      "add": {
+        "title": "Evaluate fields",
+        "description": "Set of key-value pairs to evaluate and add/set",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["value"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "title": "Name"
+            },
+            "value": {
+              "type": "string",
+              "title": "Value expression",
+              "description": "JavaScript expression to compute the value (can be constant)",
+              "jsExpression": true
+            }
+          }
+        }
+      },
+      "flushOnInputClose": {
+        "type": "boolean",
+        "title": "Flush on stream close",
+        "description": "Flush aggregations when an input stream is closed. If disabled, Time Window Settings control flush behavior.",
+        "default": true
+      }
+    },
+    "dependencies": {
+      "cumulative": {
+        "oneOf": [
+          {
+            "properties": {
+              "cumulative": {
+                "enum": [true]
+              }
+            }
+          },
+          {
+            "properties": {
+              "cumulative": {
+                "enum": [false]
+              },
+              "lagTolerance": {
+                "type": "string",
+                "title": "Lag tolerance",
+                "description": "The tumbling window tolerance to late events. Must be a valid time string (such as 10s).",
+                "pattern": "\\d+[sm]$"
+              },
+              "idleTimeLimit": {
+                "type": "string",
+                "title": "Idle bucket time limit",
+                "description": "How long to wait before flushing a bucket that has not received events. Must be a valid time string (such as 10s).",
+                "pattern": "\\d+[sm]$"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

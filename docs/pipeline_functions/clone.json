@@ -1,0 +1,24 @@
+{
+  "id": "clone",
+  "schema": {
+    "type": "object",
+    "title": "",
+    "properties": {
+      "clones": {
+        "type": "array",
+        "title": "Clones",
+        "description": "Create clones with the following fields set",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "title": "Fields",
+          "description": "Key-value pairs to set or overwrite in the clone",
+          "additionalProperties": {
+            "type": "string",
+            "jsExpression": "warning"
+          }
+        }
+      }
+    }
+  }
+}

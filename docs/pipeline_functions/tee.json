@@ -1,0 +1,39 @@
+{
+  "id": "tee",
+  "schema": {
+    "type": "object",
+    "title": "",
+    "required": ["command"],
+    "flag": {
+      "name": "function/teefunc"
+    },
+    "properties": {
+      "command": {
+        "type": "string",
+        "title": "Command",
+        "description": "Command to execute and feed events to, via stdin. One JSON-formatted event per line."
+      },
+      "args": {
+        "type": "array",
+        "title": "Command arguments",
+        "items": {
+          "type": "string"
+        }
+      },
+      "restartOnExit": {
+        "type": "boolean",
+        "title": "Restart on exit",
+        "description": "Restart the process if it exits and/or we fail to write to it",
+        "default": true
+      },
+      "env": {
+        "type": "object",
+        "title": "Environment variables",
+        "description": "Environment variables to overwrite or set",
+        "additionalProperties": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+.DS_Store
+
+.env
+.python-version
+
+.venv/
+.ruff_cache/
+__pycache__/
+.pytest_cache/
+
+.coverage
+coverage.*
+htmlcov/
+
+mcp.json
+uv.lock
+.uv-cache/

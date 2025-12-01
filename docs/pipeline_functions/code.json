@@ -1,0 +1,40 @@
+{
+  "id": "code",
+  "schema": {
+    "type": "object",
+    "title": "",
+    "additionalProperties": false,
+    "properties": {
+      "code": {
+        "type": "string",
+        "title": "Code",
+        "description": "Caution: This Function will be evaluated in an unprotected context. This means that you will be able to execute almost any JavaScript code.",
+        "jsExpression": true,
+        "jsExpressionUnprotected": true,
+        "jsExpressionEvalType": "inplace"
+      },
+      "maxNumOfIterations": {
+        "type": "number",
+        "title": "Iteration limit",
+        "description": "The maximum number of allowed iterations within this Function. Defaults to 5,000.",
+        "minimum": 1,
+        "maximum": 10000,
+        "default": 5000
+      },
+      "activeLogSampleRate": {
+        "type": "number",
+        "title": "Error log sample rate",
+        "description": "Rate at which this Function logs errors. For example, a value of 1 (the default) logs every error, a value of 10 logs every tenth error, and so on.",
+        "minimum": 1,
+        "maximum": 5000,
+        "default": 1
+      },
+      "useUniqueLogChannel": {
+        "type": "boolean",
+        "title": "Use unique log channel",
+        "description": "Logs from this Function will be sent to a unique channel in the form `func:code:${pipelineName}:${functionIndex}`. Disable to use the generic `func:code` log channel instead.",
+        "default": true
+      }
+    }
+  }
+}

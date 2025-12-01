@@ -1,0 +1,25 @@
+{
+  "id": "foldkeys",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "deleteOriginal": {
+        "title": "Delete original",
+        "description": "When enabled (default), only the folded keys are kept. When disabled, the original entries are retained alongside the folded keys.",
+        "type": "boolean",
+        "default": true
+      },
+      "separator": {
+        "title": "Separator string",
+        "description": "Character or string used to separate key levels to be folded. Defaults to the dot (.) character.",
+        "type": "string",
+        "default": "."
+      },
+      "selectionRegExp": {
+        "title": "Selection regular expression",
+        "description": "Optional regular expression to select a subset of the keys to fold.",
+        "type": "string"
+      }
+    }
+  }
+}

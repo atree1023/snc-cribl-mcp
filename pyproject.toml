@@ -1,0 +1,125 @@
+[project]
+name = "snc_cribl_mcp"
+version = "0.1.0"
+description = "Cribl MCP for the Cribl-to-Code project"
+readme = "README.md"
+requires-python = ">=3.14"
+license = { text = "MIT-0" }
+classifiers = [
+    "License :: OSI Approved :: MIT No Attribution License (MIT-0)",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "pydantic>=2.12.4",
+    "fastmcp>=2.13.1",
+    "python-dotenv>=1.1.1",
+    "cribl-control-plane>=0.3.0",
+]
+
+[project.scripts]
+snc-cribl-mcp = "snc_cribl_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.406",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "pytest-cov>=7.0.0",
+    "pytest-httpx>=0.35.0",
+    "pytest-xdist>=3.6.1",
+    "ruff>=0.14.2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/snc_cribl_mcp"]
+
+[tool.ruff]
+line-length = 128
+target-version = "py314"
+src = ["src"]
+exclude = ["docs/", ".venv/", "build/", "dist/"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D203",    # one-blank-line-before-class
+    "D213",    # multi-line-summary-second-line
+    "TC001",   # typing-only-first-party-import
+    "TC002",   # typing-only-third-party-import
+    "TC003",   # typing-only-standard-library-import
+    "COM812",  # missing-trailing-comma (conflicts with formatter)
+    "ISC001",  # single-line-implicit-string-concatenation (conflicts with formatter)
+    "TID252",  # relative-imports - allowed within package
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",    # assert allowed in tests
+    "PLR2004", # magic values allowed in tests
+    "S105",    # hardcoded passwords ok in tests
+    "S106",    # hardcoded passwords ok in tests
+    "SLF001",  # private member access allowed in tests
+    "ARG001",  # unused function arguments allowed in tests (fixtures)
+    "ARG002",  # unused method arguments allowed in tests (fixtures)
+]
+
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+include = ["src/snc_cribl_mcp", "tests"]
+extraPaths = ["src"]
+exclude = ["docs/", ".venv/", "build/", "dist/"]
+reportMissingTypeStubs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+minversion = "8.4"
+addopts = [
+    "-ra",
+    "--import-mode=importlib",
+    "--strict-config",
+    "--strict-markers",
+    "--ff",
+    "--cov=src/snc_cribl_mcp",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-report=html",
+    "--cov-report=xml",
+    "--cov-fail-under=80",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source_pkgs = ["snc_cribl_mcp"]
+branch = true
+parallel = true
+omit = [
+    "tests/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if TYPE_CHECKING:",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "^\\s*pass\\s*$",
+    "\\.\\.\\.",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"

@@ -1,0 +1,54 @@
+{
+  "id": "geoip",
+  "schema": {
+    "type": "object",
+    "title": "",
+    "additionalProperties": false,
+    "required": ["file"],
+    "properties": {
+      "file": {
+        "type": "string",
+        "title": "GeoIP file (.mmdb)",
+        "description": "Select an uploaded Maxmind database, or specify path to a Maxmind database with .mmdb extension",
+        "minLength": 1
+      },
+      "inField": {
+        "type": "string",
+        "title": "IP field",
+        "description": "Field name in which to find an IP to look up. Can be nested.",
+        "default": "ip"
+      },
+      "outField": {
+        "type": "string",
+        "title": "Result field",
+        "description": "Field name in which to store the GeoIP lookup results",
+        "default": "geoip"
+      },
+      "additionalFields": {
+        "type": "array",
+        "title": "Additional fields",
+        "items": {
+          "type": "object",
+          "required": ["extraInField", "extraOutField"],
+          "properties": {
+            "extraInField": {
+              "type": "string",
+              "title": "IP Field",
+              "description": "Field name in which to find an IP to look up. Can be nested."
+            },
+            "extraOutField": {
+              "type": "string",
+              "title": "Result Field",
+              "description": "Field name in which to store the GeoIP lookup results"
+            }
+          }
+        }
+      },
+      "outFieldMappings": {
+        "type": "object",
+        "title": "Output field mappings",
+        "description": "Search-specific mappings for granular control over event enrichment"
+      }
+    }
+  }
+}
