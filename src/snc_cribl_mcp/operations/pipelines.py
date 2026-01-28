@@ -25,17 +25,19 @@ from .common import (
 logger = logging.getLogger("snc_cribl_mcp.operations.pipelines")
 
 
-async def collect_product_pipelines(
+async def collect_product_pipelines(  # noqa: PLR0913 (optional pipeline_id filter)
     client: CriblControlPlane,
     security: Security,
     *,
     product: ProductsCore,
     timeout_ms: int,
     ctx: Context,
+    pipeline_id: str | None = None,
 ) -> ProductResult:
-    """Fetch all configured pipelines for all groups of a product.
+    """Fetch pipelines for all groups of a product, optionally filtered by pipeline ID.
 
     This function uses direct HTTP requests to the `/m/{group_id}/pipelines`
+    or `/m/{group_id}/pipelines/{pipeline_id}`
     endpoint to preserve complete function configuration data. The SDK's
     PipelineFunctionConf.conf field uses an empty FunctionSpecificConfigs class,
     which would serialize as `{}` and lose all function-specific settings.
@@ -46,6 +48,7 @@ async def collect_product_pipelines(
         product: The product type (Stream or Edge).
         timeout_ms: Request timeout in milliseconds.
         ctx: FastMCP context for logging.
+        pipeline_id: Optional pipeline identifier to fetch a single pipeline per group.
 
     Returns:
         Standard result dictionary with grouped pipeline items, including
@@ -63,6 +66,7 @@ async def collect_product_pipelines(
         coll_ctx=coll_ctx,
         security=security,
         endpoint_path="pipelines",
+        item_id=pipeline_id,
     )
     return await collect_items_via_http(http_ctx)
 

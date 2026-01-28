@@ -1,7 +1,7 @@
 """MCP tool: list_pipelines.
 
-Lists all configured Stream and Edge pipelines across all groups in the
-configured Cribl deployment.
+Lists configured Stream and Edge pipelines across all groups in the
+configured Cribl deployment, optionally filtered by pipeline ID.
 """
 
 # pyright: reportUnusedFunction=false
@@ -32,14 +32,22 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
 
     @app.tool(
         name="list_pipelines",
-        description="Return JSON describing all configured Stream and Edge pipelines in all groups in the Cribl deployment.",
+        description=(
+            "Return JSON describing configured Stream and Edge pipelines in all groups in the Cribl deployment. "
+            "Optionally filter by pipeline_id to fetch a specific pipeline."
+        ),
         annotations={
             "title": "List configured pipelines",
             "readOnlyHint": True,
         },
     )
-    async def list_pipelines(ctx: Context) -> dict[str, Any]:
-        return await generic_list_tool(ctx, deps, tool_config)
+    async def list_pipelines(ctx: Context, pipeline_id: str | None = None) -> dict[str, Any]:
+        return await generic_list_tool(
+            ctx,
+            deps,
+            tool_config,
+            collector_kwargs={"pipeline_id": pipeline_id},
+        )
 
 
 __all__ = ["register"]

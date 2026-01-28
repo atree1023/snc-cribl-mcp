@@ -25,7 +25,7 @@ class _FakeApp:
     """Minimal stand-in for FastMCP app to capture registered tools."""
 
     def __init__(self) -> None:
-        self.tools: dict[str, Callable[[Context], Awaitable[dict[str, Any]]]] = {}
+        self.tools: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {}
 
     def tool(
         self,
@@ -34,14 +34,14 @@ class _FakeApp:
         description: str,
         annotations: dict[str, Any] | None = None,
     ) -> Callable[
-        [Callable[[Context], Awaitable[dict[str, Any]]]],
-        Callable[[Context], Awaitable[dict[str, Any]]],
+        [Callable[..., Awaitable[dict[str, Any]]]],
+        Callable[..., Awaitable[dict[str, Any]]],
     ]:
         """Register a tool by name and return a decorator that captures the function."""
 
         def _decorator(
-            func: Callable[[Context], Awaitable[dict[str, Any]]],
-        ) -> Callable[[Context], Awaitable[dict[str, Any]]]:
+            func: Callable[..., Awaitable[dict[str, Any]]],
+        ) -> Callable[..., Awaitable[dict[str, Any]]]:
             # Use parameters to avoid unused-argument warnings in strict linters
             _ = (description, annotations)
             self.tools[name] = func
@@ -162,6 +162,67 @@ async def test_list_pipelines_tool_success(
     edge = cast("dict[str, Any]", pipelines["edge"])
     assert stream["total_count"] == 1
     assert edge["total_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_pipelines_tool_with_pipeline_id(
+    deps_base: SimpleNamespace,
+    mock_ctx: Context,
+    mock_security: Security,
+) -> None:
+    """The tool should pass pipeline_id through to the collector."""
+    token_manager = SimpleNamespace(get_security=AsyncMock(return_value=mock_security))
+
+    mock_client = MagicMock()
+    groups_resp_stream = MagicMock(items=[MagicMock()])
+    groups_resp_stream.items[0].model_dump.return_value = {"id": "g1"}
+    groups_resp_edge = MagicMock(items=[MagicMock()])
+    groups_resp_edge.items[0].model_dump.return_value = {"id": "e1"}
+
+    async def groups_list_async(product: ProductsCore, timeout_ms: int) -> MagicMock:
+        return groups_resp_stream if product == ProductsCore.STREAM else groups_resp_edge
+
+    mock_client.groups.list_async = AsyncMock(side_effect=groups_list_async)
+    mock_client.sdk_configuration = MagicMock(server_url=deps_base.config.base_url_str)
+
+    mock_http_client = AsyncMock()
+    mock_client.sdk_configuration.async_client = mock_http_client
+
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {"items": [{"id": "p1", "conf": {"functions": []}}], "count": 1}
+    response.raise_for_status = MagicMock()
+
+    requested_urls: list[str] = []
+
+    async def mock_get(url: str, **kwargs: object) -> MagicMock:
+        requested_urls.append(url)
+        return response
+
+    mock_http_client.get = AsyncMock(side_effect=mock_get)
+
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+    deps = SimpleNamespace(
+        **deps_base.__dict__,
+        token_manager=token_manager,
+        create_cp=MagicMock(return_value=mock_cm),
+        collect_product_pipelines=_collect_product_pipelines,
+    )
+
+    app = _FakeApp()
+    register_list_pipelines(app, deps=deps)  # type: ignore[arg-type]
+
+    raw = await app.tools["list_pipelines"](mock_ctx, pipeline_id="p1")
+    data = raw
+    pipelines = cast("dict[str, Any]", data["pipelines"])
+
+    assert pipelines["stream"]["total_count"] == 1
+    assert pipelines["edge"]["total_count"] == 1
+    assert requested_urls
+    assert all("/pipelines/p1" in url for url in requested_urls)
 
 
 @pytest.mark.asyncio

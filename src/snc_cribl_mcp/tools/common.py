@@ -29,6 +29,7 @@ async def collect_for_products(
     collector: CollectorFunc,
     *,
     requires_security: bool = False,
+    collector_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, ProductResult]:
     """Collect data across all products using the given collector function.
 
@@ -36,12 +37,14 @@ async def collect_for_products(
         deps: Dependencies namespace with config, products, token_manager, create_cp.
         collector: Async function to call for each product.
         requires_security: Whether the collector requires a security parameter.
+        collector_kwargs: Extra keyword arguments forwarded to the collector.
 
     Returns:
         Dictionary mapping product names to their collected results.
 
     """
     results: dict[str, ProductResult] = {}
+    extra_kwargs = collector_kwargs or {}
     security: Security = await deps.token_manager.get_security()
     async with deps.create_cp(deps.config, security=security) as client:
         for product in deps.products:
@@ -52,6 +55,7 @@ async def collect_for_products(
                     product=product,
                     timeout_ms=deps.config.timeout_ms,
                     ctx=deps.ctx,
+                    **extra_kwargs,
                 )
             else:
                 result = await collector(
@@ -59,6 +63,7 @@ async def collect_for_products(
                     product=product,
                     timeout_ms=deps.config.timeout_ms,
                     ctx=deps.ctx,
+                    **extra_kwargs,
                 )
             results[product.value] = result
     return results
@@ -91,6 +96,8 @@ async def generic_list_tool(
     ctx: Context,
     deps: SimpleNamespace,
     tool_config: ToolConfig,
+    *,
+    collector_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generic implementation for list tools.
 
@@ -98,6 +105,7 @@ async def generic_list_tool(
         ctx: FastMCP context.
         deps: Dependencies namespace.
         tool_config: Configuration for the tool including collector and settings.
+        collector_kwargs: Extra keyword arguments forwarded to the collector.
 
     Returns:
         Tool response dictionary.
@@ -112,6 +120,7 @@ async def generic_list_tool(
         deps_with_ctx,
         tool_config.collector,
         requires_security=tool_config.requires_security,
+        collector_kwargs=collector_kwargs,
     )
     return build_tool_response(deps, tool_config.section_name, results)
 

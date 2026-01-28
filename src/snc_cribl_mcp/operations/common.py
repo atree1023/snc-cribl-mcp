@@ -466,6 +466,7 @@ class HttpCollectionContext:
     coll_ctx: CollectionContext
     security: Security
     endpoint_path: str
+    item_id: str | None = None
 
 
 async def collect_items_via_http(http_ctx: HttpCollectionContext) -> ProductResult:
@@ -545,6 +546,7 @@ async def collect_items_via_http(http_ctx: HttpCollectionContext) -> ProductResu
             group_id=group_id,
             coll_ctx=coll_ctx,
             endpoint_path=http_ctx.endpoint_path,
+            item_id=http_ctx.item_id,
         )
         for _, group_id in valid_groups
     ]
@@ -561,6 +563,7 @@ async def _collect_group_items_http(  # noqa: PLR0913 (unavoidable for HTTP cont
     group_id: str,
     coll_ctx: CollectionContext,
     endpoint_path: str,
+    item_id: str | None,
 ) -> GroupEntry:
     """Collect items for a single group via direct HTTP request.
 
@@ -571,6 +574,7 @@ async def _collect_group_items_http(  # noqa: PLR0913 (unavoidable for HTTP cont
         group_id: The group identifier to collect items for.
         coll_ctx: Collection context with product, timeout, ctx, and resource_type.
         endpoint_path: API endpoint path (e.g., "lib/breakers").
+        item_id: Optional item identifier to fetch a single item per group.
 
     Returns:
         Group entry dictionary with group_id, count, and items.
@@ -579,7 +583,8 @@ async def _collect_group_items_http(  # noqa: PLR0913 (unavoidable for HTTP cont
         RuntimeError: On network errors or invalid JSON response (except 404, which returns empty).
 
     """
-    url = f"{base_url}/m/{group_id}/{endpoint_path}"
+    endpoint_suffix = f"{endpoint_path}/{item_id}" if item_id else endpoint_path
+    url = f"{base_url}/m/{group_id}/{endpoint_suffix}"
 
     try:
         resp = await http_client.get(
@@ -589,10 +594,16 @@ async def _collect_group_items_http(  # noqa: PLR0913 (unavoidable for HTTP cont
         )
 
         if resp.status_code == HTTP_NOT_FOUND:
-            await coll_ctx.ctx.warning(
-                f"{coll_ctx.resource_type.capitalize()} endpoint 404 for "
-                f"{coll_ctx.product.value} group '{group_id}'; skipping.",
-            )
+            if item_id:
+                await coll_ctx.ctx.warning(
+                    f"{coll_ctx.resource_type.capitalize()} '{item_id}' not found for "
+                    f"{coll_ctx.product.value} group '{group_id}'; skipping.",
+                )
+            else:
+                await coll_ctx.ctx.warning(
+                    f"{coll_ctx.resource_type.capitalize()} endpoint 404 for "
+                    f"{coll_ctx.product.value} group '{group_id}'; skipping.",
+                )
             return build_group_entry(group_id, [])
 
         resp.raise_for_status()
