@@ -60,9 +60,9 @@ async def test_register_resources(mock_deps: SimpleNamespace) -> None:
     assert "cribl://lookups" in app._resource_manager._resources
 
     # Test calling the groups resource
-    ctx = MagicMock(spec=Context)
     resource = app._resource_manager._resources["cribl://groups"]
-    result = await resource.fn(ctx)  # type: ignore[reportUnknownMemberType]
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
 
     # Verify result
@@ -85,9 +85,9 @@ async def test_get_sources_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    ctx = MagicMock(spec=Context)
     resource = app._resource_manager._resources["cribl://sources"]
-    result = await resource.fn(ctx)  # type: ignore[reportUnknownMemberType]
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
 
     data = cast("dict[str, Any]", result)
@@ -101,9 +101,9 @@ async def test_get_destinations_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    ctx = MagicMock(spec=Context)
     resource = app._resource_manager._resources["cribl://destinations"]
-    result = await resource.fn(ctx)  # type: ignore[reportUnknownMemberType]
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
 
     data = cast("dict[str, Any]", result)
@@ -117,9 +117,9 @@ async def test_get_pipelines_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    ctx = MagicMock(spec=Context)
     resource = app._resource_manager._resources["cribl://pipelines"]
-    result = await resource.fn(ctx)  # type: ignore[reportUnknownMemberType]
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
 
     data = cast("dict[str, Any]", result)
@@ -136,9 +136,9 @@ async def test_get_routes_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    ctx = MagicMock(spec=Context)
     resource = app._resource_manager._resources["cribl://routes"]
-    result = await resource.fn(ctx)  # type: ignore[reportUnknownMemberType]
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
 
     data = cast("dict[str, Any]", result)
@@ -152,9 +152,9 @@ async def test_get_breakers_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    ctx = MagicMock(spec=Context)
     resource = app._resource_manager._resources["cribl://breakers"]
-    result = await resource.fn(ctx)  # type: ignore[reportUnknownMemberType]
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
 
     data = cast("dict[str, Any]", result)
@@ -171,9 +171,9 @@ async def test_get_lookups_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    ctx = MagicMock(spec=Context)
     resource = app._resource_manager._resources["cribl://lookups"]
-    result = await resource.fn(ctx)  # type: ignore[reportUnknownMemberType]
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
 
     data = cast("dict[str, Any]", result)
@@ -192,9 +192,9 @@ async def test_groups_resource_handles_collector_error(mock_deps: SimpleNamespac
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    ctx = MagicMock(spec=Context)
     resource = app._resource_manager._resources["cribl://groups"]
-    result = await resource.fn(ctx)  # type: ignore[reportUnknownMemberType]
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     data = cast("dict[str, Any]", result)
 
     product_result = data["groups"]["stream"]

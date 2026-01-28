@@ -139,6 +139,61 @@ async def test_collect_product_pipelines_success(mock_ctx: Context, mock_securit
 
 
 @pytest.mark.asyncio
+async def test_collect_product_pipelines_with_pipeline_id(
+    mock_ctx: Context,
+    mock_security: Security,
+) -> None:
+    """It should fetch a single pipeline per group and skip 404s gracefully."""
+    mock_client = MagicMock()
+    groups_response = MagicMock(items=[MagicMock(), MagicMock()])
+    groups_response.items[0].model_dump.return_value = {"id": "g1"}
+    groups_response.items[1].model_dump.return_value = {"id": "g2"}
+    mock_client.groups.list_async = AsyncMock(return_value=groups_response)
+
+    mock_client.sdk_configuration = MagicMock(server_url="https://example/api/v1")
+    mock_http_client = AsyncMock()
+    mock_client.sdk_configuration.async_client = mock_http_client
+
+    g1_response = MagicMock()
+    g1_response.status_code = 200
+    g1_response.json.return_value = {
+        "items": [{"id": "p1", "conf": {"functions": []}}],
+        "count": 1,
+    }
+    g1_response.raise_for_status = MagicMock()
+
+    g2_response = MagicMock()
+    g2_response.status_code = 404
+
+    requested_urls: list[str] = []
+
+    async def mock_get(url: str, **kwargs: object) -> MagicMock:
+        requested_urls.append(url)
+        if "/m/g1/pipelines/p1" in url:
+            return g1_response
+        return g2_response
+
+    mock_http_client.get = AsyncMock(side_effect=mock_get)
+
+    result = await collect_product_pipelines(
+        mock_client,
+        mock_security,
+        product=ProductsCore.STREAM,
+        timeout_ms=10000,
+        ctx=mock_ctx,
+        pipeline_id="p1",
+    )
+
+    assert result["status"] == "ok"
+    assert result["total_count"] == 1
+    assert len(result["groups"]) == 2
+    assert result["groups"][0]["count"] == 1
+    assert result["groups"][1]["count"] == 0
+    assert any("/pipelines/p1" in url for url in requested_urls)
+    assert getattr(mock_ctx.warning, "await_count", 0) >= 1
+
+
+@pytest.mark.asyncio
 async def test_collect_product_pipelines_preserves_function_conf(
     mock_ctx: Context,
     mock_security: Security,
