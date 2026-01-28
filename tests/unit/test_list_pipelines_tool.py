@@ -139,8 +139,9 @@ async def test_list_pipelines_tool_success(
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
     deps = SimpleNamespace(
-        **deps_base.__dict__,
-        token_manager=token_manager,
+        resolve_config=MagicMock(return_value=deps_base.config),
+        get_token_manager=MagicMock(return_value=token_manager),
+        products=deps_base.products,
         create_cp=MagicMock(return_value=mock_cm),
         collect_product_pipelines=_collect_product_pipelines,
     )
@@ -206,8 +207,9 @@ async def test_list_pipelines_tool_with_pipeline_id(
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
     deps = SimpleNamespace(
-        **deps_base.__dict__,
-        token_manager=token_manager,
+        resolve_config=MagicMock(return_value=deps_base.config),
+        get_token_manager=MagicMock(return_value=token_manager),
+        products=deps_base.products,
         create_cp=MagicMock(return_value=mock_cm),
         collect_product_pipelines=_collect_product_pipelines,
     )
@@ -267,8 +269,9 @@ async def test_list_pipelines_tool_handles_unavailable_product(
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
     deps = SimpleNamespace(
-        **deps_base.__dict__,
-        token_manager=token_manager,
+        resolve_config=MagicMock(return_value=deps_base.config),
+        get_token_manager=MagicMock(return_value=token_manager),
+        products=deps_base.products,
         create_cp=MagicMock(return_value=mock_cm),
         collect_product_pipelines=_collect_product_pipelines,
     )
@@ -286,3 +289,34 @@ async def test_list_pipelines_tool_handles_unavailable_product(
     edge = cast("dict[str, Any]", pipelines["edge"])
     assert stream["status"] == "ok"
     assert edge["status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_list_pipelines_tool_resolves_server_param(
+    deps_base: SimpleNamespace,
+    mock_ctx: Context,
+    mock_security: Security,
+) -> None:
+    """Server parameter should be forwarded to resolve_config."""
+    token_manager = SimpleNamespace(get_security=AsyncMock(return_value=mock_security))
+
+    mock_client = MagicMock()
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+    resolve_config = MagicMock(return_value=deps_base.config)
+    deps = SimpleNamespace(
+        resolve_config=resolve_config,
+        get_token_manager=MagicMock(return_value=token_manager),
+        products=deps_base.products,
+        create_cp=MagicMock(return_value=mock_cm),
+        collect_product_pipelines=AsyncMock(return_value={"status": "ok", "total_count": 0, "groups": []}),
+    )
+
+    app = _FakeApp()
+    register_list_pipelines(app, deps=deps)  # type: ignore[arg-type]
+
+    await app.tools["list_pipelines"](mock_ctx, server="dev")
+
+    resolve_config.assert_called_once_with("dev")

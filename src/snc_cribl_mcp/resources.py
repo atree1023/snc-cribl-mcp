@@ -14,14 +14,16 @@ from cribl_control_plane import CriblControlPlane
 from cribl_control_plane.models.security import Security
 from fastmcp import Context, FastMCP
 
+from .tools.common import resolve_tool_deps
+
 
 def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (many nested resource definitions)
     """Register resources on the provided app instance.
 
     Args:
         app: The FastMCP application instance to add resources to.
-        deps: Dependencies namespace containing config, products, token_manager,
-              create_cp, and all collector functions.
+        deps: Dependencies namespace containing resolve_config, get_token_manager,
+            products, create_cp, and all collector functions.
 
     """
 
@@ -29,38 +31,42 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
         ctx: Context,
         *,
         collect_fn: Callable[..., Awaitable[dict[str, Any]]],
+        resolved_deps: SimpleNamespace,
     ) -> dict[str, Any]:
         """Collect per-product data while guarding against collector errors.
 
         Args:
             ctx: FastMCP context for logging.
             collect_fn: Async collector function to invoke for each product.
+            resolved_deps: Dependencies resolved for the current server.
 
         Returns:
             Dictionary mapping product names to their collected results.
 
         """
         results: dict[str, Any] = {}
-        security = await deps.token_manager.get_security()
-        async with deps.create_cp(deps.config, security=security) as client:
-            for product in deps.products:
+        security = await resolved_deps.token_manager.get_security()
+        async with resolved_deps.create_cp(resolved_deps.config, security=security) as client:
+            for product in resolved_deps.products:
                 results[product.value] = await _run_collect_fn(
                     collect_fn,
                     client=client,
                     product=product,
                     ctx=ctx,
                     security=security,
+                    timeout_ms=resolved_deps.config.timeout_ms,
                 )
 
         return results
 
-    async def _run_collect_fn(
+    async def _run_collect_fn(  # noqa: PLR0913
         collect_fn: Callable[..., Awaitable[dict[str, Any]]],
         *,
         client: CriblControlPlane,
         product: object,
         ctx: Context,
         security: Security,
+        timeout_ms: int,
     ) -> dict[str, Any]:
         """Execute a collector and downgrade failures to structured errors.
 
@@ -70,6 +76,7 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
             product: The product type (Stream or Edge).
             ctx: FastMCP context for logging.
             security: Security configuration with bearer token.
+            timeout_ms: Request timeout in milliseconds.
 
         Returns:
             Collected result dictionary, or an error payload on failure.
@@ -86,13 +93,13 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
                     client,
                     security=security,
                     product=product,
-                    timeout_ms=deps.config.timeout_ms,
+                    timeout_ms=timeout_ms,
                     ctx=ctx,
                 )
             return await collect_fn(
                 client,
                 product=product,
-                timeout_ms=deps.config.timeout_ms,
+                timeout_ms=timeout_ms,
                 ctx=ctx,
             )
         except Exception as exc:  # noqa: BLE001 - propagated as JSON error payload
@@ -102,12 +109,13 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
                 "error_type": exc.__class__.__name__,
             }
 
-    def _build_response(section: str, data: dict[str, Any]) -> dict[str, Any]:
+    def _build_response(section: str, data: dict[str, Any], *, base_url: str) -> dict[str, Any]:
         """Build a standard resource response with metadata.
 
         Args:
             section: Name of the data section (e.g., "groups", "sources").
             data: Collected data to include in the response.
+            base_url: Base URL used for the request.
 
         Returns:
             Response dictionary with timestamp, base_url, and data section.
@@ -116,7 +124,7 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
         timestamp = datetime.now(UTC).isoformat()
         return {
             "retrieved_at": timestamp,
-            "base_url": deps.config.base_url_str,
+            "base_url": base_url,
             section: data,
         }
 
@@ -128,8 +136,13 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
         tags={"groups", "config"},
     )
     async def get_groups(ctx: Context) -> dict[str, Any]:
-        data = await _collect_resource_payload(ctx, collect_fn=deps.collect_product_groups)
-        return _build_response("groups", data)
+        resolved_deps = resolve_tool_deps(deps, server=None)
+        data = await _collect_resource_payload(
+            ctx,
+            collect_fn=deps.collect_product_groups,
+            resolved_deps=resolved_deps,
+        )
+        return _build_response("groups", data, base_url=resolved_deps.config.base_url_str)
 
     @app.resource(
         uri="cribl://sources",
@@ -139,8 +152,13 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
         tags={"sources", "config"},
     )
     async def get_sources(ctx: Context) -> dict[str, Any]:
-        data = await _collect_resource_payload(ctx, collect_fn=deps.collect_product_sources)
-        return _build_response("sources", data)
+        resolved_deps = resolve_tool_deps(deps, server=None)
+        data = await _collect_resource_payload(
+            ctx,
+            collect_fn=deps.collect_product_sources,
+            resolved_deps=resolved_deps,
+        )
+        return _build_response("sources", data, base_url=resolved_deps.config.base_url_str)
 
     @app.resource(
         uri="cribl://destinations",
@@ -150,11 +168,13 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
         tags={"destinations", "config"},
     )
     async def get_destinations(ctx: Context) -> dict[str, Any]:
+        resolved_deps = resolve_tool_deps(deps, server=None)
         data = await _collect_resource_payload(
             ctx,
             collect_fn=deps.collect_product_destinations,
+            resolved_deps=resolved_deps,
         )
-        return _build_response("destinations", data)
+        return _build_response("destinations", data, base_url=resolved_deps.config.base_url_str)
 
     @app.resource(
         uri="cribl://pipelines",
@@ -164,8 +184,13 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
         tags={"pipelines", "config"},
     )
     async def get_pipelines(ctx: Context) -> dict[str, Any]:
-        data = await _collect_resource_payload(ctx, collect_fn=deps.collect_product_pipelines)
-        return _build_response("pipelines", data)
+        resolved_deps = resolve_tool_deps(deps, server=None)
+        data = await _collect_resource_payload(
+            ctx,
+            collect_fn=deps.collect_product_pipelines,
+            resolved_deps=resolved_deps,
+        )
+        return _build_response("pipelines", data, base_url=resolved_deps.config.base_url_str)
 
     @app.resource(
         uri="cribl://routes",
@@ -175,8 +200,13 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
         tags={"routes", "config"},
     )
     async def get_routes(ctx: Context) -> dict[str, Any]:
-        data = await _collect_resource_payload(ctx, collect_fn=deps.collect_product_routes)
-        return _build_response("routes", data)
+        resolved_deps = resolve_tool_deps(deps, server=None)
+        data = await _collect_resource_payload(
+            ctx,
+            collect_fn=deps.collect_product_routes,
+            resolved_deps=resolved_deps,
+        )
+        return _build_response("routes", data, base_url=resolved_deps.config.base_url_str)
 
     @app.resource(
         uri="cribl://breakers",
@@ -186,8 +216,13 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
         tags={"breakers", "config"},
     )
     async def get_breakers(ctx: Context) -> dict[str, Any]:
-        data = await _collect_resource_payload(ctx, collect_fn=deps.collect_product_breakers)
-        return _build_response("breakers", data)
+        resolved_deps = resolve_tool_deps(deps, server=None)
+        data = await _collect_resource_payload(
+            ctx,
+            collect_fn=deps.collect_product_breakers,
+            resolved_deps=resolved_deps,
+        )
+        return _build_response("breakers", data, base_url=resolved_deps.config.base_url_str)
 
     @app.resource(
         uri="cribl://lookups",
@@ -197,8 +232,13 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
         tags={"lookups", "config"},
     )
     async def get_lookups(ctx: Context) -> dict[str, Any]:
-        data = await _collect_resource_payload(ctx, collect_fn=deps.collect_product_lookups)
-        return _build_response("lookups", data)
+        resolved_deps = resolve_tool_deps(deps, server=None)
+        data = await _collect_resource_payload(
+            ctx,
+            collect_fn=deps.collect_product_lookups,
+            resolved_deps=resolved_deps,
+        )
+        return _build_response("lookups", data, base_url=resolved_deps.config.base_url_str)
 
 
 __all__ = ["register"]

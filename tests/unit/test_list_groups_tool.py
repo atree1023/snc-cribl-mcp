@@ -18,7 +18,7 @@ class _FakeApp:
     """Minimal stand-in for FastMCP app to capture registered tools."""
 
     def __init__(self) -> None:
-        self.tools: dict[str, Callable[[Context], Awaitable[dict[str, Any]]]] = {}
+        self.tools: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {}
 
     def tool(
         self,
@@ -62,8 +62,8 @@ async def test_list_groups_tool_registration(mock_ctx: Context) -> None:
     assert "list_groups" in app.tools
 
     # Invoke the tool
-    result = await app.tools["list_groups"](mock_ctx)
+    result = await app.tools["list_groups"](mock_ctx, server="prod")
 
     # Verify delegation
-    mock_impl.assert_called_once_with(mock_ctx)
+    mock_impl.assert_called_once_with(mock_ctx, "prod")
     assert result == {"groups": {"stream": {"status": "ok"}}}

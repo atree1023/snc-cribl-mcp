@@ -92,11 +92,34 @@ def build_tool_response(
     }
 
 
+def resolve_tool_deps(
+    deps: SimpleNamespace,
+    server: str | None,
+) -> SimpleNamespace:
+    """Resolve per-request dependencies for a tool invocation.
+
+    Args:
+        deps: Base dependency namespace with resolve_config and get_token_manager.
+        server: Optional server name passed to the tool.
+
+    Returns:
+        Resolved dependency namespace containing config and token_manager.
+
+    """
+    config = deps.resolve_config(server)
+    token_manager = deps.get_token_manager(config)
+    base = dict(vars(deps))
+    base.pop("config", None)
+    base.pop("token_manager", None)
+    return SimpleNamespace(**base, config=config, token_manager=token_manager)
+
+
 async def generic_list_tool(
     ctx: Context,
     deps: SimpleNamespace,
     tool_config: ToolConfig,
     *,
+    server: str | None = None,
     collector_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generic implementation for list tools.
@@ -105,6 +128,7 @@ async def generic_list_tool(
         ctx: FastMCP context.
         deps: Dependencies namespace.
         tool_config: Configuration for the tool including collector and settings.
+        server: Optional server name passed to the tool.
         collector_kwargs: Extra keyword arguments forwarded to the collector.
 
     Returns:
@@ -113,8 +137,9 @@ async def generic_list_tool(
     """
     await ctx.info(tool_config.log_message)
 
+    resolved_deps = resolve_tool_deps(deps, server)
     # Inject context into deps for the collector
-    deps_with_ctx = SimpleNamespace(**vars(deps), ctx=ctx)
+    deps_with_ctx = SimpleNamespace(**vars(resolved_deps), ctx=ctx)
 
     results = await collect_for_products(
         deps_with_ctx,
@@ -122,7 +147,7 @@ async def generic_list_tool(
         requires_security=tool_config.requires_security,
         collector_kwargs=collector_kwargs,
     )
-    return build_tool_response(deps, tool_config.section_name, results)
+    return build_tool_response(resolved_deps, tool_config.section_name, results)
 
 
 __all__ = [
@@ -132,4 +157,5 @@ __all__ = [
     "build_tool_response",
     "collect_for_products",
     "generic_list_tool",
+    "resolve_tool_deps",
 ]
