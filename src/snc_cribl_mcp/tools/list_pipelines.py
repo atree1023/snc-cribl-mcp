@@ -41,11 +41,16 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
             "readOnlyHint": True,
         },
     )
-    async def list_pipelines(ctx: Context, pipeline_id: str | None = None) -> dict[str, Any]:
+    async def list_pipelines(
+        ctx: Context,
+        pipeline_id: str | None = None,
+        server: str | None = None,
+    ) -> dict[str, Any]:
         return await generic_list_tool(
             ctx,
             deps,
             tool_config,
+            server=server,
             collector_kwargs={"pipeline_id": pipeline_id},
         )
 

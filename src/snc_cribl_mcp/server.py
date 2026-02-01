@@ -27,7 +27,7 @@ from fastmcp import Context, FastMCP
 
 from . import prompts, resources
 from .client.cribl_client import create_control_plane
-from .client.token_manager import TokenManager
+from .client.token_manager import TokenManager, get_token_manager
 from .config import CriblConfig
 from .operations.breakers import collect_product_breakers
 from .operations.destinations import collect_product_destinations
@@ -51,7 +51,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("snc_cribl_mcp.server")
 
-CONFIG = CriblConfig.from_env()
 PRODUCTS: tuple[ProductsCore, ...] = (
     ProductsCore.STREAM,
     ProductsCore.EDGE,
@@ -62,42 +61,41 @@ app = FastMCP(
     instructions=("Expose tools that query a customer-managed Cribl deployment for metadata."),
 )
 
-# Initialize the token manager
-TOKEN_MANAGER = TokenManager(CONFIG)
 
-
-async def list_groups_impl(ctx: Context) -> dict[str, Any]:
+async def list_groups_impl(ctx: Context, server: str | None = None) -> dict[str, Any]:
     """Return worker groups and Edge fleets from the Cribl deployment as JSON."""
     await ctx.info("Listing Cribl worker groups and Edge fleets.")
 
+    config = CriblConfig.resolve(server)
+    token_manager = get_token_manager(config)
     results: dict[str, Any] = {}
-    security = await TOKEN_MANAGER.get_security()
-    async with create_control_plane(CONFIG, security=security) as client:
+    security = await token_manager.get_security()
+    async with create_control_plane(config, security=security) as client:
         for product in PRODUCTS:
             result = await collect_product_groups(
                 client,
                 product=product,
-                timeout_ms=CONFIG.timeout_ms,
+                timeout_ms=config.timeout_ms,
                 ctx=ctx,
             )
             results[product.value] = result
 
     return {
         "retrieved_at": datetime.now(UTC).isoformat(),
-        "base_url": CONFIG.base_url_str,
+        "base_url": config.base_url_str,
         "groups": results,
     }
 
 
 # Explicit re-exports for public API stability (and to satisfy linters)
 __all__ = [
-    "CONFIG",
     "PRODUCTS",
     "CriblConfig",
     "TokenManager",
     "app",
     "collect_product_groups",
     "create_control_plane",
+    "get_token_manager",
     "handle_interrupt",
     "list_groups_impl",
     "main",
@@ -109,9 +107,9 @@ def _register_capabilities() -> None:
     """Import tool, resource, and prompt modules and register them with the app instance."""
     register_list_groups(app, impl=list_groups_impl)
     deps = SimpleNamespace(
-        config=CONFIG,
+        resolve_config=CriblConfig.resolve,
+        get_token_manager=get_token_manager,
         products=PRODUCTS,
-        token_manager=TOKEN_MANAGER,
         create_cp=create_control_plane,
         collect_product_groups=collect_product_groups,
         collect_product_sources=collect_product_sources,

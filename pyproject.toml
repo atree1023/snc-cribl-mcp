@@ -1,6 +1,6 @@
 [project]
 name = "snc_cribl_mcp"
-version = "0.1.1"
+version = "0.2.0"
 description = "Cribl MCP for the Cribl-to-Code project"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -10,10 +10,10 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "pydantic>=2.12.4",
-    "fastmcp>=2.13.1",
+    "pydantic>=2.12.5",
+    "fastmcp>=2.14.3",
     "python-dotenv>=1.1.1",
-    "cribl-control-plane>=0.3.0",
+    "cribl-control-plane>=0.5.2",
 ]
 
 [project.scripts]

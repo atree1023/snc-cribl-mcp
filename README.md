@@ -71,30 +71,49 @@ uv sync
 
 ## Configuration
 
-Create a `.env` file in the project root with your Cribl deployment details:
+Create a `config.toml` file in the project root with your Cribl server definitions:
 
-```env
-CRIBL_SERVER_URL=http://localhost:19000
-CRIBL_USERNAME=your_username
-CRIBL_PASSWORD=your_password
-CRIBL_VERIFY_SSL=true
-LOG_LEVEL=INFO
-CRIBL_TIMEOUT_MS=30000
+```toml
+[defaults]
+verify_ssl = true
+timeout_ms = 10_000
+oauth_token_url = "https://login.cribl.cloud/oauth/token"
+oauth_audience = "https://api.cribl.cloud"
+
+[golden.oak]
+url = "http://localhost:19000"
+username = "admin"
+password = "${GOLDEN_OAK_PASS}"
+
+[cribl.cloud]
+url = "https://<workspace>-<org>.cribl.cloud"
+client_id = "your-client-id"
+client_secret = "${CRIBL_CLOUD_SECRET}"
 ```
+
+If you use `${VAR}` placeholders, set the values in a `.env` file (or your shell environment). Only placeholder
+expansion uses environment variables; configuration values are otherwise read directly from `config.toml`.
+
+When a tool call omits a server name, the first non-`[defaults]` section in `config.toml` is used.
+
+Logging is still controlled via the `LOG_LEVEL` environment variable (default: `INFO`).
 
 **Configuration Options:**
 
-| Variable             | Description                                 | Default | Required |
-| :------------------- | :------------------------------------------ | :------ | :------- |
-| `CRIBL_SERVER_URL`   | Base URL of your Cribl deployment           | -       | Yes      |
-| `CRIBL_USERNAME`     | Username for authentication                 | -       | Yes\*    |
-| `CRIBL_PASSWORD`     | Password for authentication                 | -       | Yes\*    |
-| `CRIBL_BEARER_TOKEN` | Pre-existing bearer token                   | -       | Yes\*    |
-| `CRIBL_VERIFY_SSL`   | Verify SSL certificates                     | `true`  | No       |
-| `LOG_LEVEL`          | Logging level (DEBUG, INFO, WARNING, ERROR) | `INFO`  | No       |
-| `CRIBL_TIMEOUT_MS`   | API request timeout in milliseconds         | `10000` | No       |
+| Section      | Key               | Description                                                | Required |
+| :----------- | :---------------- | :--------------------------------------------------------- | :------- |
+| `[defaults]` | `verify_ssl`      | Verify SSL certificates                                    | No       |
+| `[defaults]` | `timeout_ms`      | API request timeout in milliseconds                        | No       |
+| `[defaults]` | `oauth_token_url` | OAuth token URL for Cribl.Cloud                            | No       |
+| `[defaults]` | `oauth_audience`  | OAuth audience for Cribl.Cloud                             | No       |
+| `[server]`   | `url`             | Base URL of your Cribl deployment (auto-appends `/api/v1`) | Yes      |
+| `[server]`   | `username`        | On-prem username                                           | Yes\*    |
+| `[server]`   | `password`        | On-prem password                                           | Yes\*    |
+| `[server]`   | `client_id`       | Cribl.Cloud client ID                                      | Yes\*    |
+| `[server]`   | `client_secret`   | Cribl.Cloud client secret                                  | Yes\*    |
 
-\*Either provide `CRIBL_USERNAME` and `CRIBL_PASSWORD`, or provide `CRIBL_BEARER_TOKEN`.
+\*Cribl.Cloud URLs (ending in `.cribl.cloud`) require `client_id`/`client_secret`. On-prem URLs require
+`username`/`password`.
 
 ## Usage
 
@@ -174,9 +193,7 @@ Add this server to your Claude desktop app configuration:
         "snc-cribl-mcp"
       ],
       "env": {
-        "CRIBL_SERVER_URL": "http://localhost:19000",
-        "CRIBL_USERNAME": "your_username",
-        "CRIBL_PASSWORD": "your_password"
+        "LOG_LEVEL": "INFO"
       }
     }
   }
@@ -259,15 +276,12 @@ uv run ruff format
 
 ## Authentication
 
-This server uses bearer token authentication with the Cribl API. Tokens are retrieved automatically using your username and password, and the server handles token refresh internally.
+The server retrieves bearer tokens automatically based on the configured server type:
 
-For customer-managed deployments:
+- **Cribl.Cloud**: Uses OAuth client credentials (`client_id`/`client_secret`) and refreshes tokens automatically.
+- **On-prem**: Uses `username`/`password` to fetch bearer tokens and refreshes using the JWT `exp` claim when available.
 
-- Tokens expire based on your Cribl settings (default: 1 hour).
-- The TokenManager automatically fetches new tokens when needed, using the JWT `exp` claim when available and falling back to a conservative default.
-- For production use, configure TLS and use HTTPS.
-
-See [docs/cribl_api_auth.md](docs/cribl_api_auth.md) for detailed authentication documentation.
+Tokens expire based on your Cribl settings (default: 1 hour on-prem, 24 hours on Cribl.Cloud). For production use, configure TLS and use HTTPS.
 
 ## Contributing
 

@@ -76,24 +76,20 @@ uv run pyright                             # then type check
 Follow this checklist:
 
 1. **Create operations function** in `src/snc_cribl_mcp/operations/<resource>.py`
-
    - Make it async
    - Accept: client factory, product, timeout_ms, ctx
    - Return: list of serialized items or error response dict
 
 2. **Create tool registration** in `src/snc_cribl_mcp/tools/list_<resource>.py`
-
    - Import `ToolConfig` and `generic_list_tool` from `tools/common.py`
    - Define `register(app, deps)` function using `@app.tool()` decorator
    - Reference `tools/list_sources.py` as the canonical example
 
 3. **Register the tool** in `src/snc_cribl_mcp/server.py`
-
    - Add import in the tools section
    - Call `register()` in `_register_capabilities()`
 
 4. **Add tests** in `tests/unit/test_<resource>.py`
-
    - Test successful collection with mocked HTTP responses
    - Test error handling (validation errors, timeouts)
    - Test edge cases (empty responses, missing fields)
@@ -120,7 +116,7 @@ Follow this checklist:
 **Timeout handling:**
 
 - All operations accept `timeout_ms` parameter
-- Default: 10000ms (from `CRIBL_TIMEOUT_MS` env var)
+- Default: 10000ms (from `config.toml` defaults or per-server overrides)
 
 ## Testing Patterns
 
@@ -143,17 +139,17 @@ async def test_collect_sources(httpx_mock):
 
 ## Configuration
 
-Environment variables (loaded by `src/snc_cribl_mcp/config.py`):
+Configuration file (`config.toml`) loaded by `src/snc_cribl_mcp/config.py`:
 
-| Variable             | Required        | Default | Description                  |
-| -------------------- | --------------- | ------- | ---------------------------- |
-| `CRIBL_SERVER_URL`   | Yes             | -       | Base URL of Cribl deployment |
-| `CRIBL_USERNAME`     | If no token     | -       | Username for auth            |
-| `CRIBL_PASSWORD`     | If no token     | -       | Password for auth            |
-| `CRIBL_BEARER_TOKEN` | If no user/pass | -       | Pre-existing bearer token    |
-| `CRIBL_VERIFY_SSL`   | No              | true    | SSL verification             |
-| `CRIBL_TIMEOUT_MS`   | No              | 10000   | API timeout in ms            |
-| `LOG_LEVEL`          | No              | INFO    | Logging level                |
+- `config.toml` must live at the repository root.
+- `[defaults]` provides shared values that are overridden per server section.
+- Each server section name (for example, `[golden.oak]`) is the server name used in tool calls.
+- When no server is provided, the first non-`[defaults]` section is used as the default.
+- `url` is used as the base URL and auto-appends `/api/v1` if missing.
+- Cribl.Cloud URLs (ending in `.cribl.cloud`) require `client_id`/`client_secret`.
+- On-prem URLs require `username`/`password`.
+- `${VAR}` placeholders in `config.toml` expand using `.env` or environment variables.
+- Logging remains controlled via the `LOG_LEVEL` environment variable.
 
 ## File Locations
 

@@ -45,8 +45,8 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
             "readOnlyHint": True,
         },
     )
-    async def list_sources(ctx: Context) -> dict[str, Any]:
-        return await generic_list_tool(ctx, deps, tool_config)
+    async def list_sources(ctx: Context, server: str | None = None) -> dict[str, Any]:
+        return await generic_list_tool(ctx, deps, tool_config, server=server)
 
 
 __all__ = ["register"]

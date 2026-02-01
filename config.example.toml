@@ -1,0 +1,22 @@
+# Cribl MCP Server Configuration
+
+[defaults]
+verify_ssl = true
+timeout_ms = 10_000
+oauth_token_url = "https://login.cribl.cloud/oauth/token"
+oauth_audience = "https://api.cribl.cloud"
+
+
+# Begin list of servers onprem or cloud
+# Server name can be refernced in the promt
+# If no server name is specified, default to the first server in the list
+
+[onprem.server]
+url = "http://localhost:19000"
+username = "admin"
+password = "${ONPREM_PASS}" # Loads environment variable or from .env file
+
+[cribl.cloud]
+url = "https://your-organization-name.cribl.cloud"
+client_id = "..."
+client_secret = "${CRIBL_CLIENT_SECRET}"

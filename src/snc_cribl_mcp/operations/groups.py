@@ -1,15 +1,12 @@
 """Helpers for working with groups across Cribl products."""
 
 import logging
-from typing import Any
+from typing import Any, Protocol, cast
 
 import httpx
 from cribl_control_plane import CriblControlPlane
 from cribl_control_plane.errors import CriblControlPlaneError, ResponseValidationError
 from cribl_control_plane.models.configgroup import ConfigGroup
-from cribl_control_plane.models.listconfiggroupbyproductop import (
-    ListConfigGroupByProductResponse,
-)
 from cribl_control_plane.models.productscore import ProductsCore
 from fastmcp import Context
 from pydantic import ValidationError
@@ -21,6 +18,13 @@ from .validation_errors import (
 )
 
 logger = logging.getLogger("snc_cribl_mcp.operations.groups")
+
+
+class _GroupListResponse(Protocol):
+    """Protocol for the Cribl SDK group list response."""
+
+    items: list[ConfigGroup] | None
+    count: int | None
 
 
 def serialize_config_group(group: ConfigGroup) -> dict[str, Any]:
@@ -48,9 +52,12 @@ async def collect_product_groups(
 
     """
     try:
-        response: ListConfigGroupByProductResponse = await client.groups.list_async(
-            product=product,
-            timeout_ms=timeout_ms,
+        response = cast(
+            "_GroupListResponse",
+            await client.groups.list_async(
+                product=product,
+                timeout_ms=timeout_ms,
+            ),
         )
     except ResponseValidationError as exc:
         # Handle Pydantic validation errors from SDK

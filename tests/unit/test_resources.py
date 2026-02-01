@@ -20,11 +20,14 @@ def mock_deps() -> SimpleNamespace:
     deps.config.timeout_ms = 1000
     deps.config.base_url_str = "http://test.local"
 
+    deps.resolve_config = MagicMock(return_value=deps.config)
+
     deps.products = [MagicMock()]
     deps.products[0].value = "stream"
 
     deps.token_manager = MagicMock()
     deps.token_manager.get_security = AsyncMock(return_value="token")
+    deps.get_token_manager = MagicMock(return_value=deps.token_manager)
 
     deps.create_cp = MagicMock()
     deps.create_cp.return_value.__aenter__ = AsyncMock()

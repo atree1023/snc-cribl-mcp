@@ -16,6 +16,9 @@ from ..config import CriblConfig
 
 logger = logging.getLogger("snc_cribl_mcp.token_manager")
 
+DEFAULT_OAUTH_TOKEN_URL = "https://login.cribl.cloud/oauth/token"  # noqa: S105
+DEFAULT_OAUTH_AUDIENCE = "https://api.cribl.cloud"
+
 
 class TokenManager:
     """Manage bearer tokens for the Cribl API, refreshing when necessary."""
@@ -28,7 +31,7 @@ class TokenManager:
 
         """
         self._config = config
-        self._cached_token: str | None = config.bearer_token
+        self._cached_token: str | None = None
         self._token_expires_at: datetime | None = None
         self._lock: asyncio.Lock | None = None
         self._lock_loop: asyncio.AbstractEventLoop | None = None
@@ -89,7 +92,7 @@ class TokenManager:
             if self._cached_token and self._token_expires_at and (now + timedelta(seconds=3)) < self._token_expires_at:
                 return Security(bearer_auth=self._cached_token)
 
-            if self._cached_token and not (self._config.username and self._config.password):
+            if self._cached_token and not self._can_refresh():
                 # Token exists but may be expired and we cannot refresh - log warning and return anyway
                 logger.warning("Cached token may be expired but no credentials available to refresh")
                 return Security(bearer_auth=self._cached_token)
@@ -109,34 +112,68 @@ class TokenManager:
         """
         username = self._config.username
         password = self._config.password
-        if not (username and password):
-            msg = "CRIBL_USERNAME and CRIBL_PASSWORD must be set to retrieve a token."
-            raise RuntimeError(msg)
+        client_id = self._config.client_id
+        client_secret = self._config.client_secret
 
-        try:
-            token = await self._request_token(username=username, password=password)
-        except Exception:
-            logger.exception("Failed to authenticate with Cribl")
-            raise
-
-        if not token:
-            msg = "Cribl authentication succeeded but returned an empty token."
-            raise RuntimeError(msg)
-
-        try:
-            expires_at = self._get_jwt_exp(token)
-            if expires_at <= datetime.now(UTC):
-                msg = "Cribl authentication returned an expired token."
+        if client_id and client_secret:
+            token, expires_in = await self._request_oauth_token_with_logging(
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+            if not token:
+                msg = "Cribl authentication succeeded but returned an empty token."
                 raise RuntimeError(msg)
-            self._token_expires_at = expires_at
-        except (ValueError, IndexError, json.JSONDecodeError):
-            logger.warning("Could not parse token expiration, token refresh might not work as expected.")
-            self._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+            self._token_expires_at = self._resolve_oauth_expiration(token, expires_in)
+        elif username and password:
+            token = await self._request_token_with_logging(username=username, password=password)
+            if not token:
+                msg = "Cribl authentication succeeded but returned an empty token."
+                raise RuntimeError(msg)
+            self._token_expires_at = self._resolve_token_expiration(token)
+        else:
+            msg = "Username/password or client_id/client_secret must be set to retrieve a token."
+            raise RuntimeError(msg)
 
         self._cached_token = token
 
         logger.debug("Fetched new bearer token from Cribl API.")
         return token
+
+    def _resolve_oauth_expiration(self, token: str, expires_in: int | None) -> datetime:
+        """Resolve token expiration for OAuth flows.
+
+        Args:
+            token: Access token string.
+            expires_in: Optional expires_in duration (seconds).
+
+        Returns:
+            Datetime when the token should be considered expired.
+
+        """
+        if expires_in:
+            return datetime.now(UTC) + timedelta(seconds=expires_in)
+        return self._resolve_token_expiration(token)
+
+    def _resolve_token_expiration(self, token: str) -> datetime:
+        """Resolve token expiration by decoding JWT or falling back to a default.
+
+        Args:
+            token: Access token string.
+
+        Returns:
+            Datetime when the token should be considered expired.
+
+        """
+        try:
+            expires_at = self._get_jwt_exp(token)
+            if expires_at <= datetime.now(UTC):
+                msg = "Cribl authentication returned an expired token."
+                raise RuntimeError(msg)
+        except (ValueError, IndexError, json.JSONDecodeError):
+            logger.warning("Could not parse token expiration, token refresh might not work as expected.")
+            return datetime.now(UTC) + timedelta(hours=1)
+        else:
+            return expires_at
 
     async def _request_token(self, *, username: str, password: str) -> str:
         """Request a bearer token from the Cribl API.
@@ -160,7 +197,126 @@ class TokenManager:
                     username=username,
                     password=password,
                 )
-        return response.token
+
+        token: str | None = None
+        result = getattr(response, "result", None)
+        candidate = getattr(result, "token", None)
+        if isinstance(candidate, str) and candidate:
+            token = candidate
+        else:
+            candidate = getattr(response, "token", None)
+            if isinstance(candidate, str) and candidate:
+                token = candidate
+
+        if token is None:
+            msg = "Cribl authentication succeeded but returned an empty token."
+            raise RuntimeError(msg)
+        return token
+
+    async def _request_oauth_token(self, *, client_id: str, client_secret: str) -> tuple[str, int | None]:
+        """Request an OAuth access token via client credentials.
+
+        Args:
+            client_id: OAuth client ID.
+            client_secret: OAuth client secret.
+
+        Returns:
+            Tuple of access token and optional expires_in (seconds).
+
+        """
+        token_url = self._config.oauth_token_url or DEFAULT_OAUTH_TOKEN_URL
+        audience = self._config.oauth_audience or DEFAULT_OAUTH_AUDIENCE
+        timeout = httpx.Timeout(self._config.timeout_ms / 1000)
+        payload = {
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "audience": audience,
+        }
+
+        async with httpx.AsyncClient(verify=self._config.verify_ssl, timeout=timeout) as http_client:
+            response = await http_client.post(token_url, data=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        token = data.get("access_token")
+        expires_in_raw = data.get("expires_in")
+        expires_in: int | None
+        if expires_in_raw is None:
+            expires_in = None
+        else:
+            try:
+                expires_in = int(expires_in_raw)
+            except (TypeError, ValueError):
+                logger.warning("Invalid expires_in value in OAuth response; ignoring expiration override.")
+                expires_in = None
+        return token, expires_in
+
+    async def _request_oauth_token_with_logging(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+    ) -> tuple[str, int | None]:
+        """Request an OAuth token and log failures.
+
+        Args:
+            client_id: OAuth client ID.
+            client_secret: OAuth client secret.
+
+        Returns:
+            Tuple of access token and optional expires_in (seconds).
+
+        """
+        try:
+            return await self._request_oauth_token(client_id=client_id, client_secret=client_secret)
+        except Exception:
+            logger.exception("Failed to authenticate with Cribl")
+            raise
+
+    async def _request_token_with_logging(self, *, username: str, password: str) -> str:
+        """Request a bearer token and log failures.
+
+        Args:
+            username: Cribl API username.
+            password: Cribl API password.
+
+        Returns:
+            Bearer token string from the authentication response.
+
+        """
+        try:
+            return await self._request_token(username=username, password=password)
+        except Exception:
+            logger.exception("Failed to authenticate with Cribl")
+            raise
+
+    def _can_refresh(self) -> bool:
+        """Return True if credentials are available to refresh tokens."""
+        has_user_pass = bool(self._config.username and self._config.password)
+        has_client_creds = bool(self._config.client_id and self._config.client_secret)
+        return has_user_pass or has_client_creds
 
 
-__all__ = ["TokenManager"]
+_TOKEN_MANAGERS: dict[str, TokenManager] = {}
+
+
+def get_token_manager(config: CriblConfig) -> TokenManager:
+    """Return a cached TokenManager for the given configuration.
+
+    Args:
+        config: Resolved Cribl configuration.
+
+    Returns:
+        TokenManager instance scoped to the configuration's base URL.
+
+    """
+    key = str(config.base_url)
+    manager = _TOKEN_MANAGERS.get(key)
+    if manager is None:
+        manager = TokenManager(config)
+        _TOKEN_MANAGERS[key] = manager
+    return manager
+
+
+__all__ = ["TokenManager", "get_token_manager"]

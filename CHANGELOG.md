@@ -2,6 +2,13 @@
 
 All notable changes to snc-cribl-mcp will be documented in this file.
 
+## [0.2.0] - 2026-01-01
+
+### Added
+
+- Now supports both on-prem and cloud authentication using OAuth.
+- Added support for multiple leaders. Configure the list of leaders in config.toml and specify the name in the prompt.
+
 ## [0.1.1] - 2026-01-27
 
 ### Added

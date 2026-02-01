@@ -23,7 +23,7 @@ class _FakeApp:
     """Minimal stand-in for FastMCP app to capture registered tools."""
 
     def __init__(self) -> None:
-        self.tools: dict[str, Callable[[Context], Awaitable[dict[str, Any]]]] = {}
+        self.tools: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {}
 
     def tool(
         self,
@@ -49,9 +49,7 @@ class _FakeApp:
 def deps_base() -> SimpleNamespace:
     """Return base dependencies object with config and products set."""
     config = CriblConfig(
-        server_url="https://cribl.example.com",
-        base_url="https://cribl.example.com/api/v1",
-        bearer_token=None,
+        url="https://cribl.example.com/api/v1",
         username="user",
         password="pass",
     )
@@ -108,8 +106,9 @@ async def test_list_destinations_tool_success(deps_base: SimpleNamespace, mock_c
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
     deps = SimpleNamespace(
-        **deps_base.__dict__,
-        token_manager=token_manager,
+        resolve_config=MagicMock(return_value=deps_base.config),
+        get_token_manager=MagicMock(return_value=token_manager),
+        products=deps_base.products,
         create_cp=MagicMock(return_value=mock_cm),
         collect_product_destinations=_collect_product_destinations,
     )
@@ -162,8 +161,9 @@ async def test_list_destinations_tool_handles_unavailable_product(
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
     deps = SimpleNamespace(
-        **deps_base.__dict__,
-        token_manager=token_manager,
+        resolve_config=MagicMock(return_value=deps_base.config),
+        get_token_manager=MagicMock(return_value=token_manager),
+        products=deps_base.products,
         create_cp=MagicMock(return_value=mock_cm),
         collect_product_destinations=_collect_product_destinations,
     )
