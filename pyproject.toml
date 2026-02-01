@@ -13,7 +13,7 @@ dependencies = [
     "pydantic>=2.12.5",
     "fastmcp>=2.14.3",
     "python-dotenv>=1.1.1",
-    "cribl-control-plane>=0.5.1",
+    "cribl-control-plane>=0.5.2",
 ]
 
 [project.scripts]

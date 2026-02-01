@@ -9,7 +9,10 @@ Tests cover:
 """
 
 import signal
+import textwrap
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,6 +25,7 @@ from cribl_control_plane.models.productscore import ProductsCore
 from fastmcp import Context
 from pydantic import BaseModel, ValidationError
 
+import snc_cribl_mcp.config as config_module
 from snc_cribl_mcp.server import (
     PRODUCTS,
     CriblConfig,
@@ -43,42 +47,20 @@ class _DummyValidationModel(BaseModel):
     required_field: str
 
 
-@pytest.fixture
-def mock_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    """Set up environment variables for testing."""
-    env_vars = {
-        "CRIBL_SERVER_URL": "https://cribl.example.com",
-        "CRIBL_BASE_URL": "https://cribl.example.com/api/v1",
-        "CRIBL_BEARER_TOKEN": "test-token-123",
-        "CRIBL_VERIFY_SSL": "true",
-        "CRIBL_TIMEOUT_MS": "15000",
-    }
-    for key, value in env_vars.items():
-        monkeypatch.setenv(key, value)
-
-    # Ensure credentials are unset
-    monkeypatch.delenv("CRIBL_USERNAME", raising=False)
-    monkeypatch.delenv("CRIBL_PASSWORD", raising=False)
-
-    return env_vars
+def _write_config(path: Path, content: str) -> None:
+    """Write a config.toml file and clear the config cache."""
+    path.write_text(textwrap.dedent(content).strip() + "\n", encoding="utf-8")
+    config_module.clear_config_cache()
 
 
 @pytest.fixture
-def mock_env_with_credentials(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    """Set up environment variables with username/password instead of token."""
-    env_vars = {
-        "CRIBL_SERVER_URL": "https://cribl.example.com",
-        "CRIBL_BASE_URL": "https://cribl.example.com/api/v1",
-        "CRIBL_USERNAME": "testuser",
-        "CRIBL_PASSWORD": "testpass",
-        "CRIBL_VERIFY_SSL": "true",
-        "CRIBL_TIMEOUT_MS": "15000",
-    }
-    for key, value in env_vars.items():
-        monkeypatch.setenv(key, value)
-    # Clear token if set
-    monkeypatch.delenv("CRIBL_BEARER_TOKEN", raising=False)
-    return env_vars
+def config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path]:
+    """Provide a temporary config.toml path and clear cached config state."""
+    path = tmp_path / "config.toml"
+    monkeypatch.setattr(config_module, "CONFIG_PATH", path)
+    config_module.clear_config_cache()
+    yield path
+    config_module.clear_config_cache()
 
 
 @pytest.fixture
@@ -105,326 +87,182 @@ def sample_list_response(sample_config_group: dict[str, Any]) -> dict[str, Any]:
 class TestCriblConfig:
     """Tests for CriblConfig validation and loading."""
 
-    def test_from_env_with_token(self, mock_env: dict[str, str]) -> None:
-        """Test loading configuration from environment with bearer token."""
-        config = CriblConfig.from_env()
-        # Pydantic AnyUrl normalizes URLs (adds trailing slash)
-        assert str(config.server_url).rstrip("/") == mock_env["CRIBL_SERVER_URL"].rstrip("/")
-        assert str(config.base_url).rstrip("/") == mock_env["CRIBL_BASE_URL"].rstrip("/")
-        assert config.bearer_token == mock_env["CRIBL_BEARER_TOKEN"]
-        assert config.verify_ssl is True
-        assert config.timeout_ms == 15000
+    def test_resolve_default_first_section(self, config_path: Path) -> None:
+        """Default should resolve to the first non-default section."""
+        _write_config(
+            config_path,
+            """
+            [defaults]
+            verify_ssl = true
+            timeout_ms = 15000
 
-    def test_from_env_with_credentials(
-        self,
-        mock_env_with_credentials: dict[str, str],
-    ) -> None:
-        """Test loading configuration with username and password."""
-        config = CriblConfig.from_env()
-        assert config.username == mock_env_with_credentials["CRIBL_USERNAME"]
-        assert config.password == mock_env_with_credentials["CRIBL_PASSWORD"]
-        assert config.bearer_token is None
+            [alpha]
+            url = "https://cribl.example.com"
+            username = "testuser"
+            password = "testpass"
 
-    def test_from_env_missing_server_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test that missing CRIBL_SERVER_URL raises an error."""
-        monkeypatch.delenv("CRIBL_SERVER_URL", raising=False)
-        with pytest.raises(RuntimeError, match="CRIBL_SERVER_URL is required"):
-            CriblConfig.from_env()
+            [beta]
+            url = "https://example.cribl.cloud"
+            client_id = "client-id"
+            client_secret = "client-secret"
+            """,
+        )
 
-    def test_from_env_missing_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test that missing both token and username/password raises an error."""
-        monkeypatch.setenv("CRIBL_SERVER_URL", "https://cribl.example.com")
-        monkeypatch.delenv("CRIBL_BEARER_TOKEN", raising=False)
-        monkeypatch.delenv("CRIBL_USERNAME", raising=False)
-        monkeypatch.delenv("CRIBL_PASSWORD", raising=False)
-        with pytest.raises(RuntimeError, match="Invalid Cribl configuration"):
-            CriblConfig.from_env()
+        config = CriblConfig.resolve()
 
-    def test_from_env_generates_base_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test that base URL is generated from server URL if not provided."""
-        monkeypatch.setenv("CRIBL_SERVER_URL", "https://cribl.example.com/")
-        monkeypatch.setenv("CRIBL_BEARER_TOKEN", "token")
-        monkeypatch.delenv("CRIBL_BASE_URL", raising=False)
-        config = CriblConfig.from_env()
+        assert config.server_name == "alpha"
         assert config.base_url_str == "https://cribl.example.com/api/v1"
-
-    def test_base_url_str_property(self, mock_env: dict[str, str]) -> None:
-        """Test the base_url_str property returns a string."""
-        config = CriblConfig.from_env()
-        assert isinstance(config.base_url_str, str)
-        assert config.base_url_str == mock_env["CRIBL_BASE_URL"]
-
-    def test_validation_error_invalid_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test that invalid timeout values are rejected."""
-        monkeypatch.setenv("CRIBL_SERVER_URL", "https://cribl.example.com")
-        monkeypatch.setenv("CRIBL_BEARER_TOKEN", "token")
-        monkeypatch.setenv("CRIBL_TIMEOUT_MS", "500")  # Too low
-        with pytest.raises(RuntimeError, match="Invalid Cribl configuration"):
-            CriblConfig.from_env()
-
-    def test_direct_instantiation_with_token(self) -> None:
-        """Test direct instantiation with bearer token."""
-        config = CriblConfig(
-            server_url="https://cribl.example.com",
-            base_url="https://cribl.example.com/api/v1",
-            bearer_token="test-token",
-        )
-        assert config.bearer_token == "test-token"
-        assert config.username is None
-        assert config.password is None
-
-    def test_direct_instantiation_with_credentials(self) -> None:
-        """Test direct instantiation with username and password."""
-        config = CriblConfig(
-            server_url="https://cribl.example.com",
-            base_url="https://cribl.example.com/api/v1",
-            username="user",
-            password="pass",
-        )
-        assert config.username == "user"
-        assert config.password == "pass"
-        assert config.bearer_token is None
-
-    def test_direct_instantiation_missing_password(self) -> None:
-        """Username without password should raise validation error."""
-        with pytest.raises(ValidationError):
-            CriblConfig(
-                server_url="https://cribl.example.com",
-                base_url="https://cribl.example.com/api/v1",
-                username="user",
-            )
-
-    def test_direct_instantiation_with_oauth(self) -> None:
-        """Test direct instantiation with OAuth client credentials."""
-        config = CriblConfig(
-            server_url="https://cribl.example.com",
-            base_url="https://cribl.example.com/api/v1",
-            client_id="client-id",
-            client_secret="client-secret",
-        )
-        assert config.client_id == "client-id"
-        assert config.client_secret == "client-secret"
-        assert config.bearer_token is None
-
-    def test_direct_instantiation_missing_client_secret(self) -> None:
-        """Client ID without secret should raise validation error."""
-        with pytest.raises(ValidationError):
-            CriblConfig(
-                server_url="https://cribl.example.com",
-                base_url="https://cribl.example.com/api/v1",
-                client_id="client-id",
-            )
-
-    def test_direct_instantiation_no_auth(self) -> None:
-        """Test that instantiation without credentials raises an error."""
-        with pytest.raises(ValidationError):
-            CriblConfig(
-                server_url="https://cribl.example.com",
-                base_url="https://cribl.example.com/api/v1",
-            )
-
-    def test_from_env_with_oauth(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test loading configuration from environment with OAuth credentials."""
-        monkeypatch.setenv("CRIBL_SERVER_URL", "https://cribl.example.com")
-        monkeypatch.setenv("CRIBL_CLIENT_ID", "client-id")
-        monkeypatch.setenv("CRIBL_CLIENT_SECRET", "client-secret")
-        monkeypatch.delenv("CRIBL_BEARER_TOKEN", raising=False)
-        monkeypatch.delenv("CRIBL_USERNAME", raising=False)
-        monkeypatch.delenv("CRIBL_PASSWORD", raising=False)
-
-        config = CriblConfig.from_env()
-
-        assert config.client_id == "client-id"
-        assert config.client_secret == "client-secret"
-
-    def test_from_env_with_verify_ssl_and_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify SSL and timeout should be loaded when provided."""
-        monkeypatch.setenv("CRIBL_SERVER_URL", "https://cribl.example.com")
-        monkeypatch.setenv("CRIBL_BEARER_TOKEN", "token")
-        monkeypatch.setenv("CRIBL_VERIFY_SSL", "false")
-        monkeypatch.setenv("CRIBL_TIMEOUT_MS", "20000")
-
-        config = CriblConfig.from_env()
-
-        assert config.verify_ssl is False
-        assert config.timeout_ms == 20000
-
-    def test_from_env_without_optional_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Missing optional env values should preserve defaults."""
-        monkeypatch.setenv("CRIBL_SERVER_URL", "https://cribl.example.com")
-        monkeypatch.setenv("CRIBL_BEARER_TOKEN", "token")
-        monkeypatch.delenv("CRIBL_VERIFY_SSL", raising=False)
-        monkeypatch.delenv("CRIBL_TIMEOUT_MS", raising=False)
-
-        config = CriblConfig.from_env()
-
-        assert config.verify_ssl is True
-        assert config.timeout_ms == 10000
-
-    def test_from_env_named(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test loading named server configuration from environment variables."""
-        monkeypatch.setenv("CRIBL_DEV_SERVER_URL", "https://cribl-dev.example.com")
-        monkeypatch.setenv("CRIBL_DEV_CLIENT_ID", "client-id")
-        monkeypatch.setenv("CRIBL_DEV_CLIENT_SECRET", "client-secret")
-
-        config = CriblConfig.from_env_named("dev")
-
-        assert str(config.server_url).rstrip("/") == "https://cribl-dev.example.com"
-        assert config.base_url_str == "https://cribl-dev.example.com/api/v1"
-        assert config.client_id == "client-id"
-        assert config.client_secret == "client-secret"
-
-    def test_from_env_named_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Named configs should use CRIBL_DEFAULT_* for missing values."""
-        monkeypatch.setenv("CRIBL_DEV_SERVER_URL", "https://cribl-dev.example.com")
-        monkeypatch.setenv("CRIBL_DEFAULT_BEARER_TOKEN", "default-token")
-
-        config = CriblConfig.from_env_named("dev")
-
-        assert config.base_url_str == "https://cribl-dev.example.com/api/v1"
-        assert config.bearer_token == "default-token"
-
-    def test_from_env_named_missing_server(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Missing named server should raise a runtime error."""
-        monkeypatch.delenv("CRIBL_MISSING_SERVER_URL", raising=False)
-        monkeypatch.delenv("CRIBL_DEFAULT_SERVER_URL", raising=False)
-        monkeypatch.delenv("CRIBL_DEFAULT_URL", raising=False)
-        monkeypatch.delenv("CRIBL_SERVER_URL", raising=False)
-        monkeypatch.delenv("CRIBL_URL", raising=False)
-
-        with pytest.raises(RuntimeError, match="not configured"):
-            CriblConfig.from_env_named("missing")
-
-    def test_from_env_named_with_verify_ssl_and_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Named configs should parse verify_ssl and timeout when provided."""
-        monkeypatch.setenv("CRIBL_DEV_SERVER_URL", "https://cribl-dev.example.com")
-        monkeypatch.setenv("CRIBL_DEV_BEARER_TOKEN", "token")
-        monkeypatch.setenv("CRIBL_DEV_VERIFY_SSL", "true")
-        monkeypatch.setenv("CRIBL_DEV_TIMEOUT_MS", "15000")
-
-        config = CriblConfig.from_env_named("dev")
-
         assert config.verify_ssl is True
         assert config.timeout_ms == 15000
 
-    def test_from_env_named_invalid_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Invalid named timeout should raise a runtime error."""
-        monkeypatch.setenv("CRIBL_DEV_SERVER_URL", "https://cribl-dev.example.com")
-        monkeypatch.setenv("CRIBL_DEV_BEARER_TOKEN", "token")
-        monkeypatch.setenv("CRIBL_DEV_TIMEOUT_MS", "500")
+    def test_resolve_named_server(self, config_path: Path) -> None:
+        """Named servers should resolve from config.toml."""
+        _write_config(
+            config_path,
+            """
+            [defaults]
+            timeout_ms = 12000
 
-        with pytest.raises(RuntimeError, match="Invalid Cribl configuration"):
-            CriblConfig.from_env_named("dev")
+            [golden.oak]
+            url = "https://cribl.example.com"
+            username = "user"
+            password = "pass"
 
-    def test_resolve_prefers_explicit_server(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Explicit server parameter should resolve named config."""
-        monkeypatch.setenv("CRIBL_PROD_SERVER_URL", "https://cribl-prod.example.com")
-        monkeypatch.setenv("CRIBL_PROD_BEARER_TOKEN", "token")
+            [cribl.cloud]
+            url = "https://tenant.cribl.cloud"
+            client_id = "client-id"
+            client_secret = "client-secret"
+            """,
+        )
 
-        config = CriblConfig.resolve("prod")
+        config = CriblConfig.resolve("cribl.cloud")
 
-        assert config.base_url_str == "https://cribl-prod.example.com/api/v1"
-
-    def test_resolve_uses_default_server(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Default server should resolve when no explicit server passed."""
-        monkeypatch.setenv("CRIBL_DEFAULT_SERVER", "dev")
-        monkeypatch.setenv("CRIBL_DEV_SERVER_URL", "https://cribl-dev.example.com")
-        monkeypatch.setenv("CRIBL_DEV_BEARER_TOKEN", "token")
-
-        config = CriblConfig.resolve()
-
-        assert config.base_url_str == "https://cribl-dev.example.com/api/v1"
-
-    def test_resolve_falls_back_to_legacy(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Legacy CRIBL_SERVER_URL should be used when no default is set."""
-        monkeypatch.delenv("CRIBL_DEFAULT_SERVER", raising=False)
-        monkeypatch.delenv("CRIBL_DEFAULT_SERVER_URL", raising=False)
-        monkeypatch.setenv("CRIBL_SERVER_URL", "https://cribl-legacy.example.com")
-        monkeypatch.setenv("CRIBL_BEARER_TOKEN", "token")
-
-        config = CriblConfig.resolve()
-
-        assert config.base_url_str == "https://cribl-legacy.example.com/api/v1"
-
-    def test_resolve_uses_default_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Default config should be used when no instance is provided."""
-        monkeypatch.delenv("CRIBL_DEFAULT_SERVER", raising=False)
-        monkeypatch.setenv("CRIBL_DEFAULT_SERVER_URL", "https://cribl-default.example.com")
-        monkeypatch.setenv("CRIBL_DEFAULT_BEARER_TOKEN", "token")
-
-        config = CriblConfig.resolve()
-
-        assert config.base_url_str == "https://cribl-default.example.com/api/v1"
-
-    def test_from_env_default_invalid_server_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Default server URL must include a scheme."""
-        monkeypatch.setenv("CRIBL_DEFAULT_SERVER_URL", "cribl-default.example.com")
-
-        with pytest.raises(RuntimeError, match="CRIBL_DEFAULT_SERVER_URL"):
-            CriblConfig.from_env_default()
-
-    def test_from_env_default_with_verify_ssl_and_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Default configs should parse verify_ssl and timeout when provided."""
-        monkeypatch.setenv("CRIBL_DEFAULT_SERVER_URL", "https://cribl-default.example.com")
-        monkeypatch.setenv("CRIBL_DEFAULT_BEARER_TOKEN", "token")
-        monkeypatch.setenv("CRIBL_DEFAULT_VERIFY_SSL", "false")
-        monkeypatch.setenv("CRIBL_DEFAULT_TIMEOUT_MS", "12000")
-
-        config = CriblConfig.from_env_default()
-
-        assert config.verify_ssl is False
+        assert config.server_name == "cribl.cloud"
+        assert config.base_url_str == "https://tenant.cribl.cloud/api/v1"
         assert config.timeout_ms == 12000
 
-    def test_from_env_default_with_base_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Default config should respect CRIBL_DEFAULT_BASE_URL when set."""
-        monkeypatch.setenv("CRIBL_DEFAULT_SERVER_URL", "https://cribl-default.example.com")
-        monkeypatch.setenv("CRIBL_DEFAULT_BASE_URL", "https://cribl-default.example.com/api/v1")
-        monkeypatch.setenv("CRIBL_DEFAULT_BEARER_TOKEN", "token")
+    def test_resolve_missing_server(self, config_path: Path) -> None:
+        """Unknown server names should raise a runtime error."""
+        _write_config(
+            config_path,
+            """
+            [alpha]
+            url = "https://cribl.example.com"
+            username = "user"
+            password = "pass"
+            """,
+        )
 
-        config = CriblConfig.from_env_default()
+        with pytest.raises(RuntimeError, match="not configured"):
+            CriblConfig.resolve("missing")
 
-        assert config.base_url_str == "https://cribl-default.example.com/api/v1"
+    def test_cloud_requires_client_credentials(self, config_path: Path) -> None:
+        """Cribl.Cloud servers must use client credentials."""
+        _write_config(
+            config_path,
+            """
+            [cribl.cloud]
+            url = "https://tenant.cribl.cloud"
+            username = "user"
+            password = "pass"
+            """,
+        )
 
-    def test_from_env_default_missing_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Default config without credentials should raise a runtime error."""
-        monkeypatch.setenv("CRIBL_DEFAULT_SERVER_URL", "https://cribl-default.example.com")
-        monkeypatch.delenv("CRIBL_DEFAULT_BEARER_TOKEN", raising=False)
-        monkeypatch.delenv("CRIBL_DEFAULT_USERNAME", raising=False)
-        monkeypatch.delenv("CRIBL_DEFAULT_PASSWORD", raising=False)
-        monkeypatch.delenv("CRIBL_DEFAULT_CLIENT_ID", raising=False)
-        monkeypatch.delenv("CRIBL_DEFAULT_CLIENT_SECRET", raising=False)
+        with pytest.raises(RuntimeError, match="client_id and client_secret"):
+            CriblConfig.resolve("cribl.cloud")
+
+    def test_on_prem_requires_username_password(self, config_path: Path) -> None:
+        """On-prem servers must use username and password."""
+        _write_config(
+            config_path,
+            """
+            [golden.oak]
+            url = "https://cribl.example.com"
+            client_id = "client-id"
+            client_secret = "client-secret"
+            """,
+        )
+
+        with pytest.raises(RuntimeError, match="username and password"):
+            CriblConfig.resolve("golden.oak")
+
+    def test_expands_env_placeholders(self, config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Environment placeholders should expand using .env/env values."""
+        monkeypatch.setenv("TEST_PASS", "secret")
+        _write_config(
+            config_path,
+            """
+            [golden.oak]
+            url = "https://cribl.example.com"
+            username = "user"
+            password = "${TEST_PASS}"
+            """,
+        )
+
+        config = CriblConfig.resolve("golden.oak")
+        assert config.password == "secret"
+
+    def test_base_url_auto_append(self, config_path: Path) -> None:
+        """URLs missing /api/v1 should be normalized."""
+        _write_config(
+            config_path,
+            """
+            [alpha]
+            url = "https://cribl.example.com/"
+            username = "user"
+            password = "pass"
+            """,
+        )
+
+        config = CriblConfig.resolve("alpha")
+        assert config.base_url_str == "https://cribl.example.com/api/v1"
+
+    def test_invalid_timeout_raises(self, config_path: Path) -> None:
+        """Invalid timeout values should raise errors."""
+        _write_config(
+            config_path,
+            """
+            [defaults]
+            timeout_ms = 500
+
+            [alpha]
+            url = "https://cribl.example.com"
+            username = "user"
+            password = "pass"
+            """,
+        )
 
         with pytest.raises(RuntimeError, match="Invalid Cribl configuration"):
-            CriblConfig.from_env_default()
-
-    def test_resolve_no_server_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Missing all server configuration should raise a runtime error."""
-        monkeypatch.delenv("CRIBL_DEFAULT_SERVER", raising=False)
-        monkeypatch.delenv("CRIBL_DEFAULT_SERVER_URL", raising=False)
-        monkeypatch.delenv("CRIBL_SERVER_URL", raising=False)
-
-        with pytest.raises(RuntimeError, match="No server configured"):
-            CriblConfig.resolve()
+            CriblConfig.resolve("alpha")
 
 
 class TestTokenManager:
     """Tests for TokenManager token handling and refresh logic."""
 
     @pytest.mark.asyncio
-    async def test_get_security_with_existing_token(self, mock_env: dict[str, str]) -> None:
-        """Test getting a token when one is already configured."""
-        config = CriblConfig.from_env()
+    async def test_get_security_with_existing_token(self) -> None:
+        """Test getting a token when one is already cached."""
+        config = CriblConfig(
+            url="https://cribl.example.com/api/v1",
+            username="user",
+            password="pass",
+        )
         manager = TokenManager(config)
+        manager._cached_token = "cached-token"  # type: ignore[reportPrivateUsage]
+        manager._token_expires_at = datetime.now(UTC) + timedelta(hours=1)  # type: ignore[reportPrivateUsage]
         security = await manager.get_security()
-        assert security.bearer_auth == mock_env["CRIBL_BEARER_TOKEN"]
+        assert security.bearer_auth == "cached-token"
 
     @pytest.mark.asyncio
     async def test_get_security_fetches_new_token(
         self,
-        mock_env_with_credentials: dict[str, str],
     ) -> None:
         """Test fetching a new token when none exists."""
-        config = CriblConfig.from_env()
+        config = CriblConfig(
+            url="https://cribl.example.com/api/v1",
+            username="testuser",
+            password="testpass",
+        )
         manager = TokenManager(config)
 
         with (
@@ -440,10 +278,13 @@ class TestTokenManager:
     @pytest.mark.asyncio
     async def test_get_security_caches_fetched_token(
         self,
-        mock_env_with_credentials: dict[str, str],
     ) -> None:
         """Test that fetched tokens are cached for subsequent calls."""
-        config = CriblConfig.from_env()
+        config = CriblConfig(
+            url="https://cribl.example.com/api/v1",
+            username="testuser",
+            password="testpass",
+        )
         manager = TokenManager(config)
 
         with (
@@ -457,28 +298,31 @@ class TestTokenManager:
         mock_request.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_fetch_new_token_missing_credentials(self, mock_env: dict[str, str]) -> None:
+    async def test_fetch_new_token_missing_credentials(self) -> None:
         """Test that fetching a new token without credentials raises an error."""
         config = CriblConfig(
-            server_url="https://cribl.example.com",
-            base_url="https://cribl.example.com/api/v1",
+            url="https://cribl.example.com/api/v1",
             username="testuser",
             password="testpass",
         )
         manager = TokenManager(config)
         manager._config.username = None  # type: ignore[reportPrivateUsage]
+        manager._config.password = None  # type: ignore[reportPrivateUsage]
         manager._cached_token = None  # type: ignore[reportPrivateUsage]
 
-        with pytest.raises(RuntimeError, match="CRIBL_USERNAME/CRIBL_PASSWORD"):
+        with pytest.raises(RuntimeError, match="Username/password or client_id/client_secret"):
             await manager.get_security()
 
     @pytest.mark.asyncio
     async def test_fetch_new_token_empty_response(
         self,
-        mock_env_with_credentials: dict[str, str],
     ) -> None:
         """Test handling of empty token in authentication response."""
-        config = CriblConfig.from_env()
+        config = CriblConfig(
+            url="https://cribl.example.com/api/v1",
+            username="testuser",
+            password="testpass",
+        )
         manager = TokenManager(config)
 
         with (
@@ -492,17 +336,25 @@ class TestCreateControlPlane:
     """Tests for the create_control_plane context manager."""
 
     @pytest.mark.asyncio
-    async def test_creates_client_with_token(self, mock_env: dict[str, str]) -> None:
+    async def test_creates_client_with_token(self) -> None:
         """Test creating a control plane client with bearer token."""
-        config = CriblConfig.from_env()
+        config = CriblConfig(
+            url="https://cribl.example.com/api/v1",
+            username="user",
+            password="pass",
+        )
         security = Security(bearer_auth="test-token")
         async with create_control_plane(config, security=security) as client:
             assert client is not None
 
     @pytest.mark.asyncio
-    async def test_creates_client_without_token(self, mock_env: dict[str, str]) -> None:
+    async def test_creates_client_without_token(self) -> None:
         """Test creating a control plane client without bearer token."""
-        config = CriblConfig.from_env()
+        config = CriblConfig(
+            url="https://cribl.example.com/api/v1",
+            username="user",
+            password="pass",
+        )
         async with create_control_plane(config, security=None) as client:
             assert client is not None
 
@@ -770,9 +622,9 @@ class TestListGroupsTool:
         mock_context_manager.__aexit__.return_value = None
 
         config = CriblConfig(
-            server_url="https://cribl.example.com",
-            base_url="https://cribl.example.com/api/v1",
-            bearer_token="test-token",
+            url="https://cribl.example.com/api/v1",
+            username="user",
+            password="pass",
         )
 
         with (
@@ -826,9 +678,9 @@ class TestListGroupsTool:
         mock_context_manager.__aexit__.return_value = None
 
         config = CriblConfig(
-            server_url="https://cribl.example.com",
-            base_url="https://cribl.example.com/api/v1",
-            bearer_token="test-token",
+            url="https://cribl.example.com/api/v1",
+            username="user",
+            password="pass",
         )
 
         with (
@@ -865,9 +717,9 @@ class TestListGroupsTool:
         mock_context_manager.__aexit__.return_value = None
 
         config = CriblConfig(
-            server_url="https://cribl.example.com",
-            base_url="https://cribl.example.com/api/v1",
-            bearer_token="test-token",
+            url="https://cribl.example.com/api/v1",
+            username="user",
+            password="pass",
         )
 
         with (
@@ -894,9 +746,13 @@ class TestModuleConstants:
         assert ProductsCore.STREAM in PRODUCTS
         assert ProductsCore.EDGE in PRODUCTS
 
-    def test_token_manager_factory(self, mock_env: dict[str, str]) -> None:
+    def test_token_manager_factory(self) -> None:
         """Token managers should be created via the factory for a config."""
-        config = CriblConfig.from_env()
+        config = CriblConfig(
+            url="https://cribl.example.com/api/v1",
+            username="user",
+            password="pass",
+        )
         manager = get_token_manager(config)
         assert isinstance(manager, TokenManager)
 

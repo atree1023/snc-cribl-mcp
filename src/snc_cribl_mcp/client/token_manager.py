@@ -31,7 +31,7 @@ class TokenManager:
 
         """
         self._config = config
-        self._cached_token: str | None = config.bearer_token
+        self._cached_token: str | None = None
         self._token_expires_at: datetime | None = None
         self._lock: asyncio.Lock | None = None
         self._lock_loop: asyncio.AbstractEventLoop | None = None
@@ -131,7 +131,7 @@ class TokenManager:
                 raise RuntimeError(msg)
             self._token_expires_at = self._resolve_token_expiration(token)
         else:
-            msg = "CRIBL_USERNAME/CRIBL_PASSWORD or CRIBL_CLIENT_ID/CRIBL_CLIENT_SECRET must be set to retrieve a token."
+            msg = "Username/password or client_id/client_secret must be set to retrieve a token."
             raise RuntimeError(msg)
 
         self._cached_token = token
@@ -197,7 +197,21 @@ class TokenManager:
                     username=username,
                     password=password,
                 )
-        return response.token
+
+        token: str | None = None
+        result = getattr(response, "result", None)
+        candidate = getattr(result, "token", None)
+        if isinstance(candidate, str) and candidate:
+            token = candidate
+        else:
+            candidate = getattr(response, "token", None)
+            if isinstance(candidate, str) and candidate:
+                token = candidate
+
+        if token is None:
+            msg = "Cribl authentication succeeded but returned an empty token."
+            raise RuntimeError(msg)
+        return token
 
     async def _request_oauth_token(self, *, client_id: str, client_secret: str) -> tuple[str, int | None]:
         """Request an OAuth access token via client credentials.

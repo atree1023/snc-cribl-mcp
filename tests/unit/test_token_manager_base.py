@@ -14,18 +14,9 @@ from snc_cribl_mcp.client.token_manager import TokenManager, get_token_manager
 from snc_cribl_mcp.config import CriblConfig
 
 
-def _config_with_token() -> CriblConfig:
-    return CriblConfig(
-        server_url="https://cribl.example.com",
-        base_url="https://cribl.example.com/api/v1",
-        bearer_token="tok",
-    )
-
-
 def _config_with_credentials() -> CriblConfig:
     return CriblConfig(
-        server_url="https://cribl.example.com",
-        base_url="https://cribl.example.com/api/v1",
+        url="https://cribl.example.com/api/v1",
         username="user",
         password="pass",
     )
@@ -33,8 +24,7 @@ def _config_with_credentials() -> CriblConfig:
 
 def _config_with_oauth() -> CriblConfig:
     return CriblConfig(
-        server_url="https://cribl.example.com",
-        base_url="https://cribl.example.com/api/v1",
+        url="https://tenant.cribl.cloud/api/v1",
         client_id="client-id",
         client_secret="client-secret",
     )
@@ -42,16 +32,18 @@ def _config_with_oauth() -> CriblConfig:
 
 def _config_with_unique_base_url() -> CriblConfig:
     return CriblConfig(
-        server_url="https://cribl-unique.example.com",
-        base_url="https://cribl-unique.example.com/api/v1",
-        bearer_token="tok",
+        url="https://cribl-unique.example.com/api/v1",
+        username="user",
+        password="pass",
     )
 
 
 @pytest.mark.asyncio
 async def test_get_security_returns_existing() -> None:
-    """It should return the existing bearer token from config without network calls."""
-    manager = TokenManager(_config_with_token())
+    """It should return the cached bearer token without network calls."""
+    manager = TokenManager(_config_with_credentials())
+    manager._cached_token = "tok"  # type: ignore[reportPrivateUsage]
+    manager._token_expires_at = datetime.now(UTC) + timedelta(hours=1)  # type: ignore[reportPrivateUsage]
     security = await manager.get_security()
     assert security.bearer_auth == "tok"
 
@@ -79,9 +71,10 @@ async def test_fetch_new_token_missing_credentials_raises() -> None:
     """Missing credentials at fetch time should raise a RuntimeError."""
     manager = TokenManager(_config_with_credentials())
     manager._config.username = None  # type: ignore[reportPrivateUsage]
+    manager._config.password = None  # type: ignore[reportPrivateUsage]
     manager._cached_token = None  # type: ignore[reportPrivateUsage]
 
-    with pytest.raises(RuntimeError, match="CRIBL_USERNAME/CRIBL_PASSWORD"):
+    with pytest.raises(RuntimeError, match="Username/password or client_id/client_secret"):
         await manager.get_security()
 
 
@@ -108,6 +101,53 @@ async def test_fetch_new_token_expired_response_raises() -> None:
         pytest.raises(RuntimeError, match="expired token"),
     ):
         await manager.get_security()
+
+
+@pytest.mark.asyncio
+async def test_request_token_missing_token_raises() -> None:
+    """Missing token attribute should raise a RuntimeError."""
+    manager = TokenManager(_config_with_credentials())
+
+    with patch("snc_cribl_mcp.client.token_manager.httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+
+        mock_control_plane = MagicMock()
+        mock_control_plane.__aenter__ = AsyncMock(return_value=mock_control_plane)
+        mock_control_plane.__aexit__ = AsyncMock(return_value=None)
+        mock_response = MagicMock()
+        mock_control_plane.auth.tokens.get_async = AsyncMock(return_value=mock_response)
+
+        with (
+            patch("snc_cribl_mcp.client.token_manager.CriblControlPlane", return_value=mock_control_plane),
+            pytest.raises(RuntimeError, match="empty token"),
+        ):
+            await manager._request_token(username="user", password="pass")
+
+
+@pytest.mark.asyncio
+async def test_request_token_nested_result_token() -> None:
+    """Nested result.token should be accepted from SDK response wrappers."""
+    manager = TokenManager(_config_with_credentials())
+
+    with patch("snc_cribl_mcp.client.token_manager.httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+
+        mock_control_plane = MagicMock()
+        mock_control_plane.__aenter__ = AsyncMock(return_value=mock_control_plane)
+        mock_control_plane.__aexit__ = AsyncMock(return_value=None)
+
+        result = MagicMock()
+        result.token = "nested-token"
+        response = MagicMock()
+        response.result = result
+        mock_control_plane.auth.tokens.get_async = AsyncMock(return_value=response)
+
+        with patch("snc_cribl_mcp.client.token_manager.CriblControlPlane", return_value=mock_control_plane):
+            token = await manager._request_token(username="user", password="pass")
+
+    assert token == "nested-token"
 
 
 def test_close_is_idempotent() -> None:

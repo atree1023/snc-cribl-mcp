@@ -50,9 +50,7 @@ class _FakeApp:
 def deps_base() -> SimpleNamespace:
     """Return base dependencies object with config and products set."""
     config = CriblConfig(
-        server_url="https://cribl.example.com",
-        base_url="https://cribl.example.com/api/v1",
-        bearer_token=None,
+        url="https://cribl.example.com/api/v1",
         username="user",
         password="pass",
     )

@@ -20,19 +20,9 @@ from snc_cribl_mcp.config import CriblConfig
 def _config_with_credentials() -> CriblConfig:
     """Create a config with username/password authentication."""
     return CriblConfig(
-        server_url="https://cribl.example.com",
-        base_url="https://cribl.example.com/api/v1",
+        url="https://cribl.example.com/api/v1",
         username="user",
         password="pass",
-    )
-
-
-def _config_with_token() -> CriblConfig:
-    """Create a config with bearer token authentication."""
-    return CriblConfig(
-        server_url="https://cribl.example.com",
-        base_url="https://cribl.example.com/api/v1",
-        bearer_token="preexisting-token",
     )
 
 
@@ -90,7 +80,8 @@ class TestTokenManagerCaching:
     @pytest.mark.asyncio
     async def test_cached_token_returned_when_not_expired(self) -> None:
         """Cached token should be returned without network call when still valid."""
-        manager = TokenManager(_config_with_token())
+        manager = TokenManager(_config_with_credentials())
+        manager._cached_token = "preexisting-token"  # type: ignore[reportPrivateUsage]
         # Set expiration to 1 hour from now
         manager._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
 
@@ -101,7 +92,8 @@ class TestTokenManagerCaching:
     @pytest.mark.asyncio
     async def test_cached_token_near_expiration_still_used(self) -> None:
         """Token near expiration (> 3 seconds) should still be used."""
-        manager = TokenManager(_config_with_token())
+        manager = TokenManager(_config_with_credentials())
+        manager._cached_token = "preexisting-token"  # type: ignore[reportPrivateUsage]
         # Set expiration to 5 seconds from now (> 3 second buffer)
         manager._token_expires_at = datetime.now(UTC) + timedelta(seconds=5)
 
@@ -112,7 +104,10 @@ class TestTokenManagerCaching:
     @pytest.mark.asyncio
     async def test_expired_token_logs_warning_no_credentials(self) -> None:
         """Expired token without credentials should log warning and return cached token."""
-        manager = TokenManager(_config_with_token())
+        manager = TokenManager(_config_with_credentials())
+        manager._cached_token = "preexisting-token"  # type: ignore[reportPrivateUsage]
+        manager._config.username = None  # type: ignore[reportPrivateUsage]
+        manager._config.password = None  # type: ignore[reportPrivateUsage]
         # Set expiration to past
         manager._token_expires_at = datetime.now(UTC) - timedelta(hours=1)
 
