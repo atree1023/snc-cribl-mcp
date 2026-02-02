@@ -783,6 +783,41 @@ class TestCollectItemsViaHttp:
         assert result["groups"][0]["count"] == 0
         mock_ctx.warning.assert_called_once()
 
+    async def test_handles_404_from_item_endpoint_with_item_id(self) -> None:
+        """Handles 404 from an item-specific endpoint and logs item ID."""
+        http_ctx, mock_client, mock_ctx = self._create_http_context()
+        http_ctx = HttpCollectionContext(
+            coll_ctx=http_ctx.coll_ctx,
+            security=http_ctx.security,
+            endpoint_path=http_ctx.endpoint_path,
+            item_id="breaker-1",
+        )
+
+        mock_group_response = MagicMock()
+        mock_group = MagicMock()
+        mock_group.model_dump.return_value = {"id": "group1"}
+        mock_group_response.items = [mock_group]
+        mock_client.groups.list_async = AsyncMock(return_value=mock_group_response)
+
+        mock_http_client = mock_client.sdk_configuration.async_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = HTTP_NOT_FOUND
+        mock_http_client.get = AsyncMock(return_value=mock_resp)
+
+        result = await collect_items_via_http(http_ctx)
+
+        assert result["status"] == "ok"
+        assert result["total_count"] == 0
+        assert len(result["groups"]) == 1
+        assert result["groups"][0]["count"] == 0
+        mock_ctx.warning.assert_called_once()
+
+        warning_message = mock_ctx.warning.call_args[0][0]
+        assert "breaker-1" in warning_message
+
+        request_url = mock_http_client.get.call_args[0][0]
+        assert request_url.endswith("/m/group1/lib/breakers/breaker-1")
+
     async def test_raises_on_http_error_during_item_fetch(self) -> None:
         """Raises RuntimeError on HTTP errors during item fetch."""
         http_ctx, mock_client, _ = self._create_http_context()

@@ -2,6 +2,10 @@
 
 All notable changes to snc-cribl-mcp will be documented in this file.
 
+## In Progress
+
+- Refactor pipeline collection to use SDK methods rather than API calls.
+
 ## [0.2.0] - 2026-01-01
 
 ### Added
