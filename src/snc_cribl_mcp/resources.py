@@ -86,7 +86,6 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
             if collect_fn in (
                 deps.collect_product_breakers,
                 deps.collect_product_lookups,
-                deps.collect_product_pipelines,
                 deps.collect_product_sources,
             ):
                 return await collect_fn(

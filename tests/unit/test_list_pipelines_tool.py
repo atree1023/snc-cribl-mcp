@@ -2,7 +2,6 @@
 
 Validates JSON shape, dependency injection, and error handling through the
 tool registration layer (without requiring a running FastMCP app).
-Uses HTTP collection to preserve function configurations.
 """
 
 from collections.abc import Awaitable, Callable
@@ -13,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from cribl_control_plane.errors import CriblControlPlaneError
 from cribl_control_plane.models.productscore import ProductsCore
-from cribl_control_plane.models.security import Security
 from fastmcp import Context
 
 from snc_cribl_mcp.config import CriblConfig
@@ -42,7 +40,6 @@ class _FakeApp:
         def _decorator(
             func: Callable[..., Awaitable[dict[str, Any]]],
         ) -> Callable[..., Awaitable[dict[str, Any]]]:
-            # Use parameters to avoid unused-argument warnings in strict linters
             _ = (description, annotations)
             self.tools[name] = func
             return func
@@ -71,28 +68,14 @@ def mock_ctx() -> Context:
     return ctx
 
 
-@pytest.fixture
-def mock_security() -> Security:
-    """Return a mock Security object with bearer token."""
-    return Security(bearer_auth="test-token")
-
-
 @pytest.mark.asyncio
-async def test_list_pipelines_tool_success(
-    deps_base: SimpleNamespace,
-    mock_ctx: Context,
-    mock_security: Security,
-) -> None:
+async def test_list_pipelines_tool_success(deps_base: SimpleNamespace, mock_ctx: Context) -> None:
     """The tool should aggregate pipelines across products and return formatted JSON."""
-    # Set up token manager to return our mock security
-    token_manager = SimpleNamespace(get_security=AsyncMock(return_value=mock_security))
+    token_manager = SimpleNamespace(get_security=AsyncMock(return_value=object()))
 
-    # Mock client and SDK calls via context manager
     mock_client = MagicMock()
-    # STREAM groups
     groups_resp_stream = MagicMock(items=[MagicMock()])
     groups_resp_stream.items[0].model_dump.return_value = {"id": "g1"}
-    # EDGE groups
     groups_resp_edge = MagicMock(items=[MagicMock()])
     groups_resp_edge.items[0].model_dump.return_value = {"id": "e1"}
 
@@ -101,36 +84,20 @@ async def test_list_pipelines_tool_success(
 
     mock_client.groups.list_async = AsyncMock(side_effect=groups_list_async)
     mock_client.sdk_configuration = MagicMock(server_url=deps_base.config.base_url_str)
+    mock_client.pipelines = MagicMock()
 
-    # Mock HTTP client for pipelines
-    mock_http_client = AsyncMock()
-    mock_client.sdk_configuration.async_client = mock_http_client
+    resp_g1 = MagicMock(items=[MagicMock()], count=1)
+    resp_g1.items[0].model_dump.return_value = {"id": "p1", "conf": {"functions": []}}
+    resp_e1 = MagicMock(items=[MagicMock(), MagicMock()], count=2)
+    resp_e1.items[0].model_dump.return_value = {"id": "p2", "conf": {"functions": []}}
+    resp_e1.items[1].model_dump.return_value = {"id": "p3", "conf": {"functions": []}}
 
-    g1_response = MagicMock()
-    g1_response.status_code = 200
-    g1_response.json.return_value = {
-        "items": [{"id": "p1", "conf": {"functions": []}}],
-        "count": 1,
-    }
-    g1_response.raise_for_status = MagicMock()
+    async def pipelines_list_async(*_args: object, **kwargs: dict[str, object]) -> MagicMock:
+        srv_url = str(kwargs.get("server_url", ""))
+        assert srv_url.endswith(("/m/g1", "/m/e1"))
+        return resp_g1 if srv_url.endswith("/m/g1") else resp_e1
 
-    e1_response = MagicMock()
-    e1_response.status_code = 200
-    e1_response.json.return_value = {
-        "items": [
-            {"id": "p2", "conf": {"functions": []}},
-            {"id": "p3", "conf": {"functions": []}},
-        ],
-        "count": 2,
-    }
-    e1_response.raise_for_status = MagicMock()
-
-    async def mock_get(url: str, **kwargs: object) -> MagicMock:
-        if "/m/g1/pipelines" in url:
-            return g1_response
-        return e1_response
-
-    mock_http_client.get = AsyncMock(side_effect=mock_get)
+    mock_client.pipelines.list_async = AsyncMock(side_effect=pipelines_list_async)
 
     mock_cm = MagicMock()
     mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
@@ -148,29 +115,21 @@ async def test_list_pipelines_tool_success(
     register_list_pipelines(app, deps=deps)  # type: ignore[arg-type]
     assert "list_pipelines" in app.tools
 
-    # Tool function takes only ctx; security is obtained via token_manager internally
-    raw = await app.tools["list_pipelines"](mock_ctx)
-    data = raw
+    data = await app.tools["list_pipelines"](mock_ctx)
 
     pipelines = cast("dict[str, Any]", data["pipelines"])
 
     assert data["base_url"] == deps_base.config.base_url_str
     assert "stream" in pipelines
     assert "edge" in pipelines
-    stream = cast("dict[str, Any]", pipelines["stream"])
-    edge = cast("dict[str, Any]", pipelines["edge"])
-    assert stream["total_count"] == 1
-    assert edge["total_count"] == 2
+    assert pipelines["stream"]["total_count"] == 1
+    assert pipelines["edge"]["total_count"] == 2
 
 
 @pytest.mark.asyncio
-async def test_list_pipelines_tool_with_pipeline_id(
-    deps_base: SimpleNamespace,
-    mock_ctx: Context,
-    mock_security: Security,
-) -> None:
+async def test_list_pipelines_tool_with_pipeline_id(deps_base: SimpleNamespace, mock_ctx: Context) -> None:
     """The tool should pass pipeline_id through to the collector."""
-    token_manager = SimpleNamespace(get_security=AsyncMock(return_value=mock_security))
+    token_manager = SimpleNamespace(get_security=AsyncMock(return_value=object()))
 
     mock_client = MagicMock()
     groups_resp_stream = MagicMock(items=[MagicMock()])
@@ -183,22 +142,19 @@ async def test_list_pipelines_tool_with_pipeline_id(
 
     mock_client.groups.list_async = AsyncMock(side_effect=groups_list_async)
     mock_client.sdk_configuration = MagicMock(server_url=deps_base.config.base_url_str)
+    mock_client.pipelines = MagicMock()
 
-    mock_http_client = AsyncMock()
-    mock_client.sdk_configuration.async_client = mock_http_client
+    response = MagicMock(items=[MagicMock()], count=1)
+    response.items[0].model_dump.return_value = {"id": "p1", "conf": {"functions": []}}
 
-    response = MagicMock()
-    response.status_code = 200
-    response.json.return_value = {"items": [{"id": "p1", "conf": {"functions": []}}], "count": 1}
-    response.raise_for_status = MagicMock()
-
-    requested_urls: list[str] = []
-
-    async def mock_get(url: str, **kwargs: object) -> MagicMock:
-        requested_urls.append(url)
+    async def pipelines_get_async(*_args: object, **kwargs: dict[str, object]) -> MagicMock:
+        assert kwargs.get("id") == "p1"
+        srv_url = str(kwargs.get("server_url", ""))
+        assert srv_url.endswith(("/m/g1", "/m/e1"))
         return response
 
-    mock_http_client.get = AsyncMock(side_effect=mock_get)
+    mock_client.pipelines.get_async = AsyncMock(side_effect=pipelines_get_async)
+    mock_client.pipelines.list_async = AsyncMock(side_effect=AssertionError("list_async should not be called"))
 
     mock_cm = MagicMock()
     mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
@@ -215,27 +171,22 @@ async def test_list_pipelines_tool_with_pipeline_id(
     app = _FakeApp()
     register_list_pipelines(app, deps=deps)  # type: ignore[arg-type]
 
-    raw = await app.tools["list_pipelines"](mock_ctx, pipeline_id="p1")
-    data = raw
+    data = await app.tools["list_pipelines"](mock_ctx, pipeline_id="p1")
     pipelines = cast("dict[str, Any]", data["pipelines"])
 
     assert pipelines["stream"]["total_count"] == 1
     assert pipelines["edge"]["total_count"] == 1
-    assert requested_urls
-    assert all("/pipelines/p1" in url for url in requested_urls)
 
 
 @pytest.mark.asyncio
 async def test_list_pipelines_tool_handles_unavailable_product(
     deps_base: SimpleNamespace,
     mock_ctx: Context,
-    mock_security: Security,
 ) -> None:
     """If groups listing is 404 for a product, it should mark that product unavailable."""
-    token_manager = SimpleNamespace(get_security=AsyncMock(return_value=mock_security))
+    token_manager = SimpleNamespace(get_security=AsyncMock(return_value=object()))
 
     mock_client = MagicMock()
-    # STREAM OK, EDGE 404
     groups_resp_stream = MagicMock(items=[MagicMock()])
     groups_resp_stream.items[0].model_dump.return_value = {"id": "g1"}
     api_error_404 = CriblControlPlaneError(
@@ -251,16 +202,10 @@ async def test_list_pipelines_tool_handles_unavailable_product(
 
     mock_client.groups.list_async = AsyncMock(side_effect=groups_list_async)
     mock_client.sdk_configuration = MagicMock(server_url=deps_base.config.base_url_str)
+    mock_client.pipelines = MagicMock()
 
-    # Mock HTTP client for pipelines
-    mock_http_client = AsyncMock()
-    mock_client.sdk_configuration.async_client = mock_http_client
-
-    empty_response = MagicMock()
-    empty_response.status_code = 200
-    empty_response.json.return_value = {"items": [], "count": 0}
-    empty_response.raise_for_status = MagicMock()
-    mock_http_client.get = AsyncMock(return_value=empty_response)
+    empty_resp = MagicMock(items=[], count=0)
+    mock_client.pipelines.list_async = AsyncMock(return_value=empty_resp)
 
     mock_cm = MagicMock()
     mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
@@ -277,26 +222,20 @@ async def test_list_pipelines_tool_handles_unavailable_product(
     app = _FakeApp()
     register_list_pipelines(app, deps=deps)  # type: ignore[arg-type]
 
-    # Tool function takes only ctx; security is obtained via token_manager internally
-    raw = await app.tools["list_pipelines"](mock_ctx)
-    data = raw
-
+    data = await app.tools["list_pipelines"](mock_ctx)
     pipelines = cast("dict[str, Any]", data["pipelines"])
 
-    stream = cast("dict[str, Any]", pipelines["stream"])
-    edge = cast("dict[str, Any]", pipelines["edge"])
-    assert stream["status"] == "ok"
-    assert edge["status"] == "unavailable"
+    assert pipelines["stream"]["status"] == "ok"
+    assert pipelines["edge"]["status"] == "unavailable"
 
 
 @pytest.mark.asyncio
 async def test_list_pipelines_tool_resolves_server_param(
     deps_base: SimpleNamespace,
     mock_ctx: Context,
-    mock_security: Security,
 ) -> None:
     """Server parameter should be forwarded to resolve_config."""
-    token_manager = SimpleNamespace(get_security=AsyncMock(return_value=mock_security))
+    token_manager = SimpleNamespace(get_security=AsyncMock(return_value=object()))
 
     mock_client = MagicMock()
     mock_cm = MagicMock()

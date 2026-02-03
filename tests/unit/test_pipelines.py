@@ -1,7 +1,6 @@
 """Unit tests for pipeline collection helpers.
 
 Covers success paths, 404 handling per-group, and error propagation.
-Uses HTTP collection (like breakers/lookups) to preserve function configs.
 """
 
 # pyright: reportPrivateUsage=false
@@ -12,7 +11,6 @@ import httpx
 import pytest
 from cribl_control_plane.errors import CriblControlPlaneError
 from cribl_control_plane.models.productscore import ProductsCore
-from cribl_control_plane.models.security import Security
 from fastmcp import Context
 
 from snc_cribl_mcp.operations.common import serialize_model
@@ -26,12 +24,6 @@ def mock_ctx() -> Context:
     ctx.info = AsyncMock()
     ctx.warning = AsyncMock()
     return ctx
-
-
-@pytest.fixture
-def mock_security() -> Security:
-    """Provide a mock Security object with bearer token."""
-    return Security(bearer_auth="test-token")
 
 
 class TestSerializeModel:
@@ -66,63 +58,33 @@ class TestSerializeModel:
 
 
 @pytest.mark.asyncio
-async def test_collect_product_pipelines_success(mock_ctx: Context, mock_security: Security) -> None:
-    """It should list pipelines for each group via HTTP and aggregate results."""
-    # Mock groups list
+async def test_collect_product_pipelines_success(mock_ctx: Context) -> None:
+    """It should list pipelines for each group via the SDK and aggregate results."""
     mock_client = MagicMock()
     groups_response = MagicMock(items=[MagicMock(), MagicMock()])
     groups_response.items[0].model_dump.return_value = {"id": "g1"}
     groups_response.items[1].model_dump.return_value = {"id": "g2"}
     mock_client.groups.list_async = AsyncMock(return_value=groups_response)
 
-    # Mock sdk_configuration for base URL and async_client
     mock_client.sdk_configuration = MagicMock(server_url="https://example/api/v1")
+    mock_client.pipelines = MagicMock()
 
-    # Mock HTTP responses for pipelines endpoint
-    mock_http_client = AsyncMock()
-    mock_client.sdk_configuration.async_client = mock_http_client
+    resp_g1 = MagicMock(items=[MagicMock(), MagicMock()], count=2)
+    resp_g1.items[0].model_dump.return_value = {"id": "p1", "conf": {"functions": []}}
+    resp_g1.items[1].model_dump.return_value = {"id": "p2", "conf": {"functions": []}}
 
-    # Create mock responses with function conf data preserved
-    g1_response = MagicMock()
-    g1_response.status_code = 200
-    g1_response.json.return_value = {
-        "items": [
-            {
-                "id": "p1",
-                "conf": {
-                    "functions": [
-                        {
-                            "id": "eval",
-                            "filter": "true",
-                            "conf": {"add": [{"name": "test", "value": "'value'"}]},
-                        }
-                    ]
-                },
-            },
-            {"id": "p2", "conf": {"functions": []}},
-        ],
-        "count": 2,
-    }
-    g1_response.raise_for_status = MagicMock()
+    resp_g2 = MagicMock(items=[MagicMock()], count=1)
+    resp_g2.items[0].model_dump.return_value = {"id": "p3", "conf": {"functions": []}}
 
-    g2_response = MagicMock()
-    g2_response.status_code = 200
-    g2_response.json.return_value = {
-        "items": [{"id": "p3", "conf": {"functions": []}}],
-        "count": 1,
-    }
-    g2_response.raise_for_status = MagicMock()
+    async def list_async_side_effect(*_args: object, **kwargs: object) -> MagicMock:
+        srv_url = str(kwargs.get("server_url", ""))
+        assert srv_url.endswith(("/m/g1", "/m/g2"))
+        return resp_g1 if srv_url.endswith("/m/g1") else resp_g2
 
-    async def mock_get(url: str, **kwargs: object) -> MagicMock:
-        if "/m/g1/pipelines" in url:
-            return g1_response
-        return g2_response
-
-    mock_http_client.get = AsyncMock(side_effect=mock_get)
+    mock_client.pipelines.list_async = AsyncMock(side_effect=list_async_side_effect)
 
     result = await collect_product_pipelines(
         mock_client,
-        mock_security,
         product=ProductsCore.STREAM,
         timeout_ms=10000,
         ctx=mock_ctx,
@@ -133,16 +95,10 @@ async def test_collect_product_pipelines_success(mock_ctx: Context, mock_securit
     assert len(result["groups"]) == 2
     assert result["groups"][0]["group_id"] == "g1"
     assert result["groups"][0]["count"] == 2
-    # Verify function conf data is preserved
-    p1 = result["groups"][0]["items"][0]
-    assert p1["conf"]["functions"][0]["conf"]["add"][0]["name"] == "test"
 
 
 @pytest.mark.asyncio
-async def test_collect_product_pipelines_with_pipeline_id(
-    mock_ctx: Context,
-    mock_security: Security,
-) -> None:
+async def test_collect_product_pipelines_with_pipeline_id(mock_ctx: Context) -> None:
     """It should fetch a single pipeline per group and skip 404s gracefully."""
     mock_client = MagicMock()
     groups_response = MagicMock(items=[MagicMock(), MagicMock()])
@@ -151,33 +107,30 @@ async def test_collect_product_pipelines_with_pipeline_id(
     mock_client.groups.list_async = AsyncMock(return_value=groups_response)
 
     mock_client.sdk_configuration = MagicMock(server_url="https://example/api/v1")
-    mock_http_client = AsyncMock()
-    mock_client.sdk_configuration.async_client = mock_http_client
+    mock_client.pipelines = MagicMock()
 
-    g1_response = MagicMock()
-    g1_response.status_code = 200
-    g1_response.json.return_value = {
-        "items": [{"id": "p1", "conf": {"functions": []}}],
-        "count": 1,
-    }
-    g1_response.raise_for_status = MagicMock()
+    resp_g1 = MagicMock(items=[MagicMock()], count=1)
+    resp_g1.items[0].model_dump.return_value = {"id": "p1", "conf": {"functions": []}}
 
-    g2_response = MagicMock()
-    g2_response.status_code = 404
+    api_error_404 = CriblControlPlaneError(
+        message="Not found",
+        body=None,
+        raw_response=MagicMock(status_code=404),
+    )
 
-    requested_urls: list[str] = []
+    async def get_async_side_effect(*_args: object, **kwargs: object) -> MagicMock:
+        assert kwargs["id"] == "p1"
+        srv_url = str(kwargs.get("server_url", ""))
+        if srv_url.endswith("/m/g1"):
+            return resp_g1
+        assert srv_url.endswith("/m/g2")
+        raise api_error_404
 
-    async def mock_get(url: str, **kwargs: object) -> MagicMock:
-        requested_urls.append(url)
-        if "/m/g1/pipelines/p1" in url:
-            return g1_response
-        return g2_response
-
-    mock_http_client.get = AsyncMock(side_effect=mock_get)
+    mock_client.pipelines.get_async = AsyncMock(side_effect=get_async_side_effect)
+    mock_client.pipelines.list_async = AsyncMock(side_effect=AssertionError("list_async should not be called"))
 
     result = await collect_product_pipelines(
         mock_client,
-        mock_security,
         product=ProductsCore.STREAM,
         timeout_ms=10000,
         ctx=mock_ctx,
@@ -189,76 +142,53 @@ async def test_collect_product_pipelines_with_pipeline_id(
     assert len(result["groups"]) == 2
     assert result["groups"][0]["count"] == 1
     assert result["groups"][1]["count"] == 0
-    assert any("/pipelines/p1" in url for url in requested_urls)
     assert getattr(mock_ctx.warning, "await_count", 0) >= 1
 
 
 @pytest.mark.asyncio
-async def test_collect_product_pipelines_preserves_function_conf(
-    mock_ctx: Context,
-    mock_security: Security,
-) -> None:
-    """The HTTP collection should preserve all function conf data."""
+async def test_collect_product_pipelines_serializes_function_conf(mock_ctx: Context) -> None:
+    """Function configuration data should be preserved in serialized output."""
     mock_client = MagicMock()
     groups_response = MagicMock(items=[MagicMock()])
     groups_response.items[0].model_dump.return_value = {"id": "g1"}
     mock_client.groups.list_async = AsyncMock(return_value=groups_response)
     mock_client.sdk_configuration = MagicMock(server_url="https://example/api/v1")
+    mock_client.pipelines = MagicMock()
 
-    mock_http_client = AsyncMock()
-    mock_client.sdk_configuration.async_client = mock_http_client
-
-    # Pipeline with complex function configurations
     pipeline_data = {
-        "items": [
-            {
-                "id": "test_pipeline",
-                "conf": {
-                    "output": "default",
-                    "functions": [
-                        {
-                            "id": "regex_extract",
-                            "filter": "true",
-                            "conf": {
-                                "regex": "/ASA-\\d+-(?<__code>\\d+)/",
-                                "source": "_raw",
-                            },
-                            "description": "Extract ASA Code",
-                        },
-                        {
-                            "id": "sampling",
-                            "filter": "true",
-                            "conf": {"rules": [{"filter": "__action=='permitted'", "rate": 10}]},
-                        },
-                        {
-                            "id": "mask",
-                            "filter": "true",
-                            "conf": {
-                                "rules": [
-                                    {
-                                        "matchRegex": "/password=[^&]+/",
-                                        "replaceExpr": "'password=***'",
-                                    }
-                                ],
-                                "fields": ["_raw"],
-                            },
-                        },
-                    ],
+        "id": "test_pipeline",
+        "conf": {
+            "output": "default",
+            "functions": [
+                {
+                    "id": "regex_extract",
+                    "filter": "true",
+                    "conf": {"regex": "/ASA-\\d+-(?<__code>\\d+)/", "source": "_raw"},
+                    "description": "Extract ASA Code",
                 },
-            }
-        ],
-        "count": 1,
+                {
+                    "id": "sampling",
+                    "filter": "true",
+                    "conf": {"rules": [{"filter": "__action=='permitted'", "rate": 10}]},
+                },
+                {
+                    "id": "mask",
+                    "filter": "true",
+                    "conf": {
+                        "rules": [{"matchRegex": "/password=[^&]+/", "replaceExpr": "'password=***'"}],
+                        "fields": ["_raw"],
+                    },
+                },
+            ],
+        },
     }
 
-    response = MagicMock()
-    response.status_code = 200
-    response.json.return_value = pipeline_data
-    response.raise_for_status = MagicMock()
-    mock_http_client.get = AsyncMock(return_value=response)
+    response = MagicMock(items=[MagicMock()], count=1)
+    response.items[0].model_dump.return_value = pipeline_data
+    mock_client.pipelines.list_async = AsyncMock(return_value=response)
 
     result = await collect_product_pipelines(
         mock_client,
-        mock_security,
         product=ProductsCore.STREAM,
         timeout_ms=10000,
         ctx=mock_ctx,
@@ -267,26 +197,23 @@ async def test_collect_product_pipelines_preserves_function_conf(
     assert result["status"] == "ok"
     pipeline = result["groups"][0]["items"][0]
 
-    # Verify regex_extract conf is preserved
     regex_func = pipeline["conf"]["functions"][0]
     assert regex_func["id"] == "regex_extract"
     assert regex_func["conf"]["regex"] == "/ASA-\\d+-(?<__code>\\d+)/"
     assert regex_func["conf"]["source"] == "_raw"
 
-    # Verify sampling conf is preserved
     sampling_func = pipeline["conf"]["functions"][1]
     assert sampling_func["id"] == "sampling"
     assert sampling_func["conf"]["rules"][0]["filter"] == "__action=='permitted'"
     assert sampling_func["conf"]["rules"][0]["rate"] == 10
 
-    # Verify mask conf is preserved
     mask_func = pipeline["conf"]["functions"][2]
     assert mask_func["id"] == "mask"
     assert mask_func["conf"]["rules"][0]["matchRegex"] == "/password=[^&]+/"
 
 
 @pytest.mark.asyncio
-async def test_collect_product_pipelines_404_per_group(mock_ctx: Context, mock_security: Security) -> None:
+async def test_collect_product_pipelines_404_per_group(mock_ctx: Context) -> None:
     """404 on a group's pipelines should be treated as empty for that group."""
     mock_client = MagicMock()
     groups_response = MagicMock(items=[MagicMock()])
@@ -294,16 +221,13 @@ async def test_collect_product_pipelines_404_per_group(mock_ctx: Context, mock_s
     mock_client.groups.list_async = AsyncMock(return_value=groups_response)
 
     mock_client.sdk_configuration = MagicMock(server_url="https://example/api/v1")
-    mock_http_client = AsyncMock()
-    mock_client.sdk_configuration.async_client = mock_http_client
+    mock_client.pipelines = MagicMock()
 
-    response = MagicMock()
-    response.status_code = 404
-    mock_http_client.get = AsyncMock(return_value=response)
+    api_error_404 = CriblControlPlaneError(message="Not found", body=None, raw_response=MagicMock(status_code=404))
+    mock_client.pipelines.list_async = AsyncMock(side_effect=api_error_404)
 
     result = await collect_product_pipelines(
         mock_client,
-        mock_security,
         product=ProductsCore.STREAM,
         timeout_ms=10000,
         ctx=mock_ctx,
@@ -313,12 +237,11 @@ async def test_collect_product_pipelines_404_per_group(mock_ctx: Context, mock_s
     assert result["total_count"] == 0
     assert result["groups"][0]["group_id"] == "g404"
     assert result["groups"][0]["count"] == 0
-    # warning should have been awaited at least once
     assert getattr(mock_ctx.warning, "await_count", 0) >= 1
 
 
 @pytest.mark.asyncio
-async def test_collect_product_pipelines_network_error(mock_ctx: Context, mock_security: Security) -> None:
+async def test_collect_product_pipelines_network_error(mock_ctx: Context) -> None:
     """Network failures should be raised as RuntimeError."""
     mock_client = MagicMock()
     groups_response = MagicMock(items=[MagicMock()])
@@ -326,15 +249,12 @@ async def test_collect_product_pipelines_network_error(mock_ctx: Context, mock_s
     mock_client.groups.list_async = AsyncMock(return_value=groups_response)
 
     mock_client.sdk_configuration = MagicMock(server_url="https://example/api/v1")
-    mock_http_client = AsyncMock()
-    mock_client.sdk_configuration.async_client = mock_http_client
-
-    mock_http_client.get = AsyncMock(side_effect=httpx.ConnectError("fail"))
+    mock_client.pipelines = MagicMock()
+    mock_client.pipelines.list_async = AsyncMock(side_effect=httpx.ConnectError("fail"))
 
     with pytest.raises(RuntimeError, match="Network error while listing pipelines"):
         await collect_product_pipelines(
             mock_client,
-            mock_security,
             product=ProductsCore.STREAM,
             timeout_ms=10000,
             ctx=mock_ctx,
@@ -342,10 +262,7 @@ async def test_collect_product_pipelines_network_error(mock_ctx: Context, mock_s
 
 
 @pytest.mark.asyncio
-async def test_collect_product_pipelines_unavailable_product_returns_unavailable(
-    mock_ctx: Context,
-    mock_security: Security,
-) -> None:
+async def test_collect_product_pipelines_unavailable_product_returns_unavailable(mock_ctx: Context) -> None:
     """If listing groups returns 404, the function should return an 'unavailable' status."""
     mock_client = MagicMock()
     api_error_404 = CriblControlPlaneError(
@@ -357,7 +274,6 @@ async def test_collect_product_pipelines_unavailable_product_returns_unavailable
 
     result = await collect_product_pipelines(
         mock_client,
-        mock_security,
         product=ProductsCore.STREAM,
         timeout_ms=10000,
         ctx=mock_ctx,
@@ -369,10 +285,7 @@ async def test_collect_product_pipelines_unavailable_product_returns_unavailable
 
 
 @pytest.mark.asyncio
-async def test_collect_product_pipelines_network_error_on_groups(
-    mock_ctx: Context,
-    mock_security: Security,
-) -> None:
+async def test_collect_product_pipelines_network_error_on_groups(mock_ctx: Context) -> None:
     """Network error while listing groups should raise RuntimeError."""
     mock_client = MagicMock()
     mock_client.groups.list_async = AsyncMock(side_effect=httpx.ConnectError("Network failure"))
@@ -380,7 +293,6 @@ async def test_collect_product_pipelines_network_error_on_groups(
     with pytest.raises(RuntimeError, match="Network error while listing stream groups"):
         await collect_product_pipelines(
             mock_client,
-            mock_security,
             product=ProductsCore.STREAM,
             timeout_ms=10000,
             ctx=mock_ctx,
@@ -388,10 +300,7 @@ async def test_collect_product_pipelines_network_error_on_groups(
 
 
 @pytest.mark.asyncio
-async def test_collect_product_pipelines_api_error_non_404_on_groups(
-    mock_ctx: Context,
-    mock_security: Security,
-) -> None:
+async def test_collect_product_pipelines_api_error_non_404_on_groups(mock_ctx: Context) -> None:
     """Non-404 API error while listing groups should raise RuntimeError."""
     mock_client = MagicMock()
     api_error_500 = CriblControlPlaneError(
@@ -404,7 +313,6 @@ async def test_collect_product_pipelines_api_error_non_404_on_groups(
     with pytest.raises(RuntimeError, match="Cribl API error while listing stream groups for pipelines"):
         await collect_product_pipelines(
             mock_client,
-            mock_security,
             product=ProductsCore.STREAM,
             timeout_ms=10000,
             ctx=mock_ctx,
@@ -412,40 +320,28 @@ async def test_collect_product_pipelines_api_error_non_404_on_groups(
 
 
 @pytest.mark.asyncio
-async def test_collect_product_pipelines_skips_groups_without_id(
-    mock_ctx: Context,
-    mock_security: Security,
-) -> None:
+async def test_collect_product_pipelines_skips_groups_without_id(mock_ctx: Context) -> None:
     """Groups without id or groupId should be skipped."""
     mock_client = MagicMock()
     groups_response = MagicMock(items=[MagicMock(), MagicMock()])
-    # First group has no id, second has id
     groups_response.items[0].model_dump.return_value = {"name": "no_id_group"}
     groups_response.items[1].model_dump.return_value = {"id": "g1"}
     mock_client.groups.list_async = AsyncMock(return_value=groups_response)
 
     mock_client.sdk_configuration = MagicMock(server_url="https://example/api/v1")
-    mock_http_client = AsyncMock()
-    mock_client.sdk_configuration.async_client = mock_http_client
+    mock_client.pipelines = MagicMock()
 
-    response = MagicMock()
-    response.status_code = 200
-    response.json.return_value = {
-        "items": [{"id": "p1", "conf": {"functions": []}}],
-        "count": 1,
-    }
-    response.raise_for_status = MagicMock()
-    mock_http_client.get = AsyncMock(return_value=response)
+    response = MagicMock(items=[MagicMock()], count=1)
+    response.items[0].model_dump.return_value = {"id": "p1", "conf": {"functions": []}}
+    mock_client.pipelines.list_async = AsyncMock(return_value=response)
 
     result = await collect_product_pipelines(
         mock_client,
-        mock_security,
         product=ProductsCore.STREAM,
         timeout_ms=10000,
         ctx=mock_ctx,
     )
 
-    # Only one group should be processed (the one with id)
     assert len(result["groups"]) == 1
     assert result["groups"][0]["group_id"] == "g1"
     assert result["total_count"] == 1

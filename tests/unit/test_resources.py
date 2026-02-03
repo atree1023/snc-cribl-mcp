@@ -128,9 +128,6 @@ async def test_get_pipelines_resource(mock_deps: SimpleNamespace) -> None:
     data = cast("dict[str, Any]", result)
     assert "pipelines" in data
     mock_deps.collect_product_pipelines.assert_called_once()
-    # Verify security was passed
-    call_args = mock_deps.collect_product_pipelines.call_args
-    assert call_args.kwargs["security"] == "token"
 
 
 @pytest.mark.asyncio

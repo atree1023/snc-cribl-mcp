@@ -27,7 +27,7 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
         collector=deps.collect_product_pipelines,
         section_name="pipelines",
         log_message="Listing Cribl Stream and Edge pipelines across all groups.",
-        requires_security=True,
+        requires_security=False,
     )
 
     @app.tool(
