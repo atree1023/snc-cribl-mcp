@@ -25,7 +25,7 @@ from typing import Any
 from cribl_control_plane.models.productscore import ProductsCore
 from fastmcp import Context, FastMCP
 
-from . import prompts, resources
+from . import apps, prompts, resources
 from .client.cribl_client import create_control_plane
 from .client.token_manager import TokenManager, get_token_manager
 from .config import CriblConfig
@@ -125,6 +125,7 @@ def _register_capabilities() -> None:
     register_list_routes(app, deps=deps)
     register_list_breakers(app, deps=deps)
     register_list_lookups(app, deps=deps)
+    apps.register(app, deps=deps)
     resources.register(app, deps=deps)
     prompts.register(app)
 

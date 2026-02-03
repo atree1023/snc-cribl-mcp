@@ -1,0 +1,790 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Cribl Explorer</title>
+    <style>
+      :root {
+        --bg: var(--color-background-primary, #0b0f19);
+        --panel: var(--color-background-secondary, #0f1626);
+        --text: var(--color-text-primary, #e6eaf2);
+        --muted: var(--color-text-secondary, #a8b0c2);
+        --border: var(--color-border, rgba(255, 255, 255, 0.1));
+        --accent: var(--color-accent, #7aa2ff);
+        --danger: #ff6b6b;
+        --ok: #51cf66;
+        --mono:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
+        --sans:
+          ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica,
+          Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        font-family: var(--sans);
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .app {
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        height: 100%;
+      }
+
+      .topbar {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+        background: color-mix(in oklab, var(--panel) 92%, black);
+      }
+
+      .title {
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        margin-right: 8px;
+      }
+
+      .pill {
+        font-family: var(--mono);
+        font-size: 12px;
+        padding: 2px 8px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--muted);
+      }
+
+      .spacer {
+        flex: 1;
+      }
+
+      input[type="text"] {
+        width: 260px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text);
+        outline: none;
+      }
+      input[type="text"]::placeholder {
+        color: color-mix(in oklab, var(--muted) 80%, transparent);
+      }
+
+      button {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text);
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: color-mix(in oklab, var(--accent) 50%, var(--border));
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .main {
+        display: grid;
+        grid-template-columns: 320px 1fr 420px;
+        min-height: 0;
+      }
+
+      .panel {
+        border-right: 1px solid var(--border);
+        background: var(--panel);
+        min-height: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+
+      .panel-header {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .panel-header h3 {
+        margin: 0;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .panel-body {
+        overflow: auto;
+        padding: 10px 12px;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .tab {
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--muted);
+        user-select: none;
+      }
+
+      .tab.active {
+        color: var(--text);
+        border-color: color-mix(in oklab, var(--accent) 70%, var(--border));
+        background: color-mix(in oklab, var(--accent) 12%, transparent);
+      }
+
+      .kv {
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .list {
+        display: grid;
+        gap: 6px;
+      }
+
+      .list-item {
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.03);
+        cursor: pointer;
+      }
+      .list-item:hover {
+        border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+      }
+      .list-item.active {
+        outline: 2px solid color-mix(in oklab, var(--accent) 40%, transparent);
+      }
+
+      .list-item .k {
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+      .list-item .v {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      th,
+      td {
+        border-bottom: 1px solid var(--border);
+        padding: 8px 6px;
+        vertical-align: top;
+      }
+      th {
+        text-align: left;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        position: sticky;
+        top: 0;
+        background: var(--panel);
+        z-index: 2;
+      }
+      tr:hover td {
+        background: rgba(255, 255, 255, 0.04);
+      }
+      tr.active td {
+        background: color-mix(in oklab, var(--accent) 12%, transparent);
+      }
+
+      .statusbar {
+        padding: 8px 12px;
+        border-top: 1px solid var(--border);
+        background: color-mix(in oklab, var(--panel) 92%, black);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--muted);
+      }
+      .dot.ok {
+        background: var(--ok);
+      }
+      .dot.bad {
+        background: var(--danger);
+      }
+
+      .mono {
+        font-family: var(--mono);
+      }
+      .small {
+        font-size: 11px;
+      }
+      .err {
+        color: var(--danger);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="topbar">
+        <div class="title">Cribl Explorer</div>
+        <div class="pill">MCP App (ui://)</div>
+        <div class="spacer"></div>
+
+        <input
+          id="serverInput"
+          type="text"
+          placeholder="server name (optional)"
+        />
+        <button id="btnLoadGroups">Load groups</button>
+        <button id="btnRefresh" disabled>Refresh current tab</button>
+      </div>
+
+      <div class="main">
+        <!-- Left: groups -->
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Groups & Fleets</h3>
+            <span class="small mono" id="groupsMeta"></span>
+          </div>
+          <div class="panel-body">
+            <div class="list" id="groupsList"></div>
+          </div>
+        </div>
+
+        <!-- Center: table -->
+        <div class="panel">
+          <div class="panel-header" style="justify-content: space-between">
+            <div class="tabs" id="tabs"></div>
+            <input
+              id="filterInput"
+              type="text"
+              placeholder="filter rows…"
+              style="width: 260px"
+            />
+          </div>
+          <div class="panel-body">
+            <table>
+              <thead>
+                <tr id="tableHead"></tr>
+              </thead>
+              <tbody id="tableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Right: JSON detail + debug -->
+        <div class="panel" style="border-right: none">
+          <div class="panel-header">
+            <h3>Details</h3>
+            <span class="small mono" id="detailMeta"></span>
+          </div>
+          <div class="panel-body">
+            <div class="kv" id="detailJson">Select a row…</div>
+            <hr
+              style="
+                border: none;
+                border-top: 1px solid var(--border);
+                margin: 12px 0;
+              "
+            />
+            <div class="small mono">MCP message log</div>
+            <div
+              class="kv"
+              id="log"
+              style="margin-top: 6px; color: var(--muted)"
+            ></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="statusbar">
+        <span class="dot" id="connDot"></span>
+        <span id="connText">Initializing…</span>
+        <span class="spacer"></span>
+        <span class="mono" id="statusRight"></span>
+      </div>
+    </div>
+
+    <script type="module">
+      // Minimal JSON-RPC over postMessage bridge.
+      // This follows the MCP Apps lifecycle: ui/initialize, then notifications for tool input/results.
+      class RpcBridge {
+        constructor() {
+          this._nextId = 1;
+          this._pending = new Map();
+          this._handlers = [];
+          window.addEventListener("message", (ev) => this._onMessage(ev));
+        }
+
+        onNotification(handler) {
+          this._handlers.push(handler);
+        }
+
+        request(method, params) {
+          const id = this._nextId++;
+          const msg = { jsonrpc: "2.0", id, method, params };
+          parent.postMessage(msg, "*");
+          return new Promise((resolve, reject) => {
+            this._pending.set(id, { resolve, reject });
+            setTimeout(() => {
+              if (this._pending.has(id)) {
+                this._pending.delete(id);
+                reject(new Error("RPC timeout calling " + method));
+              }
+            }, 30000);
+          });
+        }
+
+        notify(method, params) {
+          const msg = { jsonrpc: "2.0", method, params };
+          parent.postMessage(msg, "*");
+        }
+
+        _onMessage(ev) {
+          const msg = ev?.data;
+          if (!msg || msg.jsonrpc !== "2.0") return;
+
+          // Response
+          if (typeof msg.id !== "undefined") {
+            const pending = this._pending.get(msg.id);
+            if (!pending) return;
+            this._pending.delete(msg.id);
+            if (msg.error)
+              pending.reject(new Error(msg.error.message || "RPC error"));
+            else pending.resolve(msg.result);
+            return;
+          }
+
+          // Notification / request from host
+          if (msg.method) {
+            for (const h of this._handlers) h(msg.method, msg.params);
+          }
+        }
+      }
+
+      const bridge = new RpcBridge();
+
+      // UI state
+      const TABS = [
+        { key: "sources", tool: "list_sources" },
+        { key: "destinations", tool: "list_destinations" },
+        { key: "pipelines", tool: "list_pipelines" },
+        { key: "routes", tool: "list_routes" },
+        { key: "breakers", tool: "list_breakers" },
+        { key: "lookups", tool: "list_lookups" },
+      ];
+
+      let hostContext = null;
+      let lastToolResult = null;
+      let selectedGroup = null;
+      let activeTab = TABS[0];
+      let rows = [];
+      let selectedRowIndex = -1;
+
+      // Elements
+      const $ = (id) => document.getElementById(id);
+      const connDot = $("connDot");
+      const connText = $("connText");
+      const statusRight = $("statusRight");
+      const serverInput = $("serverInput");
+      const btnLoadGroups = $("btnLoadGroups");
+      const btnRefresh = $("btnRefresh");
+      const groupsList = $("groupsList");
+      const groupsMeta = $("groupsMeta");
+      const tabsEl = $("tabs");
+      const tableHead = $("tableHead");
+      const tableBody = $("tableBody");
+      const filterInput = $("filterInput");
+      const detailJson = $("detailJson");
+      const detailMeta = $("detailMeta");
+      const logEl = $("log");
+
+      function log(line) {
+        const ts = new Date().toISOString().slice(11, 19);
+        logEl.textContent = `${ts}  ${line}\n` + logEl.textContent;
+      }
+
+      function setConn(ok, text) {
+        connDot.className = "dot " + (ok ? "ok" : "bad");
+        connText.textContent = text;
+      }
+
+      function pretty(obj) {
+        try {
+          return JSON.stringify(obj, null, 2);
+        } catch {
+          return String(obj);
+        }
+      }
+
+      function getServerArg() {
+        const v = serverInput.value.trim();
+        return v.length ? v : undefined;
+      }
+
+      // Flatten helper based on your ProductResult shape: status/total_count/groups[]/items[]
+      function flattenSection(sectionKey, sectionByProduct) {
+        const out = [];
+        for (const [product, productResult] of Object.entries(
+          sectionByProduct || {},
+        )) {
+          const pr = productResult || {};
+          if (pr.status && pr.status !== "ok") {
+            out.push({
+              _product: product,
+              _group: "(n/a)",
+              _id: "(error)",
+              _note: pr.message || pr.error || "Product unavailable/error",
+              _raw: pr,
+            });
+            continue;
+          }
+          const groups = pr.groups || [];
+          for (const g of groups) {
+            const groupId = g.group_id || g.groupId || "(unknown)";
+            const items = g.items || [];
+            for (const item of items) {
+              const id = item.id ?? item.name ?? item._id ?? "(no-id)";
+              const type =
+                item.type ??
+                item.kind ??
+                item.inputType ??
+                item.outputType ??
+                "";
+              out.push({
+                _product: product,
+                _group: groupId,
+                _id: String(id),
+                _type: String(type),
+                ...item,
+                _raw: item,
+              });
+            }
+          }
+        }
+        return out;
+      }
+
+      function computeColumns(items) {
+        // Prefer stable columns first, then sample a few extra keys.
+        const base = ["_id", "_type", "_group", "_product"];
+        const extra = new Set();
+        for (const it of items.slice(0, 50)) {
+          for (const k of Object.keys(it)) {
+            if (k.startsWith("_")) continue;
+            if (typeof it[k] === "object") continue; // keep table readable
+            extra.add(k);
+          }
+        }
+        const extras = Array.from(extra).sort().slice(0, 6);
+        return base.concat(extras);
+      }
+
+      function renderTabs() {
+        tabsEl.innerHTML = "";
+        for (const t of TABS) {
+          const el = document.createElement("div");
+          el.className = "tab" + (t.key === activeTab.key ? " active" : "");
+          el.textContent = t.key;
+          el.addEventListener("click", async () => {
+            activeTab = t;
+            renderTabs();
+            await refreshActiveTab();
+          });
+          tabsEl.appendChild(el);
+        }
+      }
+
+      function renderGroups(groupsPayload) {
+        groupsList.innerHTML = "";
+
+        // groupsPayload is your list_groups output: { groups: { stream: {...}, edge: {...} } } :contentReference[oaicite:9]{index=9}
+        const groupsByProduct = groupsPayload?.groups || {};
+        const items = [];
+
+        for (const [product, res] of Object.entries(groupsByProduct)) {
+          if (!res) continue;
+          if (res.status && res.status !== "ok") {
+            items.push({
+              product,
+              id: "(unavailable)",
+              description: res.message || res.error || res.stat,
+            });
+            continue;
+          }
+          for (const g of res.items || []) {
+            items.push({
+              product,
+              id: g.id || g.name || "(no-id)",
+              description: g.description || "",
+              _raw: g,
+            });
+          }
+        }
+
+        groupsMeta.textContent = items.length ? `${items.length} items` : "";
+        for (const it of items) {
+          const div = document.createElement("div");
+          div.className =
+            "list-item" +
+            (selectedGroup &&
+            selectedGroup.id === it.id &&
+            selectedGroup.product === it.product
+              ? " active"
+              : "");
+          div.innerHTML = `
+            <div class="k">${escapeHtml(it.id)} <span class="pill">${escapeHtml(it.product)}</span></div>
+            <div class="v">${escapeHtml(it.description || "")}</div>
+          `;
+          div.addEventListener("click", () => {
+            selectedGroup = { id: it.id, product: it.product, raw: it._raw };
+            // purely visual selection; list_* tools already aggregate across groups in your server today.
+            // Later, you could add "group filter" arguments if you extend the server API.
+            for (const n of groupsList.querySelectorAll(".list-item"))
+              n.classList.remove("active");
+            div.classList.add("active");
+          });
+          groupsList.appendChild(div);
+        }
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function renderTable(items) {
+        const filter = filterInput.value.trim().toLowerCase();
+        const filtered = filter
+          ? items.filter((r) =>
+              JSON.stringify(r).toLowerCase().includes(filter),
+            )
+          : items;
+
+        const cols = computeColumns(filtered);
+        tableHead.innerHTML = "";
+        for (const c of cols) {
+          const th = document.createElement("th");
+          th.textContent = c.replace(/^_/, "");
+          tableHead.appendChild(th);
+        }
+
+        tableBody.innerHTML = "";
+        filtered.forEach((r, idx) => {
+          const tr = document.createElement("tr");
+          if (idx === selectedRowIndex) tr.classList.add("active");
+          tr.addEventListener("click", () => {
+            selectedRowIndex = idx;
+            detailMeta.textContent = `${activeTab.key} row ${idx + 1}/${filtered.length}`;
+            detailJson.textContent = pretty(r._raw ?? r);
+            for (const row of tableBody.querySelectorAll("tr"))
+              row.classList.remove("active");
+            tr.classList.add("active");
+          });
+
+          for (const c of cols) {
+            const td = document.createElement("td");
+            const v = r[c];
+            td.textContent =
+              typeof v === "undefined" || v === null ? "" : String(v);
+            tr.appendChild(td);
+          }
+
+          tableBody.appendChild(tr);
+        });
+
+        statusRight.textContent = `${activeTab.key}: ${filtered.length} rows`;
+      }
+
+      async function callTool(toolName, args) {
+        // MCP Apps uses MCP JSON-RPC method names (e.g., tools/call). :contentReference[oaicite:11]{index=11}
+        const params = { name: toolName, arguments: args || {} };
+        log(`→ tools/call ${toolName}`);
+        const result = await bridge.request("tools/call", params);
+        log(`← tools/call ${toolName} ok`);
+        return result;
+      }
+
+      async function refreshActiveTab() {
+        btnRefresh.disabled = true;
+        selectedRowIndex = -1;
+        detailJson.textContent = "Loading…";
+        detailMeta.textContent = "";
+
+        const server = getServerArg();
+        const toolArgs = server ? { server } : {};
+        try {
+          const result = await callTool(activeTab.tool, toolArgs);
+
+          // Hosts differ: some may return MCP-style { content, structuredContent },
+          // others may pass through the tool's raw JSON under `structuredContent` or `data`.
+          const structured =
+            result?.structuredContent ??
+            result?.structured_content ??
+            result?.data ??
+            null;
+
+          // If we have structured content, use it; otherwise we can’t reliably parse `content` text.
+          if (!structured) {
+            detailJson.textContent =
+              "No structuredContent received. Your host may be returning only model-facing text.\n\nRaw:\n" +
+              pretty(result);
+            rows = [];
+            renderTable(rows);
+            return;
+          }
+
+          lastToolResult = structured;
+          const section = structured[activeTab.key] || {};
+          rows = flattenSection(activeTab.key, section);
+          renderTable(rows);
+          detailJson.textContent = "Select a row…";
+        } catch (e) {
+          detailJson.textContent =
+            "Error:\n" + (e?.stack || e?.message || String(e));
+          statusRight.textContent = "error";
+        } finally {
+          btnRefresh.disabled = false;
+        }
+      }
+
+      async function loadGroups() {
+        btnLoadGroups.disabled = true;
+        try {
+          const server = getServerArg();
+          const toolArgs = server ? { server } : {};
+          const result = await callTool("list_groups", toolArgs);
+
+          const structured =
+            result?.structuredContent ??
+            result?.structured_content ??
+            result?.data ??
+            null;
+
+          if (!structured) {
+            renderGroups({});
+            detailJson.textContent =
+              "No structuredContent received for groups. Raw:\n" +
+              pretty(result);
+            return;
+          }
+          renderGroups(structured);
+        } catch (e) {
+          detailJson.textContent =
+            "Error:\n" + (e?.stack || e?.message || String(e));
+        } finally {
+          btnLoadGroups.disabled = false;
+        }
+      }
+
+      // Host notifications (tool-result pushed to iframe when tool called from chat) :contentReference[oaicite:12]{index=12}
+      bridge.onNotification((method, params) => {
+        log(`• ${method}`);
+        if (method === "ui/notifications/tool-result") {
+          // Try best-effort extraction.
+          const res =
+            params?.result ??
+            params?.toolResult ??
+            params?.tool_result ??
+            params;
+
+          // Some hosts may include structuredContent directly here.
+          const structured =
+            res?.structuredContent ??
+            res?.structured_content ??
+            res?.data ??
+            null;
+
+          if (structured && structured.groups) {
+            renderGroups(structured);
+            statusRight.textContent = "groups received";
+          } else if (
+            structured &&
+            (structured.sources ||
+              structured.destinations ||
+              structured.pipelines)
+          ) {
+            // If the tool-result corresponds to an active tab, display it.
+            const section = structured[activeTab.key] || {};
+            rows = flattenSection(activeTab.key, section);
+            renderTable(rows);
+            statusRight.textContent = `${activeTab.key} received`;
+          } else {
+            // Fall back to logging raw
+            statusRight.textContent = "tool-result received";
+          }
+        }
+      });
+
+      // Wiring
+      renderTabs();
+      filterInput.addEventListener("input", () => renderTable(rows));
+      btnLoadGroups.addEventListener("click", loadGroups);
+      btnRefresh.addEventListener("click", refreshActiveTab);
+
+      // Initialize with host
+      (async () => {
+        try {
+          // View → Host initialization handshake :contentReference[oaicite:13]{index=13}
+          const initResult = await bridge.request("ui/initialize", {
+            app: { name: "Cribl Explorer", version: "0.1.0" },
+          });
+
+          hostContext = initResult || null;
+          setConn(true, "Connected");
+          log("Initialized: " + pretty(hostContext));
+
+          // Tell host we’re ready
+          bridge.notify("ui/notifications/initialized", {});
+
+          btnRefresh.disabled = false;
+          statusRight.textContent = "ready";
+
+          // Convenience: try to load groups immediately (host/tool-result may also push them).
+          await loadGroups();
+        } catch (e) {
+          setConn(false, "Init failed");
+          log("Init error: " + (e?.message || String(e)));
+          statusRight.textContent = "init failed";
+        }
+      })();
+    </script>
+  </body>
+</html>
