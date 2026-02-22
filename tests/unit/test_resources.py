@@ -49,32 +49,28 @@ async def test_register_resources(mock_deps: SimpleNamespace) -> None:
     """Test that resources are registered and callable."""
     app = FastMCP("test")
 
-    # Register resources
     resources.register(app, deps=mock_deps)
 
-    # Verify resources are registered
-    # FastMCP stores resources in _resource_manager
-    assert "cribl://groups" in app._resource_manager._resources
-    assert "cribl://sources" in app._resource_manager._resources
-    assert "cribl://destinations" in app._resource_manager._resources
-    assert "cribl://pipelines" in app._resource_manager._resources
-    assert "cribl://routes" in app._resource_manager._resources
-    assert "cribl://breakers" in app._resource_manager._resources
-    assert "cribl://lookups" in app._resource_manager._resources
+    registered_resources = {str(resource.uri) for resource in await app.list_resources()}
+    assert "cribl://groups" in registered_resources
+    assert "cribl://sources" in registered_resources
+    assert "cribl://destinations" in registered_resources
+    assert "cribl://pipelines" in registered_resources
+    assert "cribl://routes" in registered_resources
+    assert "cribl://breakers" in registered_resources
+    assert "cribl://lookups" in registered_resources
 
-    # Test calling the groups resource
-    resource = app._resource_manager._resources["cribl://groups"]
+    resource = await app.get_resource("cribl://groups")
+    assert resource is not None
     async with Context(app):
         result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
 
-    # Verify result
     data = cast("dict[str, Any]", result)
     assert data["base_url"] == "http://test.local"
     assert "groups" in data
     assert data["groups"]["stream"]["status"] == "ok"
 
-    # Verify dependencies were called
     mock_deps.create_cp.assert_called_once()
     call_args = mock_deps.create_cp.call_args
     assert call_args.kwargs["security"] == "token"
@@ -88,7 +84,8 @@ async def test_get_sources_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    resource = app._resource_manager._resources["cribl://sources"]
+    resource = await app.get_resource("cribl://sources")
+    assert resource is not None
     async with Context(app):
         result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
@@ -104,7 +101,8 @@ async def test_get_destinations_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    resource = app._resource_manager._resources["cribl://destinations"]
+    resource = await app.get_resource("cribl://destinations")
+    assert resource is not None
     async with Context(app):
         result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
@@ -120,7 +118,8 @@ async def test_get_pipelines_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    resource = app._resource_manager._resources["cribl://pipelines"]
+    resource = await app.get_resource("cribl://pipelines")
+    assert resource is not None
     async with Context(app):
         result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
@@ -136,7 +135,8 @@ async def test_get_routes_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    resource = app._resource_manager._resources["cribl://routes"]
+    resource = await app.get_resource("cribl://routes")
+    assert resource is not None
     async with Context(app):
         result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
@@ -152,7 +152,8 @@ async def test_get_breakers_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    resource = app._resource_manager._resources["cribl://breakers"]
+    resource = await app.get_resource("cribl://breakers")
+    assert resource is not None
     async with Context(app):
         result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
@@ -160,7 +161,6 @@ async def test_get_breakers_resource(mock_deps: SimpleNamespace) -> None:
     data = cast("dict[str, Any]", result)
     assert "breakers" in data
     mock_deps.collect_product_breakers.assert_called_once()
-    # Verify security was passed
     call_args = mock_deps.collect_product_breakers.call_args
     assert call_args.kwargs["security"] == "token"
 
@@ -171,7 +171,8 @@ async def test_get_lookups_resource(mock_deps: SimpleNamespace) -> None:
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    resource = app._resource_manager._resources["cribl://lookups"]
+    resource = await app.get_resource("cribl://lookups")
+    assert resource is not None
     async with Context(app):
         result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     assert isinstance(result, dict)
@@ -179,7 +180,6 @@ async def test_get_lookups_resource(mock_deps: SimpleNamespace) -> None:
     data = cast("dict[str, Any]", result)
     assert "lookups" in data
     mock_deps.collect_product_lookups.assert_called_once()
-    # Verify security was passed
     call_args = mock_deps.collect_product_lookups.call_args
     assert call_args.kwargs["security"] == "token"
 
@@ -192,7 +192,8 @@ async def test_groups_resource_handles_collector_error(mock_deps: SimpleNamespac
     app = FastMCP("test")
     resources.register(app, deps=mock_deps)
 
-    resource = app._resource_manager._resources["cribl://groups"]
+    resource = await app.get_resource("cribl://groups")
+    assert resource is not None
     async with Context(app):
         result = await resource.fn()  # type: ignore[reportUnknownMemberType]
     data = cast("dict[str, Any]", result)
