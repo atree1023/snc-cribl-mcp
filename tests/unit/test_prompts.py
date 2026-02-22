@@ -1,19 +1,25 @@
 """Unit tests for MCP prompts."""
 
-# pyright: reportPrivateUsage=false
-
+import pytest
 from fastmcp import FastMCP
+from fastmcp.prompts import Message
 
 from snc_cribl_mcp import prompts
 
 
-def test_register_prompts() -> None:
+def _message_text(message: Message) -> str:
+    """Extract normalized text content from a prompt message."""
+    text = getattr(message.content, "text", None)
+    return text if isinstance(text, str) else str(message.content)
+
+
+@pytest.mark.asyncio
+async def test_register_prompts() -> None:
     """Test that prompts are registered with the app."""
     app = FastMCP("test")
     prompts.register(app)
 
-    # Verify prompts are registered via the internal manager
-    registered_prompts = list(app._prompt_manager._prompts.keys())
+    registered_prompts = [prompt.name for prompt in await app.list_prompts()]
 
     assert "Summarize Cribl Configuration" in registered_prompts
     assert "Find Broken Sources" in registered_prompts
@@ -21,82 +27,96 @@ def test_register_prompts() -> None:
     assert "Troubleshoot Destination" in registered_prompts
 
 
-def test_summarize_config_prompt() -> None:
+@pytest.mark.asyncio
+async def test_summarize_config_prompt() -> None:
     """Test the summarize config prompt returns expected content."""
     app = FastMCP("test")
     prompts.register(app)
 
-    prompt_fn = app._prompt_manager._prompts["Summarize Cribl Configuration"]
-    result = prompt_fn.fn()  # type: ignore[reportUnknownMemberType]
+    result = await app.render_prompt("Summarize Cribl Configuration", {})
 
-    assert isinstance(result, str)
-    assert "summarize" in result.lower()
-    assert "worker groups" in result.lower()
+    assert len(result.messages) == 1
+    assert isinstance(result.messages[0], Message)
+    content = _message_text(result.messages[0])
+    assert "summarize" in content.lower()
+    assert "worker groups" in content.lower()
 
 
-def test_find_broken_sources_prompt() -> None:
+@pytest.mark.asyncio
+async def test_find_broken_sources_prompt() -> None:
     """Test the find broken sources prompt returns expected content."""
     app = FastMCP("test")
     prompts.register(app)
 
-    prompt_fn = app._prompt_manager._prompts["Find Broken Sources"]
-    result = prompt_fn.fn()  # type: ignore[reportUnknownMemberType]
+    result = await app.render_prompt("Find Broken Sources", {})
 
-    assert isinstance(result, str)
-    assert "sources" in result.lower()
-    assert "list_sources" in result
+    assert len(result.messages) == 1
+    assert isinstance(result.messages[0], Message)
+    content = _message_text(result.messages[0])
+    assert "sources" in content.lower()
+    assert "list_sources" in content
 
 
-def test_analyze_pipeline_prompt() -> None:
+@pytest.mark.asyncio
+async def test_analyze_pipeline_prompt() -> None:
     """Test the analyze pipeline prompt returns expected content."""
     app = FastMCP("test")
     prompts.register(app)
 
-    prompt_fn = app._prompt_manager._prompts["Analyze Pipeline"]
-    # Call with required and default arguments
-    result = prompt_fn.fn(pipeline_id="main", group_id="default")  # type: ignore[reportUnknownMemberType]
+    result = await app.render_prompt("Analyze Pipeline", {"pipeline_id": "main", "group_id": "default"})
 
-    assert isinstance(result, str)
-    assert "main" in result
-    assert "default" in result
-    assert "list_pipelines" in result
+    assert len(result.messages) == 1
+    assert isinstance(result.messages[0], Message)
+    content = _message_text(result.messages[0])
+    assert "main" in content
+    assert "default" in content
+    assert "list_pipelines" in content
 
 
-def test_analyze_pipeline_prompt_custom_group() -> None:
+@pytest.mark.asyncio
+async def test_analyze_pipeline_prompt_custom_group() -> None:
     """Test the analyze pipeline prompt with a custom group."""
     app = FastMCP("test")
     prompts.register(app)
 
-    prompt_fn = app._prompt_manager._prompts["Analyze Pipeline"]
-    result = prompt_fn.fn(pipeline_id="custom_pipe", group_id="custom_group")  # type: ignore[reportUnknownMemberType]
+    result = await app.render_prompt("Analyze Pipeline", {"pipeline_id": "custom_pipe", "group_id": "custom_group"})
 
-    assert isinstance(result, str)
-    assert "custom_pipe" in result
-    assert "custom_group" in result
+    assert len(result.messages) == 1
+    assert isinstance(result.messages[0], Message)
+    content = _message_text(result.messages[0])
+    assert "custom_pipe" in content
+    assert "custom_group" in content
 
 
-def test_troubleshoot_destination_prompt_without_error() -> None:
+@pytest.mark.asyncio
+async def test_troubleshoot_destination_prompt_without_error() -> None:
     """Test the troubleshoot destination prompt without error message."""
     app = FastMCP("test")
     prompts.register(app)
 
-    prompt_fn = app._prompt_manager._prompts["Troubleshoot Destination"]
-    result = prompt_fn.fn(destination_id="splunk_hec", error_message="")  # type: ignore[reportUnknownMemberType]
+    result = await app.render_prompt("Troubleshoot Destination", {"destination_id": "splunk_hec", "error_message": ""})
 
-    assert isinstance(result, str)
-    assert "splunk_hec" in result
-    assert "list_destinations" in result
+    assert len(result.messages) == 1
+    assert isinstance(result.messages[0], Message)
+    content = _message_text(result.messages[0])
+    assert "splunk_hec" in content
+    assert "list_destinations" in content
 
 
-def test_troubleshoot_destination_prompt_with_error() -> None:
+@pytest.mark.asyncio
+async def test_troubleshoot_destination_prompt_with_error() -> None:
     """Test the troubleshoot destination prompt with error message."""
     app = FastMCP("test")
     prompts.register(app)
 
-    prompt_fn = app._prompt_manager._prompts["Troubleshoot Destination"]
-    result = prompt_fn.fn(destination_id="s3_bucket", error_message="Connection timed out")  # type: ignore[reportUnknownMemberType]
+    result = await app.render_prompt(
+        "Troubleshoot Destination",
+        {"destination_id": "s3_bucket", "error_message": "Connection timed out"},
+    )
 
-    assert isinstance(result, str)
-    assert "s3_bucket" in result
-    assert "Connection timed out" in result
-    assert "list_destinations" in result
+    assert len(result.messages) == 1
+    assert isinstance(result.messages[0], Message)
+    content = _message_text(result.messages[0])
+    assert "s3_bucket" in content
+    assert "Connection timed out" in content
+    assert "list_destinations" in content
