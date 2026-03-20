@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -23,6 +24,7 @@ from .resource_actions import (
 )
 
 _MAX_DIFF_PATHS = 25
+_MAX_VALIDATE_RESPONSE_BYTES = 900_000
 type GroupMatchField = Literal["description", "id", "name", "passthrough"]
 type JsonValue = dict[str, "JsonValue"] | list["JsonValue"] | str | int | float | bool | None
 
@@ -212,6 +214,8 @@ def _compare_items(
     item_id: str,
     source_item: dict[str, Any] | None,
     target_item: dict[str, Any] | None,
+    *,
+    include_payloads: bool = False,
 ) -> dict[str, Any]:
     """Compare source and target items and return a JSON-friendly diff summary."""
     if source_item is None and target_item is None:
@@ -236,13 +240,136 @@ def _compare_items(
     source_payload = canonicalize_resource_item(kind, source_item)
     target_payload = canonicalize_resource_item(kind, target_item)
     differing_paths = _diff_paths(source_payload, target_payload)
-    return {
+    result: dict[str, Any] = {
         "item_id": item_id,
         "status": "in_sync" if not differing_paths else "different",
         "differing_paths": differing_paths,
-        "source": source_payload,
-        "target": target_payload,
     }
+    if include_payloads:
+        result["source"] = source_payload
+        result["target"] = target_payload
+    return result
+
+
+def _estimate_json_size_bytes(payload: dict[str, Any]) -> int:
+    """Estimate the UTF-8 encoded JSON payload size for a response."""
+    return len(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+
+def _strip_validation_payloads(item: dict[str, Any]) -> dict[str, Any]:
+    """Remove source and target payloads from a validation item result."""
+    stripped = dict(item)
+    stripped.pop("source", None)
+    stripped.pop("target", None)
+    return stripped
+
+
+def _summarize_validation_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Project a validation item into its smallest useful summary shape."""
+    return {
+        "item_id": item["item_id"],
+        "status": item["status"],
+        "differing_paths": item.get("differing_paths", []),
+    }
+
+
+def _apply_validate_response_limit(response: dict[str, Any]) -> dict[str, Any]:
+    """Shrink validation responses when needed to stay within MCP payload limits."""
+    items = cast("list[dict[str, Any]]", response.get("items", []))
+    if not items:
+        return response
+
+    adjusted = dict(response)
+    adjusted_items = [dict(item) for item in items]
+    adjusted["items"] = adjusted_items
+    warnings: list[str] = []
+
+    if _estimate_json_size_bytes(adjusted) <= _MAX_VALIDATE_RESPONSE_BYTES:
+        return adjusted
+
+    if any("source" in item or "target" in item for item in adjusted_items):
+        adjusted_items = [_strip_validation_payloads(item) for item in adjusted_items]
+        adjusted["items"] = adjusted_items
+        warnings.append("Omitted per-item source and target payloads to stay within MCP response limits.")
+        if _estimate_json_size_bytes(adjusted) <= _MAX_VALIDATE_RESPONSE_BYTES:
+            adjusted["warnings"] = warnings
+            return adjusted
+
+    if any(item != _summarize_validation_item(item) for item in adjusted_items):
+        adjusted_items = [_summarize_validation_item(item) for item in adjusted_items]
+        adjusted["items"] = adjusted_items
+        warnings.append("Reduced validation item details to summary fields to stay within MCP response limits.")
+        if _estimate_json_size_bytes(adjusted) <= _MAX_VALIDATE_RESPONSE_BYTES:
+            adjusted["warnings"] = warnings
+            return adjusted
+
+    base_response = {key: value for key, value in adjusted.items() if key != "items"}
+    truncated_items: list[dict[str, Any]] = []
+    total_items = len(adjusted_items)
+    for item in adjusted_items:
+        candidate_items = [*truncated_items, item]
+        candidate = {
+            **base_response,
+            "items": candidate_items,
+            "response_truncated": True,
+            "returned_item_count": len(candidate_items),
+            "omitted_item_count": total_items - len(candidate_items),
+        }
+        candidate_warnings = [
+            *warnings,
+            (f"Returned {len(candidate_items)} of {total_items} validation item results to stay within MCP response limits."),
+        ]
+        candidate["warnings"] = candidate_warnings
+        if _estimate_json_size_bytes(candidate) > _MAX_VALIDATE_RESPONSE_BYTES:
+            break
+        truncated_items = candidate_items
+
+    omitted_item_count = total_items - len(truncated_items)
+    adjusted["items"] = truncated_items
+    adjusted["response_truncated"] = omitted_item_count > 0
+    adjusted["returned_item_count"] = len(truncated_items)
+    adjusted["omitted_item_count"] = omitted_item_count
+    if omitted_item_count > 0:
+        warnings.append(
+            f"Returned {len(truncated_items)} of {total_items} validation item results to stay within MCP response limits."
+        )
+    adjusted["warnings"] = warnings
+    return adjusted
+
+
+def _serialize_copy_error(exc: Exception) -> dict[str, Any]:
+    """Project an exception into a stable, JSON-friendly error payload."""
+    error: dict[str, Any] = {
+        "type": type(exc).__name__,
+        "message": str(exc),
+    }
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        error["status_code"] = status_code
+    return error
+
+
+def _build_failed_copy_result(
+    item_id: str,
+    *,
+    attempted_action: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    """Build a per-item copy failure result without aborting the batch."""
+    return {
+        "item_id": item_id,
+        "action": "failed",
+        "attempted_action": attempted_action,
+        "error": _serialize_copy_error(exc),
+    }
+
+
+def _require_resolved_target_group_id(group_id: str | None) -> str:
+    """Return the resolved target group id or raise a clear configuration error."""
+    if group_id is None:
+        msg = "Unable to append routes because the resolved target group id is missing."
+        raise ValueError(msg)
+    return group_id
 
 
 async def _maybe_get_item(
@@ -288,6 +415,7 @@ async def validate_resource_sync(  # noqa: PLR0913
     group_id: str | None = None,
     target_group_id: str | None = None,
     item_id: str | None = None,
+    include_payloads: bool = False,
 ) -> dict[str, Any]:
     """Validate whether two leaders are in sync for a resource scope."""
     spec = get_resource_spec(kind)
@@ -327,22 +455,30 @@ async def validate_resource_sync(  # noqa: PLR0913
                 product=product,
                 group_id=resolved_target_group_id,
             )
-            item_result = _compare_items(kind, item_id, source_item, target_item)
-            return {
-                "resource_kind": kind,
-                "scope": spec.scope,
-                "source_server": source.server_name,
-                "target_server": target.server_name,
-                "product": product.value if product else None,
-                "source_group_selector": group_id,
-                "target_group_selector": effective_target_group,
-                "group_id": resolved_source_group_id,
-                "target_group_id": resolved_target_group_id,
-                "source_group": source_group.as_dict() if source_group else None,
-                "target_group": target_group.as_dict() if target_group else None,
-                "in_sync": item_result["status"] == "in_sync",
-                "items": [item_result],
-            }
+            item_result = _compare_items(
+                kind,
+                item_id,
+                source_item,
+                target_item,
+                include_payloads=include_payloads,
+            )
+            return _apply_validate_response_limit(
+                {
+                    "resource_kind": kind,
+                    "scope": spec.scope,
+                    "source_server": source.server_name,
+                    "target_server": target.server_name,
+                    "product": product.value if product else None,
+                    "source_group_selector": group_id,
+                    "target_group_selector": effective_target_group,
+                    "group_id": resolved_source_group_id,
+                    "target_group_id": resolved_target_group_id,
+                    "source_group": source_group.as_dict() if source_group else None,
+                    "target_group": target_group.as_dict() if target_group else None,
+                    "in_sync": item_result["status"] == "in_sync",
+                    "items": [item_result],
+                }
+            )
 
         source_items = await list_resource(
             source.client,
@@ -367,36 +503,39 @@ async def validate_resource_sync(  # noqa: PLR0913
                 compared_id,
                 source_index.get(compared_id),
                 target_index.get(compared_id),
+                include_payloads=include_payloads,
             )
             for compared_id in sorted(set(source_index) | set(target_index))
         ]
 
-        return {
-            "resource_kind": kind,
-            "scope": spec.scope,
-            "source_server": source.server_name,
-            "target_server": target.server_name,
-            "product": product.value if product else None,
-            "source_group_selector": group_id,
-            "target_group_selector": effective_target_group,
-            "group_id": resolved_source_group_id,
-            "target_group_id": resolved_target_group_id,
-            "source_group": source_group.as_dict() if source_group else None,
-            "target_group": target_group.as_dict() if target_group else None,
-            "in_sync": all(result["status"] == "in_sync" for result in results),
-            "counts": {
-                "source": len(source_index),
-                "target": len(target_index),
-                "in_sync": sum(result["status"] == "in_sync" for result in results),
-                "different": sum(result["status"] == "different" for result in results),
-                "missing_on_source": sum(result["status"] == "missing_on_source" for result in results),
-                "missing_on_target": sum(result["status"] == "missing_on_target" for result in results),
-            },
-            "items": results,
-        }
+        return _apply_validate_response_limit(
+            {
+                "resource_kind": kind,
+                "scope": spec.scope,
+                "source_server": source.server_name,
+                "target_server": target.server_name,
+                "product": product.value if product else None,
+                "source_group_selector": group_id,
+                "target_group_selector": effective_target_group,
+                "group_id": resolved_source_group_id,
+                "target_group_id": resolved_target_group_id,
+                "source_group": source_group.as_dict() if source_group else None,
+                "target_group": target_group.as_dict() if target_group else None,
+                "in_sync": all(result["status"] == "in_sync" for result in results),
+                "counts": {
+                    "source": len(source_index),
+                    "target": len(target_index),
+                    "in_sync": sum(result["status"] == "in_sync" for result in results),
+                    "different": sum(result["status"] == "different" for result in results),
+                    "missing_on_source": sum(result["status"] == "missing_on_source" for result in results),
+                    "missing_on_target": sum(result["status"] == "missing_on_target" for result in results),
+                },
+                "items": results,
+            }
+        )
 
 
-async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913
+async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
     kind: ResourceKind,
     source_server: str,
     target_server: str,
@@ -456,94 +595,108 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913
 
         item_results: list[dict[str, Any]] = []
         for current_item_id, source_item in source_items.items():
-            target_item = await _maybe_get_item(
-                target,
-                kind,
-                item_id=current_item_id,
-                product=product,
-                group_id=resolved_target_group_id,
-            )
+            attempted_action = "inspect_target"
+            try:
+                target_item = await _maybe_get_item(
+                    target,
+                    kind,
+                    item_id=current_item_id,
+                    product=product,
+                    group_id=resolved_target_group_id,
+                )
 
-            if target_item is None:
-                if spec.supports("create"):
-                    await create_resource(
+                if target_item is None:
+                    if spec.supports("create"):
+                        attempted_action = "create"
+                        await create_resource(
+                            target.client,
+                            kind,
+                            item=source_item,
+                            timeout_ms=target.config.timeout_ms,
+                            product=product,
+                            group_id=resolved_target_group_id,
+                        )
+                        action = "created"
+                    elif kind == "routes" and spec.supports("update"):
+                        item_results.append(
+                            {
+                                "item_id": current_item_id,
+                                "action": "unsupported",
+                                "reason": "Routes require an existing target route set before they can be updated or appended.",
+                            }
+                        )
+                        continue
+                    else:
+                        item_results.append(
+                            {
+                                "item_id": current_item_id,
+                                "action": "unsupported",
+                                "reason": f"Create is not supported for resource kind '{kind}'.",
+                            }
+                        )
+                        continue
+                elif not overwrite:
+                    item_results.append(
+                        {
+                            "item_id": current_item_id,
+                            "action": "skipped",
+                            "reason": "Target item already exists and overwrite is disabled.",
+                        }
+                    )
+                    continue
+                elif kind == "routes" and append_routes:
+                    attempted_action = "append"
+                    await append_resource(
                         target.client,
                         kind,
+                        item_id=current_item_id,
+                        item=source_item,
+                        timeout_ms=target.config.timeout_ms,
+                        group_id=_require_resolved_target_group_id(resolved_target_group_id),
+                    )
+                    action = "appended"
+                else:
+                    attempted_action = "update"
+                    await update_resource(
+                        target.client,
+                        kind,
+                        item_id=current_item_id,
                         item=source_item,
                         timeout_ms=target.config.timeout_ms,
                         product=product,
                         group_id=resolved_target_group_id,
                     )
-                    action = "created"
-                elif kind == "routes" and spec.supports("update"):
-                    item_results.append(
-                        {
-                            "item_id": current_item_id,
-                            "action": "unsupported",
-                            "reason": "Routes require an existing target route set before they can be updated or appended.",
-                        }
-                    )
-                    continue
-                else:
-                    item_results.append(
-                        {
-                            "item_id": current_item_id,
-                            "action": "unsupported",
-                            "reason": f"Create is not supported for resource kind '{kind}'.",
-                        }
-                    )
-                    continue
-            elif not overwrite:
+                    action = "updated"
+            except Exception as exc:  # noqa: BLE001 - accumulate per-item failures in batch copy results
                 item_results.append(
-                    {
-                        "item_id": current_item_id,
-                        "action": "skipped",
-                        "reason": "Target item already exists and overwrite is disabled.",
-                    }
+                    _build_failed_copy_result(
+                        current_item_id,
+                        attempted_action=attempted_action,
+                        exc=exc,
+                    )
                 )
                 continue
-            elif kind == "routes" and append_routes:
-                if resolved_target_group_id is None:
-                    msg = "Unable to append routes because the resolved target group id is missing."
-                    raise ValueError(msg)
-                await append_resource(
-                    target.client,
-                    kind,
-                    item_id=current_item_id,
-                    item=source_item,
-                    timeout_ms=target.config.timeout_ms,
-                    group_id=resolved_target_group_id,
-                )
-                action = "appended"
-            else:
-                await update_resource(
-                    target.client,
-                    kind,
-                    item_id=current_item_id,
-                    item=source_item,
-                    timeout_ms=target.config.timeout_ms,
-                    product=product,
-                    group_id=resolved_target_group_id,
-                )
-                action = "updated"
 
             result: dict[str, Any] = {
                 "item_id": current_item_id,
                 "action": action,
             }
             if validate_after:
-                result["validation"] = _compare_items(
-                    kind,
-                    current_item_id,
-                    source_item,
-                    await _maybe_get_item(
-                        target,
+                try:
+                    result["validation"] = _compare_items(
                         kind,
-                        item_id=current_item_id,
-                        product=product,
-                        group_id=resolved_target_group_id,
-                    ),
-                )
+                        current_item_id,
+                        source_item,
+                        await _maybe_get_item(
+                            target,
+                            kind,
+                            item_id=current_item_id,
+                            product=product,
+                            group_id=resolved_target_group_id,
+                        ),
+                    )
+                except Exception as exc:  # noqa: BLE001 - preserve successful writes even if validation lookup fails
+                    result["validation_error"] = _serialize_copy_error(exc)
             item_results.append(result)
 
         return {
@@ -564,6 +717,7 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913
             "appended_count": sum(result.get("action") == "appended" for result in item_results),
             "skipped_count": sum(result.get("action") == "skipped" for result in item_results),
             "unsupported_count": sum(result.get("action") == "unsupported" for result in item_results),
+            "failed_count": sum(result.get("action") == "failed" for result in item_results),
             "items": item_results,
         }
 

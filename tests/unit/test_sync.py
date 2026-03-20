@@ -67,6 +67,8 @@ async def test_validate_resource_sync_collection_reports_differences(monkeypatch
         "three": "missing_on_source",
         "two": "missing_on_target",
     }
+    assert "source" not in result["items"][0]
+    assert "target" not in result["items"][0]
 
 
 @pytest.mark.asyncio
@@ -179,6 +181,109 @@ async def test_copy_resource_config_skips_existing_item_when_overwrite_disabled(
 
 
 @pytest.mark.asyncio
+async def test_copy_resource_config_continues_after_per_item_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed write for one item should not abort the rest of the copy batch."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_items = [
+        {"id": "pipe1", "conf": {"output": "default"}},
+        {"id": "pipe2", "conf": {"output": "default"}},
+    ]
+    list_resource = AsyncMock(return_value=source_items)
+    maybe_get_item = AsyncMock(side_effect=[None, None])
+    create_resource = AsyncMock(side_effect=[RuntimeError("target rejected pipe1"), [source_items[1]]])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "create_resource", create_resource)
+
+    result = await sync_module.copy_resource_config(
+        "pipelines",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+        validate_after=False,
+    )
+
+    assert result["copied_count"] == 1
+    assert result["created_count"] == 1
+    assert result["failed_count"] == 1
+    assert result["items"] == [
+        {
+            "item_id": "pipe1",
+            "action": "failed",
+            "attempted_action": "create",
+            "error": {
+                "type": "RuntimeError",
+                "message": "target rejected pipe1",
+            },
+        },
+        {
+            "item_id": "pipe2",
+            "action": "created",
+        },
+    ]
+    assert create_resource.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_preserves_success_when_validation_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validation lookup failures should be reported per item without discarding a successful write."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_items = [
+        {"id": "pipe1", "conf": {"output": "default"}},
+        {"id": "pipe2", "conf": {"output": "default"}},
+    ]
+    list_resource = AsyncMock(return_value=source_items)
+    create_resource = AsyncMock(side_effect=[[source_items[0]], [source_items[1]]])
+    maybe_get_item = AsyncMock(
+        side_effect=[
+            None,
+            RuntimeError("validation lookup failed"),
+            None,
+            source_items[1],
+        ]
+    )
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "create_resource", create_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+
+    result = await sync_module.copy_resource_config(
+        "pipelines",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+    )
+
+    assert result["copied_count"] == 2
+    assert result["failed_count"] == 0
+    assert result["items"][0] == {
+        "item_id": "pipe1",
+        "action": "created",
+        "validation_error": {
+            "type": "RuntimeError",
+            "message": "validation lookup failed",
+        },
+    }
+    assert result["items"][1]["action"] == "created"
+    assert result["items"][1]["validation"]["status"] == "in_sync"
+
+
+@pytest.mark.asyncio
 async def test_validate_resource_sync_resolves_distinct_group_selectors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -261,6 +366,90 @@ async def test_validate_resource_sync_single_item_reports_missing_on_both(
             "differing_paths": [],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_single_item_can_include_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single-item validation can include canonicalized payloads when requested."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_item: dict[str, object] = {
+        "id": "default",
+        "description": "Source Group",
+        "lookupDeployments": [],
+        "type": "stream",
+    }
+    target_item: dict[str, object] = {
+        "id": "default",
+        "description": "Target Group",
+        "lookupDeployments": [],
+        "type": "stream",
+    }
+    maybe_get_item = AsyncMock(side_effect=[source_item, target_item])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+
+    result = await sync_module.validate_resource_sync(
+        "groups",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+        item_id="default",
+        include_payloads=True,
+    )
+
+    assert result["items"][0]["status"] == "different"
+    assert result["items"][0]["source"]["description"] == "Source Group"
+    assert result["items"][0]["target"]["description"] == "Target Group"
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_truncates_large_collection_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Collection validation should trim oversized responses and report the truncation."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    list_resource = AsyncMock(
+        side_effect=[
+            [
+                {"id": "group1", "description": "left", "lookupDeployments": [], "type": "stream"},
+                {"id": "group2", "description": "left", "lookupDeployments": [], "type": "stream"},
+                {"id": "group3", "description": "left", "lookupDeployments": [], "type": "stream"},
+            ],
+            [
+                {"id": "group1", "description": "right", "lookupDeployments": [], "type": "stream"},
+                {"id": "group2", "description": "right", "lookupDeployments": [], "type": "stream"},
+                {"id": "group3", "description": "right", "lookupDeployments": [], "type": "stream"},
+            ],
+        ]
+    )
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "_MAX_VALIDATE_RESPONSE_BYTES", 450)
+
+    result = await sync_module.validate_resource_sync(
+        "groups",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+    )
+
+    assert result["response_truncated"] is True
+    assert result["returned_item_count"] < 3
+    assert result["omitted_item_count"] > 0
+    assert result["warnings"]
+    assert all("source" not in item and "target" not in item for item in result["items"])
 
 
 @pytest.mark.asyncio

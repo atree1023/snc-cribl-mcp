@@ -9,7 +9,8 @@ external systems like S3, REST APIs, databases, and other upstreams.
 """
 
 import logging
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from cribl_control_plane import CriblControlPlane
 from cribl_control_plane.models.productscore import ProductsCore
@@ -25,6 +26,12 @@ from .common import (
 )
 
 logger = logging.getLogger("snc_cribl_mcp.operations.sources")
+
+type CollectorListMethod = Callable[..., Awaitable[Any]]
+
+
+class UnsupportedCollectorsSdkError(RuntimeError):
+    """Raised when the installed SDK lacks collector listing support."""
 
 
 async def collect_product_sources(
@@ -61,9 +68,14 @@ async def collect_product_sources(
     # Collect regular sources via SDK
     regular_result = await collect_items_via_sdk(coll_ctx, client.sources.list_async)
 
+    collector_list_method = _require_collectors_list_method(client)
+
     # Collect collector sources via SDK, gracefully handling failures
     try:
-        collector_result = await _collect_collector_sources(coll_ctx)
+        collector_result = await _collect_collector_sources(
+            coll_ctx,
+            collector_list_method=collector_list_method,
+        )
     except Exception as exc:  # noqa: BLE001 - graceful degradation on collector failure
         await ctx.warning(f"Failed to fetch collector sources: {exc}; returning regular sources only.")
         return regular_result
@@ -74,11 +86,14 @@ async def collect_product_sources(
 
 async def _collect_collector_sources(
     coll_ctx: CollectionContext,
+    *,
+    collector_list_method: CollectorListMethod,
 ) -> ProductResult:
     """Collect collector sources for all groups of a product via the SDK.
 
     Args:
         coll_ctx: Collection context with client, product, timeout, ctx.
+        collector_list_method: Group-scoped SDK method used to list collector jobs.
 
     Returns:
         Standard result dictionary with grouped collector items.
@@ -92,7 +107,7 @@ async def _collect_collector_sources(
         resource_type="collector_sources",
     )
 
-    result = await collect_items_via_sdk(collector_ctx, coll_ctx.client.collectors.list_async)
+    result = await collect_items_via_sdk(collector_ctx, collector_list_method)
 
     # Keep only collector jobs in case the upstream endpoint includes non-collector saved jobs.
     if result.get("status") == "ok" and "groups" in result:
@@ -111,6 +126,19 @@ async def _collect_collector_sources(
         result["total_count"] = sum(g.get("count", 0) for g in filtered_groups)
 
     return result
+
+
+def _require_collectors_list_method(client: CriblControlPlane) -> CollectorListMethod:
+    """Return the collector list method or fail fast on unsupported SDK versions."""
+    collectors = getattr(client, "collectors", None)
+    list_async = getattr(collectors, "list_async", None)
+    if not callable(list_async):
+        msg = (
+            "Installed cribl-control-plane SDK does not expose client.collectors.list_async. "
+            "snc_cribl_mcp requires cribl-control-plane>=0.6.0."
+        )
+        raise UnsupportedCollectorsSdkError(msg)
+    return cast("CollectorListMethod", list_async)
 
 
 def _merge_source_results(

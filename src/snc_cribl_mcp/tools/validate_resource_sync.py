@@ -38,6 +38,8 @@ def register(app: FastMCP, *, impl: ValidateResourceSyncFunc) -> None:
         target_group: str | None = None,
         item_id: str | None = None,
         product: ProductName = "stream",
+        *,
+        include_payloads: bool = False,
     ) -> dict[str, Any]:
         """Validate whether one config or scope is in sync between leaders."""
         await ctx.info(f"Validating Cribl {resource_kind} sync between '{source_server}' and '{target_server}'.")
@@ -58,6 +60,7 @@ def register(app: FastMCP, *, impl: ValidateResourceSyncFunc) -> None:
             group_id=source_group,
             target_group_id=target_group,
             item_id=item_id,
+            include_payloads=include_payloads,
         )
 
 

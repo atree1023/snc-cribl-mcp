@@ -75,6 +75,7 @@ async def test_validate_resource_sync_tool_forwards_group_resource_arguments(moc
         group_id=None,
         target_group_id=None,
         item_id="default",
+        include_payloads=False,
     )
 
 
@@ -93,4 +94,22 @@ async def test_validate_resource_sync_tool_rejects_group_selectors_for_groups(mo
             source_server="golden.oak",
             target_server="cribl.cloud",
             source_group="default",
+        )
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_tool_rejects_invalid_product_value(mock_ctx: Context) -> None:
+    """Unexpected product strings should raise a clear error instead of defaulting to Edge."""
+    impl = AsyncMock(return_value={})
+
+    app = _FakeApp()
+    register_validate_resource_sync(app, impl=impl)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="product must be exactly 'stream' or 'edge'"):
+        await app.tools["validate_resource_sync"](
+            mock_ctx,
+            resource_kind="groups",
+            source_server="golden.oak",
+            target_server="cribl.cloud",
+            product="Stream",  # type: ignore[arg-type]
         )

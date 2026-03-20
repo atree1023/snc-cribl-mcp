@@ -6,6 +6,7 @@ Covers success paths, 404 handling per-group, and error propagation.
 # pyright: reportPrivateUsage=false
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -506,6 +507,32 @@ async def test_collect_product_sources_collector_validation_error_returns_regula
     # Should still succeed with just regular sources
     assert result["status"] == "ok"
     assert result["total_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_product_sources_legacy_sdk_raises_runtime_error(mock_ctx: Context) -> None:
+    """Older SDK builds without collectors support should fail loudly."""
+    groups_response = MagicMock(items=[MagicMock()])
+    groups_response.items[0].model_dump.return_value = {"id": "g1"}
+
+    resp_g1 = MagicMock(items=[MagicMock()], count=1)
+    resp_g1.items[0].model_dump.return_value = {"name": "regular_source"}
+
+    mock_client = SimpleNamespace(
+        groups=SimpleNamespace(list_async=AsyncMock(return_value=groups_response)),
+        sdk_configuration=SimpleNamespace(server_url="https://example/api/v1"),
+        sources=SimpleNamespace(list_async=AsyncMock(return_value=resp_g1)),
+    )
+
+    with pytest.raises(RuntimeError, match=r"requires cribl-control-plane>=0\.6\.0"):
+        await collect_product_sources(
+            mock_client,  # type: ignore[arg-type]
+            product=ProductsCore.STREAM,
+            timeout_ms=10000,
+            ctx=mock_ctx,
+        )
+
+    assert getattr(mock_ctx.warning, "await_count", 0) == 0
 
 
 @pytest.mark.asyncio
