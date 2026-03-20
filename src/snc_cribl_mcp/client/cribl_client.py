@@ -6,6 +6,7 @@ client instance with shared HTTP settings.
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 import httpx
 from cribl_control_plane import CriblControlPlane
@@ -13,6 +14,16 @@ from cribl_control_plane.models.security import Security
 from cribl_control_plane.utils import BackoffStrategy, RetryConfig
 
 from ..config import CriblConfig
+from .token_manager import get_token_manager
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedControlPlane:
+    """Resolved server metadata bundled with an authenticated SDK client."""
+
+    server_name: str
+    config: CriblConfig
+    client: CriblControlPlane
 
 
 @asynccontextmanager
@@ -48,4 +59,34 @@ async def create_control_plane(
             yield control_plane
 
 
-__all__ = ["create_control_plane"]
+@asynccontextmanager
+async def connect_to_server(server: str | None) -> AsyncIterator[ResolvedControlPlane]:
+    """Resolve a configured server name and yield an authenticated SDK client."""
+    config = CriblConfig.resolve(server)
+    token_manager = get_token_manager(config)
+    security = await token_manager.get_security()
+    resolved_name = config.server_name or server or "default"
+    async with create_control_plane(config, security=security) as client:
+        yield ResolvedControlPlane(
+            server_name=resolved_name,
+            config=config,
+            client=client,
+        )
+
+
+@asynccontextmanager
+async def connect_server_pair(
+    source_server: str,
+    target_server: str,
+) -> AsyncIterator[tuple[ResolvedControlPlane, ResolvedControlPlane]]:
+    """Yield authenticated SDK clients for a source/target server pair."""
+    async with connect_to_server(source_server) as source, connect_to_server(target_server) as target:
+        yield source, target
+
+
+__all__ = [
+    "ResolvedControlPlane",
+    "connect_server_pair",
+    "connect_to_server",
+    "create_control_plane",
+]

@@ -3,12 +3,13 @@
 This module defines typed models for all Cribl collector source types. Each collector
 has a specific configuration schema defined in docs/collectors/<id>.json.
 
-Collectors are "Saved Jobs" in Cribl terminology and are fetched from the
-/api/v1/m/{group_id}/lib/jobs endpoint rather than the /system/inputs endpoint
-used by regular sources.
+Collectors are "Saved Jobs" in Cribl terminology and are exposed from the
+`/api/v1/m/{group_id}/lib/jobs` endpoint rather than the `/system/inputs`
+endpoint used by regular sources.
 
-The SDK does not have native support for collectors, so we define these models
-for type validation and consistent serialization.
+The SDK now exposes collector list/get operations, but these models still give
+the server richer type validation and consistent serialization for collector
+payloads.
 """
 
 from typing import Any, Literal

@@ -1,0 +1,498 @@
+"""Unit tests for cross-leader copy and sync validation helpers."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+from cribl_control_plane.models.productscore import ProductsCore
+
+import snc_cribl_mcp.operations.sync as sync_module
+
+
+def _resolved(name: str) -> SimpleNamespace:
+    """Return a minimal resolved-server stand-in for sync tests."""
+    return SimpleNamespace(
+        server_name=name,
+        config=SimpleNamespace(timeout_ms=1000),
+        client=object(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_collection_reports_differences(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Collection validation should classify in-sync, missing, and changed items."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    list_resource = AsyncMock(
+        side_effect=[
+            [
+                {"id": "one", "type": "http"},
+                {"id": "two", "type": "syslog"},
+            ],
+            [
+                {"id": "one", "type": "syslog"},
+                {"id": "three", "type": "http"},
+            ],
+        ]
+    )
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+
+    result = await sync_module.validate_resource_sync(
+        "sources",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+    )
+
+    assert result["in_sync"] is False
+    assert result["counts"] == {
+        "source": 2,
+        "target": 2,
+        "in_sync": 0,
+        "different": 1,
+        "missing_on_source": 1,
+        "missing_on_target": 1,
+    }
+    statuses = {item["item_id"]: item["status"] for item in result["items"]}
+    assert statuses == {
+        "one": "different",
+        "three": "missing_on_source",
+        "two": "missing_on_target",
+    }
+    assert "source" not in result["items"][0]
+    assert "target" not in result["items"][0]
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_creates_missing_target_item(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Copy should create a missing target item and validate it afterward."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_item = {"id": "in_http", "type": "http", "port": 10080}
+    get_resource = AsyncMock(return_value=source_item)
+    create_resource = AsyncMock(return_value=[source_item])
+    maybe_get_item = AsyncMock(side_effect=[None, source_item])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "get_resource", get_resource)
+    monkeypatch.setattr(sync_module, "create_resource", create_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+
+    result = await sync_module.copy_resource_config(
+        "sources",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+        item_id="in_http",
+    )
+
+    assert result["created_count"] == 1
+    assert result["updated_count"] == 0
+    assert result["copied_count"] == 1
+    assert result["items"][0]["action"] == "created"
+    assert result["items"][0]["validation"]["status"] == "in_sync"
+    create_resource.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_appends_routes_when_requested(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route copies can use append mode instead of replace mode."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    route_set: dict[str, object] = {
+        "id": "default",
+        "routes": [{"id": "r1", "name": "Route 1", "filter": "true"}],
+        "comments": [],
+        "groups": {},
+    }
+    get_resource = AsyncMock(return_value=route_set)
+    maybe_get_item = AsyncMock(side_effect=[{"id": "default"}, route_set])
+    append_resource = AsyncMock(return_value=[route_set])
+    update_resource = AsyncMock()
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "get_resource", get_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "append_resource", append_resource)
+    monkeypatch.setattr(sync_module, "update_resource", update_resource)
+
+    result = await sync_module.copy_resource_config(
+        "routes",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+        item_id="default",
+        append_routes=True,
+    )
+
+    assert result["appended_count"] == 1
+    assert result["items"][0]["action"] == "appended"
+    append_resource.assert_awaited_once()
+    update_resource.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_skips_existing_item_when_overwrite_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Existing targets should be skipped when overwrite is disabled."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_item = {"id": "pipe1", "conf": {"output": "default"}}
+    get_resource = AsyncMock(return_value=source_item)
+    maybe_get_item = AsyncMock(return_value={"id": "pipe1", "conf": {"output": "other"}})
+    update_resource = AsyncMock()
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "get_resource", get_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "update_resource", update_resource)
+
+    result = await sync_module.copy_resource_config(
+        "pipelines",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+        item_id="pipe1",
+        overwrite=False,
+        validate_after=False,
+    )
+
+    assert result["skipped_count"] == 1
+    assert result["items"][0]["action"] == "skipped"
+    update_resource.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_continues_after_per_item_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed write for one item should not abort the rest of the copy batch."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_items = [
+        {"id": "pipe1", "conf": {"output": "default"}},
+        {"id": "pipe2", "conf": {"output": "default"}},
+    ]
+    list_resource = AsyncMock(return_value=source_items)
+    maybe_get_item = AsyncMock(side_effect=[None, None])
+    create_resource = AsyncMock(side_effect=[RuntimeError("target rejected pipe1"), [source_items[1]]])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "create_resource", create_resource)
+
+    result = await sync_module.copy_resource_config(
+        "pipelines",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+        validate_after=False,
+    )
+
+    assert result["copied_count"] == 1
+    assert result["created_count"] == 1
+    assert result["failed_count"] == 1
+    assert result["items"] == [
+        {
+            "item_id": "pipe1",
+            "action": "failed",
+            "attempted_action": "create",
+            "error": {
+                "type": "RuntimeError",
+                "message": "target rejected pipe1",
+            },
+        },
+        {
+            "item_id": "pipe2",
+            "action": "created",
+        },
+    ]
+    assert create_resource.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_preserves_success_when_validation_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validation lookup failures should be reported per item without discarding a successful write."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_items = [
+        {"id": "pipe1", "conf": {"output": "default"}},
+        {"id": "pipe2", "conf": {"output": "default"}},
+    ]
+    list_resource = AsyncMock(return_value=source_items)
+    create_resource = AsyncMock(side_effect=[[source_items[0]], [source_items[1]]])
+    maybe_get_item = AsyncMock(
+        side_effect=[
+            None,
+            RuntimeError("validation lookup failed"),
+            None,
+            source_items[1],
+        ]
+    )
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "create_resource", create_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+
+    result = await sync_module.copy_resource_config(
+        "pipelines",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+    )
+
+    assert result["copied_count"] == 2
+    assert result["failed_count"] == 0
+    assert result["items"][0] == {
+        "item_id": "pipe1",
+        "action": "created",
+        "validation_error": {
+            "type": "RuntimeError",
+            "message": "validation lookup failed",
+        },
+    }
+    assert result["items"][1]["action"] == "created"
+    assert result["items"][1]["validation"]["status"] == "in_sync"
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_resolves_distinct_group_selectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validation should resolve source and target group selectors independently."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    list_resource = AsyncMock(
+        side_effect=[
+            [{"id": "source-group-id", "description": "sandbox_appnode"}],
+            [{"id": "default", "name": "default", "description": "Default Worker Group"}],
+            [{"id": "cisco_asa", "conf": {"functions": []}}],
+            [{"id": "cisco_asa", "conf": {"functions": []}}],
+        ]
+    )
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+
+    result = await sync_module.validate_resource_sync(
+        "pipelines",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+        group_id="sandbox_appnode",
+        target_group_id="default",
+    )
+
+    assert result["in_sync"] is True
+    assert result["group_id"] == "source-group-id"
+    assert result["target_group_id"] == "default"
+    assert result["source_group"] == {
+        "selector": "sandbox_appnode",
+        "id": "source-group-id",
+        "matched_by": "description",
+        "name": None,
+        "description": "sandbox_appnode",
+    }
+    assert result["target_group"] == {
+        "selector": "default",
+        "id": "default",
+        "matched_by": "id",
+        "name": "default",
+        "description": "Default Worker Group",
+    }
+
+    assert list_resource.await_args_list[2].kwargs["group_id"] == "source-group-id"
+    assert list_resource.await_args_list[3].kwargs["group_id"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_single_item_reports_missing_on_both(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single-item validation should explicitly report when neither leader has the item."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    maybe_get_item = AsyncMock(side_effect=[None, None])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+
+    result = await sync_module.validate_resource_sync(
+        "groups",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+        item_id="missing-group",
+    )
+
+    assert result["in_sync"] is False
+    assert result["items"] == [
+        {
+            "item_id": "missing-group",
+            "status": "missing_on_both",
+            "differing_paths": [],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_single_item_can_include_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single-item validation can include canonicalized payloads when requested."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_item: dict[str, object] = {
+        "id": "default",
+        "description": "Source Group",
+        "lookupDeployments": [],
+        "type": "stream",
+    }
+    target_item: dict[str, object] = {
+        "id": "default",
+        "description": "Target Group",
+        "lookupDeployments": [],
+        "type": "stream",
+    }
+    maybe_get_item = AsyncMock(side_effect=[source_item, target_item])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+
+    result = await sync_module.validate_resource_sync(
+        "groups",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+        item_id="default",
+        include_payloads=True,
+    )
+
+    assert result["items"][0]["status"] == "different"
+    assert result["items"][0]["source"]["description"] == "Source Group"
+    assert result["items"][0]["target"]["description"] == "Target Group"
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_truncates_large_collection_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Collection validation should trim oversized responses and report the truncation."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    list_resource = AsyncMock(
+        side_effect=[
+            [
+                {"id": "group1", "description": "left", "lookupDeployments": [], "type": "stream"},
+                {"id": "group2", "description": "left", "lookupDeployments": [], "type": "stream"},
+                {"id": "group3", "description": "left", "lookupDeployments": [], "type": "stream"},
+            ],
+            [
+                {"id": "group1", "description": "right", "lookupDeployments": [], "type": "stream"},
+                {"id": "group2", "description": "right", "lookupDeployments": [], "type": "stream"},
+                {"id": "group3", "description": "right", "lookupDeployments": [], "type": "stream"},
+            ],
+        ]
+    )
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "_MAX_VALIDATE_RESPONSE_BYTES", 450)
+
+    result = await sync_module.validate_resource_sync(
+        "groups",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+    )
+
+    assert result["response_truncated"] is True
+    assert result["returned_item_count"] < 3
+    assert result["omitted_item_count"] > 0
+    assert result["warnings"]
+    assert all("source" not in item and "target" not in item for item in result["items"])
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_resolves_target_group_selector_before_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Copy should resolve group selectors before reading and writing resources."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_item = {"id": "cisco_asa", "conf": {"output": "default"}}
+    list_resource = AsyncMock(
+        side_effect=[
+            [{"id": "source-group-id", "description": "sandbox_appnode"}],
+            [{"id": "default", "description": "Default Worker Group"}],
+        ]
+    )
+    get_resource = AsyncMock(return_value=source_item)
+    maybe_get_item = AsyncMock(side_effect=[None, source_item])
+    create_resource = AsyncMock(return_value=[source_item])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "get_resource", get_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "create_resource", create_resource)
+
+    result = await sync_module.copy_resource_config(
+        "pipelines",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+        group_id="sandbox_appnode",
+        target_group_id="default",
+        item_id="cisco_asa",
+    )
+
+    assert result["created_count"] == 1
+    assert result["group_id"] == "source-group-id"
+    assert result["target_group_id"] == "default"
+    assert get_resource.await_args is not None
+    assert create_resource.await_args is not None
+    assert get_resource.await_args.kwargs["group_id"] == "source-group-id"
+    assert create_resource.await_args.kwargs["group_id"] == "default"

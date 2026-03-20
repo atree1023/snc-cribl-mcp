@@ -9,4 +9,6 @@ Contains business logic for collecting data from the Cribl API:
 - ``routes``: Route configuration collection
 - ``breakers``: Event breaker configuration collection (HTTP-based)
 - ``lookups``: Lookup configuration collection (HTTP-based)
+- ``resource_actions``: Context-free SDK CRUD helpers for managed resources
+- ``sync``: Cross-leader copy and validation workflows
 """

@@ -11,9 +11,9 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.12.5",
-    "fastmcp>=3.0.0,<4",
+    "fastmcp[code-mode]>=3.0.0,<4",
     "python-dotenv>=1.1.1",
-    "cribl-control-plane>=0.5.2",
+    "cribl-control-plane>=0.6.0",
 ]
 
 [project.scripts]
