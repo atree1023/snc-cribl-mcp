@@ -68,7 +68,7 @@ uvx <tool>@<version> <args>  # Run a specific version of a tool
 
 - `uvx` runs tools from PyPI by package name. This can be unsafe - only run
   well-known tools.
-- Only use `uv tool install` only when specifically requested by the user.
+- Only use `uv tool install` when specifically requested by the user.
 
 ### Pip interface
 

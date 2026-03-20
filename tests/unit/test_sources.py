@@ -509,7 +509,7 @@ async def test_collect_product_sources_collector_validation_error_returns_regula
 
 
 @pytest.mark.asyncio
-async def test_collect_product_sources_regular_failure_returns_collectors(mock_ctx: Context) -> None:
+async def test_collect_product_sources_regular_failure_short_circuits_before_collectors(mock_ctx: Context) -> None:
     """Regular source failures should bubble up before collector collection starts."""
     mock_client = MagicMock()
     groups_response = MagicMock(items=[MagicMock()])

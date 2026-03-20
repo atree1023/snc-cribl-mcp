@@ -217,7 +217,7 @@ def _compare_items(
     if source_item is None and target_item is None:
         return {
             "item_id": item_id,
-            "status": "missing_on_source",
+            "status": "missing_on_both",
             "differing_paths": [],
         }
     if source_item is None:
@@ -396,7 +396,7 @@ async def validate_resource_sync(  # noqa: PLR0913
         }
 
 
-async def copy_resource_config(  # noqa: PLR0913
+async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913
     kind: ResourceKind,
     source_server: str,
     target_server: str,
@@ -503,13 +503,16 @@ async def copy_resource_config(  # noqa: PLR0913
                 )
                 continue
             elif kind == "routes" and append_routes:
+                if resolved_target_group_id is None:
+                    msg = "Unable to append routes because the resolved target group id is missing."
+                    raise ValueError(msg)
                 await append_resource(
                     target.client,
                     kind,
                     item_id=current_item_id,
                     item=source_item,
                     timeout_ms=target.config.timeout_ms,
-                    group_id=resolved_target_group_id or "",
+                    group_id=resolved_target_group_id,
                 )
                 action = "appended"
             else:

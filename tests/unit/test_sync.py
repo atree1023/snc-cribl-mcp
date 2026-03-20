@@ -231,6 +231,39 @@ async def test_validate_resource_sync_resolves_distinct_group_selectors(
 
 
 @pytest.mark.asyncio
+async def test_validate_resource_sync_single_item_reports_missing_on_both(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single-item validation should explicitly report when neither leader has the item."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    maybe_get_item = AsyncMock(side_effect=[None, None])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+
+    result = await sync_module.validate_resource_sync(
+        "groups",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+        item_id="missing-group",
+    )
+
+    assert result["in_sync"] is False
+    assert result["items"] == [
+        {
+            "item_id": "missing-group",
+            "status": "missing_on_both",
+            "differing_paths": [],
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_copy_resource_config_resolves_target_group_selector_before_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
