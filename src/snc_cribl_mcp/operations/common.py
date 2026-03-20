@@ -5,8 +5,8 @@ modules (groups, sources, destinations, pipelines, routes, breakers, lookups).
 
 Collection Strategies:
     - SDK Collection (collect_items_via_sdk): Use for resources with SDK methods
-      like sources, destinations, pipelines, and routes. The SDK handles
-      request building, authentication, and response parsing.
+      like sources, collectors, destinations, pipelines, and routes. The SDK
+      handles request building, authentication, and response parsing.
     - HTTP Collection (collect_items_via_http): Use for resources without SDK
       methods like breakers and lookups. Requires direct HTTP calls with manual
       authentication header management.

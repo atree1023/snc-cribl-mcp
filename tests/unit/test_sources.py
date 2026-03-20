@@ -12,7 +12,6 @@ import httpx
 import pytest
 from cribl_control_plane.errors import CriblControlPlaneError, ResponseValidationError
 from cribl_control_plane.models.productscore import ProductsCore
-from cribl_control_plane.models.security import Security
 from fastmcp import Context
 from pydantic import BaseModel, ValidationError
 
@@ -385,13 +384,13 @@ async def test_collect_product_sources_validation_error_extracts_object_id(mock_
 
 
 # =============================================================================
-# Tests for merge edge cases (with security parameter to trigger collector fetch)
+# Tests for merge edge cases
 # =============================================================================
 
 
 @pytest.mark.asyncio
 async def test_collect_product_sources_with_collectors_merged(mock_ctx: Context) -> None:
-    """When security is provided, both regular sources and collectors should be merged."""
+    """Regular sources and SDK collectors should be merged."""
     mock_client = MagicMock()
     groups_response = MagicMock(items=[MagicMock()])
     groups_response.items[0].model_dump.return_value = {"id": "g1"}
@@ -403,25 +402,20 @@ async def test_collect_product_sources_with_collectors_merged(mock_ctx: Context)
     resp_g1.items[0].model_dump.return_value = {"name": "regular_source"}
     mock_client.sources = MagicMock(list_async=AsyncMock(return_value=resp_g1))
 
-    # Mock HTTP client for collectors - return a collector job
-    mock_http_client = AsyncMock()
-    resp_jobs = MagicMock()
-    resp_jobs.status_code = 200
-    resp_jobs.json.return_value = {
-        "items": [
-            {"id": "s3_collector", "type": "collection", "collector": {"type": "s3", "bucket": "test"}},
-        ]
+    # Mock SDK collectors
+    resp_collectors = MagicMock(items=[MagicMock()], count=1)
+    resp_collectors.items[0].model_dump.return_value = {
+        "id": "s3_collector",
+        "type": "collection",
+        "collector": {"type": "s3", "bucket": "test"},
     }
-    mock_http_client.get = AsyncMock(return_value=resp_jobs)
-    mock_client.sdk_configuration.async_client = mock_http_client
+    mock_client.collectors = MagicMock(list_async=AsyncMock(return_value=resp_collectors))
 
-    security = Security(bearer_auth="test-token")
     result = await collect_product_sources(
         mock_client,
         product=ProductsCore.STREAM,
         timeout_ms=10000,
         ctx=mock_ctx,
-        security=security,
     )
 
     assert result["status"] == "ok"
@@ -445,21 +439,13 @@ async def test_collect_product_sources_collector_failure_returns_regular_only(mo
     resp_g1.items[0].model_dump.return_value = {"name": "regular_source"}
     mock_client.sources = MagicMock(list_async=AsyncMock(return_value=resp_g1))
 
-    # Mock HTTP client for collectors - return 500 error
-    mock_http_client = AsyncMock()
-    resp_error = MagicMock()
-    resp_error.status_code = 500
-    resp_error.text = "Internal Server Error"
-    mock_http_client.get = AsyncMock(return_value=resp_error)
-    mock_client.sdk_configuration.async_client = mock_http_client
+    mock_client.collectors = MagicMock(list_async=AsyncMock(side_effect=httpx.ConnectError("collector failure")))
 
-    security = Security(bearer_auth="test-token")
     result = await collect_product_sources(
         mock_client,
         product=ProductsCore.STREAM,
         timeout_ms=10000,
         ctx=mock_ctx,
-        security=security,
     )
 
     # Should still succeed with just regular sources
@@ -468,8 +454,8 @@ async def test_collect_product_sources_collector_failure_returns_regular_only(mo
 
 
 @pytest.mark.asyncio
-async def test_collect_product_sources_collector_json_error_returns_regular_only(mock_ctx: Context) -> None:
-    """When collector JSON parsing fails, return regular sources only with warning."""
+async def test_collect_product_sources_collector_validation_error_returns_regular_only(mock_ctx: Context) -> None:
+    """Collector SDK validation errors should fall back to regular sources only."""
     mock_client = MagicMock()
     groups_response = MagicMock(items=[MagicMock()])
     groups_response.items[0].model_dump.return_value = {"id": "g1"}
@@ -481,34 +467,50 @@ async def test_collect_product_sources_collector_json_error_returns_regular_only
     resp_g1.items[0].model_dump.return_value = {"name": "regular_source"}
     mock_client.sources = MagicMock(list_async=AsyncMock(return_value=resp_g1))
 
-    # Mock HTTP client for collectors - return invalid JSON
-    mock_http_client = AsyncMock()
-    resp_invalid = MagicMock()
-    resp_invalid.status_code = 200
-    resp_invalid.json.side_effect = ValueError("Invalid JSON")
-    resp_invalid.raise_for_status = MagicMock()  # Does nothing
-    mock_http_client.get = AsyncMock(return_value=resp_invalid)
-    mock_client.sdk_configuration.async_client = mock_http_client
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = httpx.Headers({})
+    raw_body = json.dumps(
+        {
+            "items": [
+                {"id": "collector1", "type": "collection", "collector": {"type": "rest"}},
+            ],
+            "count": 1,
+        }
+    )
+    mock_response.text = raw_body
 
-    security = Security(bearer_auth="test-token")
+    collector_error: ValidationError
+    try:
+        _DummyOutputModel.model_validate({})
+    except ValidationError as ve:
+        collector_error = ve
+    else:
+        pytest.fail("Expected ValidationError was not raised")
+
+    validation_exc = ResponseValidationError(
+        "Response validation failed",
+        mock_response,
+        collector_error,
+        raw_body,
+    )
+    mock_client.collectors = MagicMock(list_async=AsyncMock(side_effect=validation_exc))
+
     result = await collect_product_sources(
         mock_client,
         product=ProductsCore.STREAM,
         timeout_ms=10000,
         ctx=mock_ctx,
-        security=security,
     )
 
     # Should still succeed with just regular sources
     assert result["status"] == "ok"
     assert result["total_count"] == 1
-    # Should have logged a warning about the collector failure
-    assert getattr(mock_ctx.warning, "await_count", 0) >= 1
 
 
 @pytest.mark.asyncio
 async def test_collect_product_sources_regular_failure_returns_collectors(mock_ctx: Context) -> None:
-    """When regular sources fail but collectors succeed, return collector sources."""
+    """Regular source failures should bubble up before collector collection starts."""
     mock_client = MagicMock()
     groups_response = MagicMock(items=[MagicMock()])
     groups_response.items[0].model_dump.return_value = {"id": "g1"}
@@ -519,25 +521,9 @@ async def test_collect_product_sources_regular_failure_returns_collectors(mock_c
     api_error_500 = CriblControlPlaneError(message="Boom", body=None, raw_response=MagicMock(status_code=500))
     mock_client.sources = MagicMock(list_async=AsyncMock(side_effect=api_error_500))
 
-    # Mock HTTP client for collectors - success
-    mock_http_client = AsyncMock()
-    resp_jobs = MagicMock()
-    resp_jobs.status_code = 200
-    resp_jobs.json.return_value = {
-        "items": [
-            {"id": "s3_collector", "type": "collection", "collector": {"type": "s3", "bucket": "test"}},
-        ]
-    }
-    mock_http_client.get = AsyncMock(return_value=resp_jobs)
-    mock_client.sdk_configuration.async_client = mock_http_client
+    mock_client.collectors = MagicMock(list_async=AsyncMock())
 
-    security = Security(bearer_auth="test-token")
-
-    # The regular sources will raise RuntimeError, but with security we still try collectors
-    # Actually, since regular sources raise, the whole function should raise
-    # Let me check the actual implementation flow...
-    # Looking at the code: collect_items_via_sdk raises RuntimeError for non-404
-    # So collectors won't even be attempted if regular sources fail hard
+    # Regular source failures still short-circuit the collection before collectors run.
 
     with pytest.raises(RuntimeError, match="Cribl API error while listing sources"):
         await collect_product_sources(
@@ -545,8 +531,8 @@ async def test_collect_product_sources_regular_failure_returns_collectors(mock_c
             product=ProductsCore.STREAM,
             timeout_ms=10000,
             ctx=mock_ctx,
-            security=security,
         )
+    mock_client.collectors.list_async.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -573,32 +559,26 @@ async def test_collect_product_sources_collector_only_groups(mock_ctx: Context) 
 
     mock_client.sources = MagicMock(list_async=AsyncMock(side_effect=sources_list_async))
 
-    # Mock HTTP client for collectors - g1 empty, g2 has collector
-    mock_http_client = AsyncMock()
+    async def collectors_list_async(*_args: object, **kwargs: object) -> MagicMock:
+        server_url = str(kwargs.get("server_url", ""))
+        if server_url.endswith("/m/g1"):
+            return MagicMock(items=[], count=0)
 
-    async def http_get(url: str, **_kwargs: object) -> MagicMock:
-        resp = MagicMock()
-        resp.status_code = 200
-        if "/m/g1/" in url:
-            resp.json.return_value = {"items": []}
-        else:
-            resp.json.return_value = {
-                "items": [
-                    {"id": "collector_g2", "type": "collection", "collector": {"type": "rest"}},
-                ]
-            }
+        resp = MagicMock(items=[MagicMock()], count=1)
+        resp.items[0].model_dump.return_value = {
+            "id": "collector_g2",
+            "type": "collection",
+            "collector": {"type": "rest"},
+        }
         return resp
 
-    mock_http_client.get = AsyncMock(side_effect=http_get)
-    mock_client.sdk_configuration.async_client = mock_http_client
+    mock_client.collectors = MagicMock(list_async=AsyncMock(side_effect=collectors_list_async))
 
-    security = Security(bearer_auth="test-token")
     result = await collect_product_sources(
         mock_client,
         product=ProductsCore.STREAM,
         timeout_ms=10000,
         ctx=mock_ctx,
-        security=security,
     )
 
     assert result["status"] == "ok"

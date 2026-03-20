@@ -5,7 +5,7 @@ configured Cribl deployment.
 
 This tool returns both:
 - Regular sources (from /system/inputs endpoint)
-- Collector sources (from /lib/jobs endpoint, filtered to type='collection')
+- Collector sources (from /lib/jobs via the SDK, filtered to type='collection')
 """
 
 # pyright: reportUnusedFunction=false
@@ -31,7 +31,6 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
         collector=deps.collect_product_sources,
         section_name="sources",
         log_message="Listing Cribl Stream and Edge sources across all groups.",
-        requires_security=True,  # Required for collector sources via HTTP
     )
 
     @app.tool(

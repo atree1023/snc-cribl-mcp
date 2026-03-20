@@ -88,26 +88,7 @@ async def test_list_sources_tool_success(deps_base: SimpleNamespace, mock_ctx: C
 
     mock_client.groups.list_async = AsyncMock(side_effect=groups_list_async)
 
-    # Mock async_client for collector HTTP calls
-    mock_http_client = AsyncMock()
-
-    # Mock HTTP responses for collector sources (/lib/jobs endpoint)
-    # Return empty collectors for both groups
-    resp_empty_jobs = MagicMock()
-    resp_empty_jobs.status_code = 200
-    resp_empty_jobs.json.return_value = {"items": []}
-
-    async def http_get(url: str, **_kwargs: object) -> MagicMock:
-        if "/lib/jobs" in url:
-            return resp_empty_jobs
-        return MagicMock(status_code=404)
-
-    mock_http_client.get = AsyncMock(side_effect=http_get)
-
-    mock_client.sdk_configuration = MagicMock(
-        server_url=deps_base.config.base_url_str,
-        async_client=mock_http_client,
-    )
+    mock_client.sdk_configuration = MagicMock(server_url=deps_base.config.base_url_str)
 
     # Sources per-group
     resp_g1 = MagicMock(items=[MagicMock()], count=1)
@@ -122,6 +103,7 @@ async def test_list_sources_tool_success(deps_base: SimpleNamespace, mock_ctx: C
         return resp_g1 if srv_url.endswith("/m/g1") else resp_e1
 
     mock_client.sources = MagicMock(list_async=AsyncMock(side_effect=sources_list_async))
+    mock_client.collectors = MagicMock(list_async=AsyncMock(return_value=MagicMock(items=[], count=0)))
 
     mock_cm = MagicMock()
     mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
@@ -175,29 +157,12 @@ async def test_list_sources_tool_handles_unavailable_product(
 
     mock_client.groups.list_async = AsyncMock(side_effect=groups_list_async)
 
-    # Mock async_client for collector HTTP calls
-    mock_http_client = AsyncMock()
-
-    # Mock HTTP responses for collector sources (/lib/jobs endpoint)
-    resp_empty_jobs = MagicMock()
-    resp_empty_jobs.status_code = 200
-    resp_empty_jobs.json.return_value = {"items": []}
-
-    async def http_get(url: str, **_kwargs: object) -> MagicMock:
-        if "/lib/jobs" in url:
-            return resp_empty_jobs
-        return MagicMock(status_code=404)
-
-    mock_http_client.get = AsyncMock(side_effect=http_get)
-
-    mock_client.sdk_configuration = MagicMock(
-        server_url=deps_base.config.base_url_str,
-        async_client=mock_http_client,
-    )
+    mock_client.sdk_configuration = MagicMock(server_url=deps_base.config.base_url_str)
 
     empty_resp = MagicMock(items=[])
     empty_resp.count = None
     mock_client.sources = MagicMock(list_async=AsyncMock(return_value=empty_resp))
+    mock_client.collectors = MagicMock(list_async=AsyncMock(return_value=MagicMock(items=[], count=0)))
 
     mock_cm = MagicMock()
     mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
