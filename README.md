@@ -29,7 +29,7 @@ A Model Context Protocol (MCP) server that provides tools for querying Cribl dep
 
 ## What It Does
 
-This MCP server connects to Cribl Stream and Edge deployments to retrieve metadata about worker groups, fleets, sources, destinations, pipelines, and routes. It's designed to work with customer-managed (on-premise) Cribl deployments and exposes structured data through MCP tools that can be consumed by AI assistants like Claude.
+This MCP server connects to Cribl Stream and Edge deployments to retrieve and compare metadata about worker groups, fleets, sources, destinations, pipelines, and routes. It also supports targeted cross-leader copy and validation workflows so AI assistants can help keep multiple leaders aligned without passing entire configs through context.
 
 The server handles authentication with bearer tokens, manages token refresh automatically, and provides a clean JSON interface for exploring your Cribl infrastructure.
 
@@ -43,6 +43,10 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Retrieve configured routes across all products and groups.
   - Retrieve configured event breakers across all products and groups.
   - Retrieve configured lookups across all products and groups.
+- **Cross-Leader Sync Workflows**:
+  - Copy supported resources between configured leaders.
+  - Validate whether supported resources are in sync between configured leaders.
+  - Resolve different source and target group selectors during copy and validation workflows.
 - **Typed Pipeline Models**: 41 Pydantic models for pipeline function configurations (eval, mask, sampling, regex_extract, etc.) with full type safety.
 - **Typed Collector Models**: 9 Pydantic models for collector source configurations (S3, REST, database, Splunk, Azure Blob, GCS, filesystem, script, health check) with full type safety.
 - **Graceful Error Handling**: SDK validation errors return structured, user-friendly responses with actionable guidance instead of crashing.
@@ -133,7 +137,7 @@ uv run python -m snc_cribl_mcp.server
 
 ### Available MCP Tools
 
-The server exposes seven MCP tools, and also mirrors the same data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`):
+The server exposes nine MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`):
 
 #### `list_groups`
 
@@ -176,6 +180,18 @@ Lists all configured event breakers across all groups and products.
 Lists all configured lookups across all groups and products.
 
 - **Returns:** JSON containing lookups organized by product and group, including lookup IDs, file info, and configurations.
+
+#### `copy_resource_config`
+
+Copies groups, sources, destinations, pipelines, or routes from one configured leader to another.
+
+- **Returns:** JSON describing the copy actions taken, including created, updated, appended, skipped, and unsupported items. For group-scoped resources, the response includes both the requested source and target group selectors and the resolved group IDs used on each leader.
+
+#### `validate_resource_sync`
+
+Compares groups, sources, destinations, pipelines, or routes between two configured leaders.
+
+- **Returns:** JSON describing whether the selected item or scope is in sync, along with per-item status and differing paths. For group-scoped resources, the response includes both the requested source and target group selectors and the resolved group IDs used on each leader.
 
 ### Example Integration with Claude
 
@@ -220,16 +236,21 @@ snc_cribl_mcp/
 │   │   ├── routes.py         # Route collection helpers
 │   │   ├── breakers.py       # Event breaker collection helpers
 │   │   ├── lookups.py        # Lookup collection helpers
+│   │   ├── resource_actions.py  # Context-free CRUD helpers over the SDK
+│   │   ├── sync.py           # Cross-leader copy and validation helpers
 │   │   └── validation_errors.py  # SDK validation error handling
 │   ├── tools/            # MCP tool registrations
 │   │   ├── common.py         # Shared tool registration utilities
+│   │   ├── copy_resource_config.py
 │   │   ├── list_groups.py
 │   │   ├── list_sources.py
 │   │   ├── list_destinations.py
 │   │   ├── list_pipelines.py
 │   │   ├── list_routes.py
 │   │   ├── list_breakers.py
-│   │   └── list_lookups.py
+│   │   ├── list_lookups.py
+│   │   ├── sync_common.py
+│   │   └── validate_resource_sync.py
 │   ├── config.py         # Configuration management
 │   ├── prompts.py        # MCP prompt definitions
 │   ├── resources.py      # MCP resource definitions

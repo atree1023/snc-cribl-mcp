@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from cribl_control_plane.models.productscore import ProductsCore
 
 import snc_cribl_mcp.operations.sync as sync_module
 
@@ -175,3 +176,101 @@ async def test_copy_resource_config_skips_existing_item_when_overwrite_disabled(
     assert result["skipped_count"] == 1
     assert result["items"][0]["action"] == "skipped"
     update_resource.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_resolves_distinct_group_selectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validation should resolve source and target group selectors independently."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    list_resource = AsyncMock(
+        side_effect=[
+            [{"id": "source-group-id", "description": "sandbox_appnode"}],
+            [{"id": "default", "name": "default", "description": "Default Worker Group"}],
+            [{"id": "cisco_asa", "conf": {"functions": []}}],
+            [{"id": "cisco_asa", "conf": {"functions": []}}],
+        ]
+    )
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+
+    result = await sync_module.validate_resource_sync(
+        "pipelines",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+        group_id="sandbox_appnode",
+        target_group_id="default",
+    )
+
+    assert result["in_sync"] is True
+    assert result["group_id"] == "source-group-id"
+    assert result["target_group_id"] == "default"
+    assert result["source_group"] == {
+        "selector": "sandbox_appnode",
+        "id": "source-group-id",
+        "matched_by": "description",
+        "name": None,
+        "description": "sandbox_appnode",
+    }
+    assert result["target_group"] == {
+        "selector": "default",
+        "id": "default",
+        "matched_by": "id",
+        "name": "default",
+        "description": "Default Worker Group",
+    }
+
+    assert list_resource.await_args_list[2].kwargs["group_id"] == "source-group-id"
+    assert list_resource.await_args_list[3].kwargs["group_id"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_resolves_target_group_selector_before_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Copy should resolve group selectors before reading and writing resources."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_item = {"id": "cisco_asa", "conf": {"output": "default"}}
+    list_resource = AsyncMock(
+        side_effect=[
+            [{"id": "source-group-id", "description": "sandbox_appnode"}],
+            [{"id": "default", "description": "Default Worker Group"}],
+        ]
+    )
+    get_resource = AsyncMock(return_value=source_item)
+    maybe_get_item = AsyncMock(side_effect=[None, source_item])
+    create_resource = AsyncMock(return_value=[source_item])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "get_resource", get_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "create_resource", create_resource)
+
+    result = await sync_module.copy_resource_config(
+        "pipelines",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+        group_id="sandbox_appnode",
+        target_group_id="default",
+        item_id="cisco_asa",
+    )
+
+    assert result["created_count"] == 1
+    assert result["group_id"] == "source-group-id"
+    assert result["target_group_id"] == "default"
+    assert get_resource.await_args is not None
+    assert create_resource.await_args is not None
+    assert get_resource.await_args.kwargs["group_id"] == "source-group-id"
+    assert create_resource.await_args.kwargs["group_id"] == "default"

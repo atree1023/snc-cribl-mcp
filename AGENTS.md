@@ -77,7 +77,7 @@ docs/                      # SDK docs, schemas, examples
 
 ## MCP Capabilities
 
-**Tools:** list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups
+**Tools:** list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, copy_resource_config, validate_resource_sync
 
 **Resources:** cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups
 

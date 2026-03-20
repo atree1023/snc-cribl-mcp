@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 2 and the cribl-control-plane SDK.
+MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and the cribl-control-plane SDK.
 
 **Key components:**
 
-- Seven tools: list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups
+- Nine tools: list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, copy_resource_config, validate_resource_sync
 - Seven resources mirroring tools (cribl://groups, cribl://sources, etc.)
 - Four prompts for common Cribl workflows
 - Token-based authentication with automatic refresh

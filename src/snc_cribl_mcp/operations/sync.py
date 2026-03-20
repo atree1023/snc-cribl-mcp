@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any, Literal, cast
 
 from cribl_control_plane.errors import CriblControlPlaneError
 from cribl_control_plane.models.productscore import ProductsCore
@@ -22,7 +23,29 @@ from .resource_actions import (
 )
 
 _MAX_DIFF_PATHS = 25
+type GroupMatchField = Literal["description", "id", "name", "passthrough"]
 type JsonValue = dict[str, "JsonValue"] | list["JsonValue"] | str | int | float | bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedGroupSelector:
+    """Describe how a group selector mapped to a concrete group identifier."""
+
+    selector: str
+    group_id: str
+    matched_by: GroupMatchField
+    name: str | None = None
+    description: str | None = None
+
+    def as_dict(self) -> dict[str, str | None]:
+        """Return a JSON-friendly representation of the resolved selector."""
+        return {
+            "selector": self.selector,
+            "id": self.group_id,
+            "matched_by": self.matched_by,
+            "name": self.name,
+            "description": self.description,
+        }
 
 
 def _resource_item_id(item: dict[str, Any]) -> str | None:
@@ -70,6 +93,118 @@ def _diff_paths(source: JsonValue, target: JsonValue, *, prefix: str = "") -> li
         return diffs[:_MAX_DIFF_PATHS]
 
     return [prefix or "$"]
+
+
+def _normalize_group_text(value: object) -> str | None:
+    """Normalize group metadata values into comparable strings."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _match_groups(
+    groups: Iterable[dict[str, Any]],
+    *,
+    selector: str,
+    field: Literal["description", "id", "name"],
+    case_sensitive: bool,
+) -> list[dict[str, Any]]:
+    """Return all groups whose field matches the selector."""
+    expected = selector if case_sensitive else selector.casefold()
+    matches: list[dict[str, Any]] = []
+    for group in groups:
+        actual = _normalize_group_text(group.get(field))
+        if actual is None:
+            continue
+        candidate = actual if case_sensitive else actual.casefold()
+        if candidate == expected:
+            matches.append(group)
+    return matches
+
+
+def _select_group_match(
+    groups: list[dict[str, Any]],
+    *,
+    selector: str,
+    server_name: str,
+    product: ProductsCore,
+) -> tuple[dict[str, Any], GroupMatchField] | None:
+    """Find the best matching group by id, name, or description."""
+    for case_sensitive in (True, False):
+        for field in ("id", "name", "description"):
+            matched = _match_groups(
+                groups,
+                selector=selector,
+                field=field,
+                case_sensitive=case_sensitive,
+            )
+            if len(matched) == 1:
+                return matched[0], field
+            if len(matched) > 1:
+                msg = (
+                    f"Group selector '{selector}' matched multiple groups by {field} "
+                    f"on server '{server_name}' for product '{product.value}'."
+                )
+                raise ValueError(msg)
+    return None
+
+
+async def _resolve_group_selector(
+    resolved: ResolvedControlPlane,
+    *,
+    selector: str | None,
+    product: ProductsCore | None,
+) -> ResolvedGroupSelector:
+    """Resolve a source or target group selector into a stable group id."""
+    if selector is None:
+        msg = "A group selector is required for group-scoped resources."
+        raise ValueError(msg)
+
+    normalized_selector = selector.strip()
+    if not normalized_selector:
+        msg = "Group selectors must not be blank."
+        raise ValueError(msg)
+
+    if product is None:
+        return ResolvedGroupSelector(
+            selector=selector,
+            group_id=normalized_selector,
+            matched_by="passthrough",
+        )
+
+    groups = await list_resource(
+        resolved.client,
+        "groups",
+        timeout_ms=resolved.config.timeout_ms,
+        product=product,
+    )
+    matched = _select_group_match(
+        groups,
+        selector=normalized_selector,
+        server_name=resolved.server_name,
+        product=product,
+    )
+    if matched is None:
+        msg = f"Could not resolve group selector '{selector}' on server '{resolved.server_name}' for product '{product.value}'."
+        raise ValueError(msg)
+
+    group, matched_by = matched
+    group_id = _resource_item_id(group)
+    if group_id is None:
+        msg = (
+            f"Resolved group selector '{selector}' on server '{resolved.server_name}' "
+            "but the matching group did not include an id."
+        )
+        raise ValueError(msg)
+
+    return ResolvedGroupSelector(
+        selector=selector,
+        group_id=group_id,
+        matched_by=matched_by,
+        name=_normalize_group_text(group.get("name")),
+        description=_normalize_group_text(group.get("description")),
+    )
 
 
 def _compare_items(
@@ -159,14 +294,38 @@ async def validate_resource_sync(  # noqa: PLR0913
     effective_target_group = target_group_id or group_id
 
     async with connect_server_pair(source_server, target_server) as (source, target):
+        source_group = None
+        target_group = None
+        resolved_source_group_id = group_id
+        resolved_target_group_id = effective_target_group
+        if spec.scope == "group":
+            source_group = await _resolve_group_selector(
+                source,
+                selector=group_id,
+                product=product,
+            )
+            target_group = await _resolve_group_selector(
+                target,
+                selector=effective_target_group,
+                product=product,
+            )
+            resolved_source_group_id = source_group.group_id
+            resolved_target_group_id = target_group.group_id
+
         if item_id is not None:
-            source_item = await _maybe_get_item(source, kind, item_id=item_id, product=product, group_id=group_id)
+            source_item = await _maybe_get_item(
+                source,
+                kind,
+                item_id=item_id,
+                product=product,
+                group_id=resolved_source_group_id,
+            )
             target_item = await _maybe_get_item(
                 target,
                 kind,
                 item_id=item_id,
                 product=product,
-                group_id=effective_target_group,
+                group_id=resolved_target_group_id,
             )
             item_result = _compare_items(kind, item_id, source_item, target_item)
             return {
@@ -175,8 +334,12 @@ async def validate_resource_sync(  # noqa: PLR0913
                 "source_server": source.server_name,
                 "target_server": target.server_name,
                 "product": product.value if product else None,
-                "group_id": group_id,
-                "target_group_id": effective_target_group,
+                "source_group_selector": group_id,
+                "target_group_selector": effective_target_group,
+                "group_id": resolved_source_group_id,
+                "target_group_id": resolved_target_group_id,
+                "source_group": source_group.as_dict() if source_group else None,
+                "target_group": target_group.as_dict() if target_group else None,
                 "in_sync": item_result["status"] == "in_sync",
                 "items": [item_result],
             }
@@ -186,14 +349,14 @@ async def validate_resource_sync(  # noqa: PLR0913
             kind,
             timeout_ms=source.config.timeout_ms,
             product=product,
-            group_id=group_id,
+            group_id=resolved_source_group_id,
         )
         target_items = await list_resource(
             target.client,
             kind,
             timeout_ms=target.config.timeout_ms,
             product=product,
-            group_id=effective_target_group,
+            group_id=resolved_target_group_id,
         )
         source_index = _index_items(source_items)
         target_index = _index_items(target_items)
@@ -214,8 +377,12 @@ async def validate_resource_sync(  # noqa: PLR0913
             "source_server": source.server_name,
             "target_server": target.server_name,
             "product": product.value if product else None,
-            "group_id": group_id,
-            "target_group_id": effective_target_group,
+            "source_group_selector": group_id,
+            "target_group_selector": effective_target_group,
+            "group_id": resolved_source_group_id,
+            "target_group_id": resolved_target_group_id,
+            "source_group": source_group.as_dict() if source_group else None,
+            "target_group": target_group.as_dict() if target_group else None,
             "in_sync": all(result["status"] == "in_sync" for result in results),
             "counts": {
                 "source": len(source_index),
@@ -247,6 +414,24 @@ async def copy_resource_config(  # noqa: PLR0913
     effective_target_group = target_group_id or group_id
 
     async with connect_server_pair(source_server, target_server) as (source, target):
+        source_group = None
+        target_group = None
+        resolved_source_group_id = group_id
+        resolved_target_group_id = effective_target_group
+        if spec.scope == "group":
+            source_group = await _resolve_group_selector(
+                source,
+                selector=group_id,
+                product=product,
+            )
+            target_group = await _resolve_group_selector(
+                target,
+                selector=effective_target_group,
+                product=product,
+            )
+            resolved_source_group_id = source_group.group_id
+            resolved_target_group_id = target_group.group_id
+
         if item_id is not None:
             source_items = {}
             source_item = await get_resource(
@@ -255,7 +440,7 @@ async def copy_resource_config(  # noqa: PLR0913
                 item_id=item_id,
                 timeout_ms=source.config.timeout_ms,
                 product=product,
-                group_id=group_id,
+                group_id=resolved_source_group_id,
             )
             source_items[item_id] = source_item
         else:
@@ -265,7 +450,7 @@ async def copy_resource_config(  # noqa: PLR0913
                     kind,
                     timeout_ms=source.config.timeout_ms,
                     product=product,
-                    group_id=group_id,
+                    group_id=resolved_source_group_id,
                 )
             )
 
@@ -276,7 +461,7 @@ async def copy_resource_config(  # noqa: PLR0913
                 kind,
                 item_id=current_item_id,
                 product=product,
-                group_id=effective_target_group,
+                group_id=resolved_target_group_id,
             )
 
             if target_item is None:
@@ -287,7 +472,7 @@ async def copy_resource_config(  # noqa: PLR0913
                         item=source_item,
                         timeout_ms=target.config.timeout_ms,
                         product=product,
-                        group_id=effective_target_group,
+                        group_id=resolved_target_group_id,
                     )
                     action = "created"
                 elif kind == "routes" and spec.supports("update"):
@@ -324,7 +509,7 @@ async def copy_resource_config(  # noqa: PLR0913
                     item_id=current_item_id,
                     item=source_item,
                     timeout_ms=target.config.timeout_ms,
-                    group_id=effective_target_group or "",
+                    group_id=resolved_target_group_id or "",
                 )
                 action = "appended"
             else:
@@ -335,7 +520,7 @@ async def copy_resource_config(  # noqa: PLR0913
                     item=source_item,
                     timeout_ms=target.config.timeout_ms,
                     product=product,
-                    group_id=effective_target_group,
+                    group_id=resolved_target_group_id,
                 )
                 action = "updated"
 
@@ -353,7 +538,7 @@ async def copy_resource_config(  # noqa: PLR0913
                         kind,
                         item_id=current_item_id,
                         product=product,
-                        group_id=effective_target_group,
+                        group_id=resolved_target_group_id,
                     ),
                 )
             item_results.append(result)
@@ -364,8 +549,12 @@ async def copy_resource_config(  # noqa: PLR0913
             "source_server": source.server_name,
             "target_server": target.server_name,
             "product": product.value if product else None,
-            "group_id": group_id,
-            "target_group_id": effective_target_group,
+            "source_group_selector": group_id,
+            "target_group_selector": effective_target_group,
+            "group_id": resolved_source_group_id,
+            "target_group_id": resolved_target_group_id,
+            "source_group": source_group.as_dict() if source_group else None,
+            "target_group": target_group.as_dict() if target_group else None,
             "copied_count": sum(result.get("action") in {"appended", "created", "updated"} for result in item_results),
             "created_count": sum(result.get("action") == "created" for result in item_results),
             "updated_count": sum(result.get("action") == "updated" for result in item_results),
