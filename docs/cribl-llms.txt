@@ -134,7 +134,7 @@ Cribl is a suite of observability products that help organizations collect, proc
 - [Firewall Logs: VPC Flow Logs, Cisco ASA](https://docs.cribl.io/stream/usecase-firewall-logs.md): Firewall logs are another source of important operational (and security) data.
 - [Event Data Structure and Flow](https://docs.cribl.io/stream/event-data-structure-and-flow.md): Learn how event data is structured and processed in Cribl
 - [Event Model](https://docs.cribl.io/stream/event-model.md): Event Model in Cribl
-- [Event Processing Order](https://docs.cribl.io/stream/event-processing-order.md): How events are proccessed in Cribl
+- [Event Processing Order](https://docs.cribl.io/stream/event-processing-order.md): How events are processed in Cribl
 - [Event Breakers](https://docs.cribl.io/stream/event-breakers.md): Break incoming streams of data into discrete events
 - [Event Breaker Types](https://docs.cribl.io/stream/event-breaker-types.md): Learn about the available Event Breaker types
 - [Azure Virtual Network (VNet) Flow Event Breaker](https://docs.cribl.io/stream/event-breaker-type-azure-vnet-flow.md): Learn how to apply the Azure Virtual Network (VNet) Flow Event Breaker to data streams
@@ -1088,7 +1088,7 @@ Cribl is a suite of observability products that help organizations collect, proc
 - [Grok Patterns](https://docs.cribl.io/search/grok-patterns.md): Use built-in Grok patterns, or define your own
 - [Macros](https://docs.cribl.io/search/macros.md): Reuse query text across different searches
 - [Cribl Search Packs](https://docs.cribl.io/search/packs.md): Import, export, and share pre-built Cribl Search resources
-- [Packs Publicaton Standards](https://docs.cribl.io/stream/packs-standards)
+- [Packs Publication Standards](https://docs.cribl.io/stream/packs-standards)
 - [Language Reference](https://docs.cribl.io/search/language-reference.md): A comprehensive reference for the Cribl Search implementation of KQL
 - [Language Reference Index](https://docs.cribl.io/search/language-index.md): An alphabetical, linked index to all operators, functions, and other elements of the Cribl Search KQL implementation
 - [Operators in Cribl Search](https://docs.cribl.io/search/operators.md): A list of operators supported by Cribl Search
@@ -1459,7 +1459,7 @@ Cribl is a suite of observability products that help organizations collect, proc
 - [Integrating Cribl Lake with Cribl Edge](https://docs.cribl.io/lake/integrating-lake-with-edge.md): Archive Cribl Edge data to Cribl Lake, via Cribl Stream
 - [Troubleshooting](https://docs.cribl.io/lake/known-issues.md): Find bugs and limitations affecting Cribl Lake, with fix versions or workarounds
 
-## Cribl Cribl Insights
+## Cribl Insights
 
 - [About Cribl Insights](https://docs.cribl.io/insights/about.md): Learn about the value of Cribl Insights
 - [System Insights](https://docs.cribl.io/insights/system.md): View systemwide health and key signals across products and infrastructure to quickly spot issues and trends
