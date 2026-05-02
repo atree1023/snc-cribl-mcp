@@ -36,10 +36,6 @@ Cribl is a suite of observability products that help organizations collect, proc
 - [Manage Cribl.Cloud Organization](https://docs.cribl.io/stream/cloud-portal.md): Cribl.Cloud portal user interface
 - [Cribl.Cloud Enterprise](https://docs.cribl.io/stream/cloud-enterprise.md): Cribl.Cloud Enterprise plan
 - [Manage Cribl.Cloud Worker Groups](https://docs.cribl.io/stream/cloud-workers.md): Managing Worker Groups and Workers in a Cribl.Cloud instance.
-- [Learn About Connected Environments](https://docs.cribl.io/stream/cloud-connected-env.md): Instructions for Connecting On-Prem Leaders to Cribl.Cloud
-- [How to Connect On-Prem Leaders to Cribl.Cloud](https://docs.cribl.io/stream/cloud-connected-env-how-to.md): How to Connect On-Prem Leaders to Cribl.Cloud
-- [Simplify Billing with Universal Subscription](https://docs.cribl.io/stream/about-universal-subscription.md): Learn about connecting on-prem Environments to Cribl.Cloud Leaders to simplify billing.
-- [Data Payloads for Connected Environments](https://docs.cribl.io/stream/cloud-connected-payloads.md): Connected Environment Data Payloads
 - [On-Prem Deployment](https://docs.cribl.io/stream/deploy-types.md): Deployment guide to get you started with self-hosted Cribl Stream In an on-prem (in other words, self-hosted) deployment, Cribl Stream runs on your own infrastructure.
 - [OS and System Requirements](https://docs.cribl.io/stream/requirements.md): For a successful Cribl Stream deployment, verify that your system meets the minimum hardware and software specifications outlined below.
 - [Single-Instance/​Basic Deployment](https://docs.cribl.io/stream/deploy-single-instance.md): Basic Cribl Stream deployment requirements and procedures
@@ -1600,16 +1596,12 @@ Cribl is a suite of observability products that help organizations collect, proc
 ## FedRAMP
 
 - [Federal User Onboarding Guide](https://docs.cribl.io/fedramp/fed_onboard.md): Onboarding to FedRAMP
-- [Federal User Onboarding Guide](https://docs.cribl.io/fedramp/fed_onboard.md): Onboarding to FedRAMP
 - [Cribl.Cloud Government vs. Commercial](https://docs.cribl.io/fedramp/differences.md): Cribl.Cloud Government vs. Commercial
 - [Feature Availability Matrix](https://docs.cribl.io/fedramp/fed_features.md): Core Services and Products in Cribl.Cloud Government
 - [Explore Cribl Products](https://docs.cribl.io/fedramp/fed_products_tutorials.md): Cribl Product Suite
-- [Explore Cribl Products](https://docs.cribl.io/fedramp/fed_products_tutorials.md): Cribl Product Suite
 - [Deploy Hybrid Workers and Edge Nodes](https://docs.cribl.io/fedramp/fed_hybrid.md): Hybrid Deployments
 - [Billing Overview](https://docs.cribl.io/fedramp/fed_billing.md): Cribl.Cloud Gov Billing
-- [Billing Overview](https://docs.cribl.io/fedramp/fed_billing.md): Cribl.Cloud Gov Billing
 - [Connected Environments](https://docs.cribl.io/fedramp/fed_connected_env.md): Cribl.Cloud Gov Billing
-- [User Authentication and Security](https://docs.cribl.io/fedramp/fed_access.md): Accessing Cribl.Cloud Government
 - [User Authentication and Security](https://docs.cribl.io/fedramp/fed_access.md): Accessing Cribl.Cloud Government
 - [SSO in Cribl.Cloud Government](https://docs.cribl.io/fedramp/fed_access_sso.md): SSO in Cribl.Cloud Government
 - [Secure Your Cribl.Cloud Government Deployment](https://docs.cribl.io/fedramp/securing-cloud-gov.md): Secure Your Cribl.Cloud Government Deployment

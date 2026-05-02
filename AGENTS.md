@@ -47,7 +47,7 @@ uv run pyright                             # type check
 Before writing code:
 
 1. **Cribl SDK:** Check `docs/CRIBL-CONTROL-PLANE-README.md` for examples, documentation and best practices
-2. **Cribl API:** `docs/cribl-apidocs-4.17.1-b862732f.yml` (prefer SDK over direct calls)
+2. **Cribl API:** Refer to the [Cribl API reference](https://docs.cribl.io/api/) for available endpoints (prefer SDK over direct calls); if you need a local OpenAPI spec, download it from Cribl and place it at `docs/cribl-apidocs-4.17.1-b862732f.yml` (gitignored)
 3. **Cribl:** Check `docs/cribl-llms.txt` for product documentation links and use fetch/search to retrieve details
 4. **FastMCP:** Check `docs/fastmcp-llms.txt` for links to latest docs from gofastmcp.com
 5. **All:** Use the Context7 and Exa tools to search for the latest library documentation and examples
