@@ -17,7 +17,7 @@ uv run pytest                              # run tests
 - **Package manager:** uv
 - **Virtual env:** `.venv/` (created by `uv sync`)
 - **Entry point:** `src/snc_cribl_mcp/server.py`
-- **Python version:** 3.13+
+- **Python version:** 3.14+
 
 ## Build & Test
 
@@ -35,7 +35,7 @@ uv run pyright                             # type check
 
 ## Code Style
 
-- Python 3.13+ with complete type hints
+- Python 3.14+ with complete type hints
 - Ruff: line length 128 (see `pyproject.toml` for full config)
 - Pyright: strict mode
 - Docstrings: Google style
@@ -46,16 +46,16 @@ uv run pyright                             # type check
 
 Before writing code:
 
-1. **Cribl SDK:** Check `docs/examples/` for authentication and API patterns
-2. **FastMCP:** Search web for latest docs from gofastmcp.com
-3. **Pipeline functions:** `docs/pipeline_functions/<id>.json` for schemas
-4. **Collectors:** `docs/collectors/<id>.json` for schemas
-5. **Cribl API:** `docs/cribl-openapi-spec.yml` (prefer SDK over direct calls)
+1. **Cribl SDK:** Check `docs/CRIBL-CONTROL-PLANE-README.md` for examples, documentation and best practices
+2. **Cribl API:** `docs/cribl-openapi-spec.yml` (prefer SDK over direct calls)
+3. **Cribl:** Check `docs/cribl-llms.txt` for product documentation links and use fetch/search to retrieve details
+4. **FastMCP:** Check `docs/fastmcp-llms.txt` for links to latest docs from gofastmcp.com
+5. **All:** Use the Context7 and Exa tools to search for the latest library documentation and examples 
+6. **All:** Inspect the installed packages in `.venv/` rather than relying on memory
 
 **Critical SDK notes:**
 
 - "On-prem", "onprem", and "customer managed" are equivalent terms
-- Use `docs/examples/example_onprem_auth.py` pattern for authentication
 - Distributed environments require `/m/{group_id}/` URL scoping
 
 ## File Structure
