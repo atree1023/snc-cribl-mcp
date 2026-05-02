@@ -19,3 +19,5 @@ uv.lock
 TASK.md
 
 config.toml
+
+docs/cribl-apidocs*
