@@ -50,7 +50,7 @@ Before writing code:
 2. **Cribl API:** `docs/cribl-openapi-spec.yml` (prefer SDK over direct calls)
 3. **Cribl:** Check `docs/cribl-llms.txt` for product documentation links and use fetch/search to retrieve details
 4. **FastMCP:** Check `docs/fastmcp-llms.txt` for links to latest docs from gofastmcp.com
-5. **All:** Use the Context7 and Exa tools to search for the latest library documentation and examples 
+5. **All:** Use the Context7 and Exa tools to search for the latest library documentation and examples
 6. **All:** Inspect the installed packages in `.venv/` rather than relying on memory
 
 **Critical SDK notes:**
