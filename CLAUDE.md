@@ -26,6 +26,7 @@ MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and 
 
 - Inspect the actual installed package in `.venv/` rather than relying on memory
 - For `cribl-control-plane` SDK: check `docs/CRIBL-CONTROL-PLANE-README.md` for examples, documentation and best practices
+- For ednpoints where the SDK does not have a dedicated function, the Cribl API may be called directly `docs/cribl-apidocs-4.17.1-b862732f.yml`
 - For FastMCP: Check `docs/fastmcp-llms.txt` for links to latest documentation from gofastmcp.com
 
 ## Commands

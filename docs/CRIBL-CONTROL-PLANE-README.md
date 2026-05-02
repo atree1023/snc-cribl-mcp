@@ -15,26 +15,30 @@ Complementary API reference documentation is available at https://docs.cribl.io/
 <!-- No Summary [summary] -->
 
 <!-- Start Table of Contents [toc] -->
+
 ## Table of Contents
+
 <!-- $toc-max-depth=2 -->
-* [cribl_control_plane_sdk_python](#criblcontrolplanesdkpython)
-  * [SDK Installation](#sdk-installation)
-  * [IDE Support](#ide-support)
-  * [SDK Example Usage](#sdk-example-usage)
-  * [Authentication](#authentication)
-  * [Available Resources and Operations](#available-resources-and-operations)
-  * [Json Streaming](#json-streaming)
-  * [Pagination](#pagination)
-  * [File uploads](#file-uploads)
-  * [Retries](#retries)
-  * [Error Handling](#error-handling)
-  * [Custom HTTP Client](#custom-http-client)
-  * [Resource Management](#resource-management)
-  * [Debugging](#debugging)
+
+- [cribl_control_plane_sdk_python](#cribl_control_plane_sdk_python)
+- [SDK Installation](#sdk-installation)
+- [IDE Support](#ide-support)
+- [SDK Example Usage](#sdk-example-usage)
+- [Authentication](#authentication)
+- [Available Resources and Operations](#available-resources-and-operations)
+- [Json Streaming](#json-streaming)
+- [Pagination](#pagination)
+- [File uploads](#file-uploads)
+- [Retries](#retries)
+- [Error Handling](#error-handling)
+- [Custom HTTP Client](#custom-http-client)
+- [Resource Management](#resource-management)
+- [Debugging](#debugging)
 
 <!-- End Table of Contents [toc] -->
 
 <!-- Start SDK Installation [installation] -->
+
 ## SDK Installation
 
 > [!NOTE]
@@ -42,11 +46,11 @@ Complementary API reference documentation is available at https://docs.cribl.io/
 >
 > Once a Python version reaches its [official end of life date](https://devguide.python.org/versions/), a 3-month grace period is provided for users to upgrade. Following this grace period, the minimum python version supported in the SDK will be updated.
 
-The SDK can be installed with *uv*, *pip*, or *poetry* package managers.
+The SDK can be installed with _uv_, _pip_, or _poetry_ package managers.
 
 ### uv
 
-*uv* is a fast Python package installer and resolver, designed as a drop-in replacement for pip and pip-tools. It's recommended for its speed and modern Python tooling capabilities.
+_uv_ is a fast Python package installer and resolver, designed as a drop-in replacement for pip and pip-tools. It's recommended for its speed and modern Python tooling capabilities.
 
 ```bash
 uv add cribl-control-plane
@@ -54,7 +58,7 @@ uv add cribl-control-plane
 
 ### PIP
 
-*PIP* is the default package installer for Python, enabling easy installation and management of packages from PyPI via the command line.
+_PIP_ is the default package installer for Python, enabling easy installation and management of packages from PyPI via the command line.
 
 ```bash
 pip install cribl-control-plane
@@ -62,7 +66,7 @@ pip install cribl-control-plane
 
 ### Poetry
 
-*Poetry* is a modern tool that simplifies dependency management and package publishing by using a single `pyproject.toml` file to handle project metadata and dependencies.
+_Poetry_ is a modern tool that simplifies dependency management and package publishing by using a single `pyproject.toml` file to handle project metadata and dependencies.
 
 ```bash
 poetry add cribl-control-plane
@@ -98,9 +102,11 @@ sdk = CriblControlPlane(
 
 Once that is saved to a file, you can run it with `uv run script.py` where
 `script.py` can be replaced with the actual file name.
+
 <!-- End SDK Installation [installation] -->
 
 <!-- Start IDE Support [idesupport] -->
+
 ## IDE Support
 
 ### PyCharm
@@ -175,7 +181,7 @@ asyncio.run(main())
 ```
 
 > [!NOTE]
-> Additional examples demonstrating various SDK features and use cases can be found in the [`examples`](./examples) directory.
+> Additional examples demonstrating various SDK features and use cases can be found in the [`examples`](https://github.com/criblio/cribl_control_plane_sdk_python/tree/main/examples) directory of the SDK repository.
 
 <!-- No End SDK Example Usage [usage] -->
 
@@ -211,6 +217,7 @@ The [On-Prem Authentication Example](https://github.com/criblio/cribl_control_pl
 <!-- No Authentication [security] -->
 
 <!-- Start Available Resources and Operations [operations] -->
+
 ## Available Resources and Operations
 
 <details open>
@@ -218,248 +225,249 @@ The [On-Prem Authentication Example](https://github.com/criblio/cribl_control_pl
 
 ### [Auth.Tokens](docs/sdks/tokens/README.md)
 
-* [get](docs/sdks/tokens/README.md#get) - Log in and fetch an authentication token
+- [get](docs/sdks/tokens/README.md#get) - Log in and fetch an authentication token
 
 ### [Collectors](docs/sdks/collectorssdk/README.md)
 
-* [create](docs/sdks/collectorssdk/README.md#create) - Create a Collector
-* [list](docs/sdks/collectorssdk/README.md#list) - List all Collectors
-* [delete](docs/sdks/collectorssdk/README.md#delete) - Delete a Collector
-* [get](docs/sdks/collectorssdk/README.md#get) - Get a Collector
-* [update](docs/sdks/collectorssdk/README.md#update) - Update a Collector
+- [create](docs/sdks/collectorssdk/README.md#create) - Create a Collector
+- [list](docs/sdks/collectorssdk/README.md#list) - List all Collectors
+- [delete](docs/sdks/collectorssdk/README.md#delete) - Delete a Collector
+- [get](docs/sdks/collectorssdk/README.md#get) - Get a Collector
+- [update](docs/sdks/collectorssdk/README.md#update) - Update a Collector
 
 ### [DatabaseConnections](docs/sdks/databaseconnections/README.md)
 
-* [create](docs/sdks/databaseconnections/README.md#create) - Create Database Connection
-* [delete](docs/sdks/databaseconnections/README.md#delete) - Delete a Database Connection
-* [get](docs/sdks/databaseconnections/README.md#get) - Get a Database Connection
-* [update](docs/sdks/databaseconnections/README.md#update) - Update a Database Connection
+- [create](docs/sdks/databaseconnections/README.md#create) - Create Database Connection
+- [delete](docs/sdks/databaseconnections/README.md#delete) - Delete a Database Connection
+- [get](docs/sdks/databaseconnections/README.md#get) - Get a Database Connection
+- [update](docs/sdks/databaseconnections/README.md#update) - Update a Database Connection
 
 ### [Destinations](docs/sdks/destinations/README.md)
 
-* [list](docs/sdks/destinations/README.md#list) - List all Destinations
-* [create](docs/sdks/destinations/README.md#create) - Create a Destination
-* [get](docs/sdks/destinations/README.md#get) - Get a Destination
-* [update](docs/sdks/destinations/README.md#update) - Update a Destination
-* [delete](docs/sdks/destinations/README.md#delete) - Delete a Destination
+- [list](docs/sdks/destinations/README.md#list) - List all Destinations
+- [create](docs/sdks/destinations/README.md#create) - Create a Destination
+- [get](docs/sdks/destinations/README.md#get) - Get a Destination
+- [update](docs/sdks/destinations/README.md#update) - Update a Destination
+- [delete](docs/sdks/destinations/README.md#delete) - Delete a Destination
 
 #### [Destinations.Pq](docs/sdks/destinationspq/README.md)
 
-* [clear](docs/sdks/destinationspq/README.md#clear) - Clear the persistent queue for a Destination
-* [get](docs/sdks/destinationspq/README.md#get) - Get information about the latest job to clear the persistent queue for a Destination
+- [clear](docs/sdks/destinationspq/README.md#clear) - Clear the persistent queue for a Destination
+- [get](docs/sdks/destinationspq/README.md#get) - Get information about the latest job to clear the persistent queue for a Destination
 
 #### [Destinations.Samples](docs/sdks/samples/README.md)
 
-* [get](docs/sdks/samples/README.md#get) - Get sample event data for a Destination
-* [create](docs/sdks/samples/README.md#create) - Send sample event data to a Destination
+- [get](docs/sdks/samples/README.md#get) - Get sample event data for a Destination
+- [create](docs/sdks/samples/README.md#create) - Send sample event data to a Destination
 
 #### [Destinations.Statuses](docs/sdks/destinationsstatuses/README.md)
 
-* [get](docs/sdks/destinationsstatuses/README.md#get) - Get the status of a Destination
-* [list](docs/sdks/destinationsstatuses/README.md#list) - List the status of all Destinations
+- [get](docs/sdks/destinationsstatuses/README.md#get) - Get the status of a Destination
+- [list](docs/sdks/destinationsstatuses/README.md#list) - List the status of all Destinations
 
 ### [Functions](docs/sdks/functions/README.md)
 
-* [get](docs/sdks/functions/README.md#get) - Get a Function
-* [list](docs/sdks/functions/README.md#list) - List all Functions
+- [get](docs/sdks/functions/README.md#get) - Get a Function
+- [list](docs/sdks/functions/README.md#list) - List all Functions
 
 ### [Groups](docs/sdks/groupssdk/README.md)
 
-* [list](docs/sdks/groupssdk/README.md#list) - List all Worker Groups, Outpost Groups, or Edge Fleets for the specified Cribl product
-* [create](docs/sdks/groupssdk/README.md#create) - Create a Worker Group, Outpost Group, or Edge Fleet for the specified Cribl product
-* [get](docs/sdks/groupssdk/README.md#get) - Get a Worker Group, Outpost Group, or Edge Fleet
-* [update](docs/sdks/groupssdk/README.md#update) - Update a Worker Group, Outpost Group, or Edge Fleet
-* [delete](docs/sdks/groupssdk/README.md#delete) - Delete a Worker Group, Outpost Group, or Edge Fleet
-* [deploy](docs/sdks/groupssdk/README.md#deploy) - Deploy commits to a Worker Group, Outpost Group, or Edge Fleet
+- [list](docs/sdks/groupssdk/README.md#list) - List all Worker Groups, Outpost Groups, or Edge Fleets for the specified Cribl product
+- [create](docs/sdks/groupssdk/README.md#create) - Create a Worker Group, Outpost Group, or Edge Fleet for the specified Cribl product
+- [get](docs/sdks/groupssdk/README.md#get) - Get a Worker Group, Outpost Group, or Edge Fleet
+- [update](docs/sdks/groupssdk/README.md#update) - Update a Worker Group, Outpost Group, or Edge Fleet
+- [delete](docs/sdks/groupssdk/README.md#delete) - Delete a Worker Group, Outpost Group, or Edge Fleet
+- [deploy](docs/sdks/groupssdk/README.md#deploy) - Deploy commits to a Worker Group, Outpost Group, or Edge Fleet
 
 #### [Groups.Acl](docs/sdks/acl/README.md)
 
-* [get](docs/sdks/acl/README.md#get) - Get the Access Control List for a Worker Group, Outpost Group, or Edge Fleet
+- [get](docs/sdks/acl/README.md#get) - Get the Access Control List for a Worker Group, Outpost Group, or Edge Fleet
 
 ##### [Groups.Acl.Teams](docs/sdks/teams/README.md)
 
-* [get](docs/sdks/teams/README.md#get) - Get the Access Control List for teams with permissions on a Worker Group, Outpost Group, or Edge Fleet for the specified Cribl product
+- [get](docs/sdks/teams/README.md#get) - Get the Access Control List for teams with permissions on a Worker Group, Outpost Group, or Edge Fleet for the specified Cribl product
 
 #### [Groups.Configs.Versions](docs/sdks/configsversions/README.md)
 
-* [get](docs/sdks/configsversions/README.md#get) - Get the configuration version for a Worker Group, Outpost Group, or Edge Fleet
+- [get](docs/sdks/configsversions/README.md#get) - Get the configuration version for a Worker Group, Outpost Group, or Edge Fleet
 
 ### [Health](docs/sdks/health/README.md)
 
-* [get](docs/sdks/health/README.md#get) - Get the health status of the server
+- [get](docs/sdks/health/README.md#get) - Get the health status of the server
 
 ### [Lakes.Datasets](docs/sdks/datasets/README.md)
 
-* [create](docs/sdks/datasets/README.md#create) - Create a Lake Dataset (Cribl.Cloud only)
-* [list](docs/sdks/datasets/README.md#list) - List all Lake Datasets (Cribl.Cloud only)
-* [delete](docs/sdks/datasets/README.md#delete) - Delete a Lake Dataset (Cribl.Cloud only)
-* [get](docs/sdks/datasets/README.md#get) - Get a Lake Dataset (Cribl.Cloud only)
-* [update](docs/sdks/datasets/README.md#update) - Update a Lake Dataset (Cribl.Cloud only)
+- [create](docs/sdks/datasets/README.md#create) - Create a Lake Dataset (Cribl.Cloud only)
+- [list](docs/sdks/datasets/README.md#list) - List all Lake Datasets (Cribl.Cloud only)
+- [delete](docs/sdks/datasets/README.md#delete) - Delete a Lake Dataset (Cribl.Cloud only)
+- [get](docs/sdks/datasets/README.md#get) - Get a Lake Dataset (Cribl.Cloud only)
+- [update](docs/sdks/datasets/README.md#update) - Update a Lake Dataset (Cribl.Cloud only)
 
 ### [Nodes](docs/sdks/nodes/README.md)
 
-* [count](docs/sdks/nodes/README.md#count) - Get a count of Worker or Edge Nodes
-* [get](docs/sdks/nodes/README.md#get) - Get detailed metadata for a Worker or Edge Node
-* [list](docs/sdks/nodes/README.md#list) - Get detailed metadata for Worker or Edge Nodes
-* [restart](docs/sdks/nodes/README.md#restart) - Restart Worker or Edge Nodes
+- [count](docs/sdks/nodes/README.md#count) - Get a count of Worker or Edge Nodes
+- [get](docs/sdks/nodes/README.md#get) - Get detailed metadata for a Worker or Edge Node
+- [list](docs/sdks/nodes/README.md#list) - Get detailed metadata for Worker or Edge Nodes
+- [restart](docs/sdks/nodes/README.md#restart) - Restart Worker or Edge Nodes
 
 #### [Nodes.Summaries](docs/sdks/summaries/README.md)
 
-* [get](docs/sdks/summaries/README.md#get) - Get a summary of the Distributed deployment for a specific product
+- [get](docs/sdks/summaries/README.md#get) - Get a summary of the Distributed deployment for a specific product
 
 ### [Packs](docs/sdks/packs/README.md)
 
-* [install](docs/sdks/packs/README.md#install) - Install a Pack
-* [list](docs/sdks/packs/README.md#list) - List all Packs
-* [upload](docs/sdks/packs/README.md#upload) - Upload a Pack file
-* [delete](docs/sdks/packs/README.md#delete) - Uninstall a Pack
-* [get](docs/sdks/packs/README.md#get) - Get a Pack
-* [update](docs/sdks/packs/README.md#update) - Upgrade a Pack
+- [install](docs/sdks/packs/README.md#install) - Install a Pack
+- [list](docs/sdks/packs/README.md#list) - List all Packs
+- [upload](docs/sdks/packs/README.md#upload) - Upload a Pack file
+- [delete](docs/sdks/packs/README.md#delete) - Uninstall a Pack
+- [get](docs/sdks/packs/README.md#get) - Get a Pack
+- [update](docs/sdks/packs/README.md#update) - Upgrade a Pack
 
 #### [Packs.Destinations](docs/sdks/packsdestinations/README.md)
 
-* [list](docs/sdks/packsdestinations/README.md#list) - List all Destinations within a Pack
-* [create](docs/sdks/packsdestinations/README.md#create) - Create a Destination within a Pack
-* [get](docs/sdks/packsdestinations/README.md#get) - Get a Destination within a Pack
-* [update](docs/sdks/packsdestinations/README.md#update) - Update a Destination within a Pack
-* [delete](docs/sdks/packsdestinations/README.md#delete) - Delete a Destination within a Pack
+- [list](docs/sdks/packsdestinations/README.md#list) - List all Destinations within a Pack
+- [create](docs/sdks/packsdestinations/README.md#create) - Create a Destination within a Pack
+- [get](docs/sdks/packsdestinations/README.md#get) - Get a Destination within a Pack
+- [update](docs/sdks/packsdestinations/README.md#update) - Update a Destination within a Pack
+- [delete](docs/sdks/packsdestinations/README.md#delete) - Delete a Destination within a Pack
 
 ##### [Packs.Destinations.Pq](docs/sdks/packsdestinationspq/README.md)
 
-* [clear](docs/sdks/packsdestinationspq/README.md#clear) - Clear the persistent queue for a Destination within a Pack
-* [get](docs/sdks/packsdestinationspq/README.md#get) - Get information about the latest job to clear the persistent queue for a Destination within a Pack
+- [clear](docs/sdks/packsdestinationspq/README.md#clear) - Clear the persistent queue for a Destination within a Pack
+- [get](docs/sdks/packsdestinationspq/README.md#get) - Get information about the latest job to clear the persistent queue for a Destination within a Pack
 
 ##### [Packs.Destinations.Samples](docs/sdks/packssamples/README.md)
 
-* [get](docs/sdks/packssamples/README.md#get) - Get sample event data for a Destination within a Pack
-* [create](docs/sdks/packssamples/README.md#create) - Send sample event data to a Destination within a Pack
+- [get](docs/sdks/packssamples/README.md#get) - Get sample event data for a Destination within a Pack
+- [create](docs/sdks/packssamples/README.md#create) - Send sample event data to a Destination within a Pack
 
 ##### [Packs.Destinations.Statuses](docs/sdks/packsdestinationsstatuses/README.md)
 
-* [get](docs/sdks/packsdestinationsstatuses/README.md#get) - Get the status of a Destination within a Pack
-* [list](docs/sdks/packsdestinationsstatuses/README.md#list) - List the status of all Destinations within a Pack
+- [get](docs/sdks/packsdestinationsstatuses/README.md#get) - Get the status of a Destination within a Pack
+- [list](docs/sdks/packsdestinationsstatuses/README.md#list) - List the status of all Destinations within a Pack
 
 #### [Packs.Pipelines](docs/sdks/packspipelines/README.md)
 
-* [create](docs/sdks/packspipelines/README.md#create) - Create a Pipeline within a Pack
-* [list](docs/sdks/packspipelines/README.md#list) - List all Pipelines within a Pack
-* [delete](docs/sdks/packspipelines/README.md#delete) - Delete a Pipeline within a Pack
-* [get](docs/sdks/packspipelines/README.md#get) - Get a Pipeline within a Pack
-* [update](docs/sdks/packspipelines/README.md#update) - Update a Pipeline within a Pack
+- [create](docs/sdks/packspipelines/README.md#create) - Create a Pipeline within a Pack
+- [list](docs/sdks/packspipelines/README.md#list) - List all Pipelines within a Pack
+- [delete](docs/sdks/packspipelines/README.md#delete) - Delete a Pipeline within a Pack
+- [get](docs/sdks/packspipelines/README.md#get) - Get a Pipeline within a Pack
+- [update](docs/sdks/packspipelines/README.md#update) - Update a Pipeline within a Pack
 
 #### [Packs.Routes](docs/sdks/packsroutes/README.md)
 
-* [get](docs/sdks/packsroutes/README.md#get) - Get a Routing table within a Pack
-* [update](docs/sdks/packsroutes/README.md#update) - Update a Route within a Pack
-* [list](docs/sdks/packsroutes/README.md#list) - List all Routes within a Pack
-* [append](docs/sdks/packsroutes/README.md#append) - Add a Route to the end of the Routing table within a Pack
+- [get](docs/sdks/packsroutes/README.md#get) - Get a Routing table within a Pack
+- [update](docs/sdks/packsroutes/README.md#update) - Update a Route within a Pack
+- [list](docs/sdks/packsroutes/README.md#list) - List all Routes within a Pack
+- [append](docs/sdks/packsroutes/README.md#append) - Add a Route to the end of the Routing table within a Pack
 
 #### [Packs.Sources](docs/sdks/packssources/README.md)
 
-* [list](docs/sdks/packssources/README.md#list) - List all Sources within a Pack
-* [create](docs/sdks/packssources/README.md#create) - Create a Source within a Pack
-* [get](docs/sdks/packssources/README.md#get) - Get a Source within a Pack
-* [update](docs/sdks/packssources/README.md#update) - Update a Source within a Pack
-* [delete](docs/sdks/packssources/README.md#delete) - Delete a Source within a Pack
+- [list](docs/sdks/packssources/README.md#list) - List all Sources within a Pack
+- [create](docs/sdks/packssources/README.md#create) - Create a Source within a Pack
+- [get](docs/sdks/packssources/README.md#get) - Get a Source within a Pack
+- [update](docs/sdks/packssources/README.md#update) - Update a Source within a Pack
+- [delete](docs/sdks/packssources/README.md#delete) - Delete a Source within a Pack
 
 ##### [Packs.Sources.HecTokens](docs/sdks/packshectokens/README.md)
 
-* [create](docs/sdks/packshectokens/README.md#create) - Add an HEC token and optional metadata to a Splunk HEC Source within a Pack
-* [update](docs/sdks/packshectokens/README.md#update) - Update metadata for an HEC token for a Splunk HEC Source within a Pack
+- [create](docs/sdks/packshectokens/README.md#create) - Add an HEC token and optional metadata to a Splunk HEC Source within a Pack
+- [update](docs/sdks/packshectokens/README.md#update) - Update metadata for an HEC token for a Splunk HEC Source within a Pack
 
 ##### [Packs.Sources.Pq](docs/sdks/packssourcespq/README.md)
 
-* [clear](docs/sdks/packssourcespq/README.md#clear) - Clear the persistent queue for a Source within a Pack
-* [get](docs/sdks/packssourcespq/README.md#get) - Get information about the latest job to clear the persistent queue for a Source within a Pack
+- [clear](docs/sdks/packssourcespq/README.md#clear) - Clear the persistent queue for a Source within a Pack
+- [get](docs/sdks/packssourcespq/README.md#get) - Get information about the latest job to clear the persistent queue for a Source within a Pack
 
 ##### [Packs.Sources.Statuses](docs/sdks/packssourcesstatuses/README.md)
 
-* [get](docs/sdks/packssourcesstatuses/README.md#get) - Get the status of a Source within a Pack
-* [list](docs/sdks/packssourcesstatuses/README.md#list) - List the status of all Sources within a Pack
+- [get](docs/sdks/packssourcesstatuses/README.md#get) - Get the status of a Source within a Pack
+- [list](docs/sdks/packssourcesstatuses/README.md#list) - List the status of all Sources within a Pack
 
 ### [Pipelines](docs/sdks/pipelines/README.md)
 
-* [create](docs/sdks/pipelines/README.md#create) - Create a Pipeline
-* [list](docs/sdks/pipelines/README.md#list) - List all Pipelines
-* [delete](docs/sdks/pipelines/README.md#delete) - Delete a Pipeline
-* [get](docs/sdks/pipelines/README.md#get) - Get a Pipeline
-* [update](docs/sdks/pipelines/README.md#update) - Update a Pipeline
+- [create](docs/sdks/pipelines/README.md#create) - Create a Pipeline
+- [list](docs/sdks/pipelines/README.md#list) - List all Pipelines
+- [delete](docs/sdks/pipelines/README.md#delete) - Delete a Pipeline
+- [get](docs/sdks/pipelines/README.md#get) - Get a Pipeline
+- [update](docs/sdks/pipelines/README.md#update) - Update a Pipeline
 
 ### [Routes](docs/sdks/routessdk/README.md)
 
-* [get](docs/sdks/routessdk/README.md#get) - Get a Routing table
-* [update](docs/sdks/routessdk/README.md#update) - Update a Route
-* [list](docs/sdks/routessdk/README.md#list) - List all Routes
-* [append](docs/sdks/routessdk/README.md#append) - Add a Route to the end of the Routing table
+- [get](docs/sdks/routessdk/README.md#get) - Get a Routing table
+- [update](docs/sdks/routessdk/README.md#update) - Update a Route
+- [list](docs/sdks/routessdk/README.md#list) - List all Routes
+- [append](docs/sdks/routessdk/README.md#append) - Add a Route to the end of the Routing table
 
 ### [Sources](docs/sdks/sources/README.md)
 
-* [list](docs/sdks/sources/README.md#list) - List all Sources
-* [create](docs/sdks/sources/README.md#create) - Create a Source
-* [get](docs/sdks/sources/README.md#get) - Get a Source
-* [update](docs/sdks/sources/README.md#update) - Update a Source
-* [delete](docs/sdks/sources/README.md#delete) - Delete a Source
+- [list](docs/sdks/sources/README.md#list) - List all Sources
+- [create](docs/sdks/sources/README.md#create) - Create a Source
+- [get](docs/sdks/sources/README.md#get) - Get a Source
+- [update](docs/sdks/sources/README.md#update) - Update a Source
+- [delete](docs/sdks/sources/README.md#delete) - Delete a Source
 
 #### [Sources.HecTokens](docs/sdks/hectokens/README.md)
 
-* [create](docs/sdks/hectokens/README.md#create) - Add an HEC token and optional metadata to a Splunk HEC Source
-* [update](docs/sdks/hectokens/README.md#update) - Update metadata for an HEC token for a Splunk HEC Source
+- [create](docs/sdks/hectokens/README.md#create) - Add an HEC token and optional metadata to a Splunk HEC Source
+- [update](docs/sdks/hectokens/README.md#update) - Update metadata for an HEC token for a Splunk HEC Source
 
 #### [Sources.Pq](docs/sdks/sourcespq/README.md)
 
-* [clear](docs/sdks/sourcespq/README.md#clear) - Clear the persistent queue for a Source
-* [get](docs/sdks/sourcespq/README.md#get) - Get information about the latest job to clear the persistent queue for a Source
+- [clear](docs/sdks/sourcespq/README.md#clear) - Clear the persistent queue for a Source
+- [get](docs/sdks/sourcespq/README.md#get) - Get information about the latest job to clear the persistent queue for a Source
 
 #### [Sources.Statuses](docs/sdks/sourcesstatuses/README.md)
 
-* [get](docs/sdks/sourcesstatuses/README.md#get) - Get the status of a Source
-* [list](docs/sdks/sourcesstatuses/README.md#list) - List the status of all Sources
+- [get](docs/sdks/sourcesstatuses/README.md#get) - Get the status of a Source
+- [list](docs/sdks/sourcesstatuses/README.md#list) - List the status of all Sources
 
 ### [System.Captures](docs/sdks/captures/README.md)
 
-* [create](docs/sdks/captures/README.md#create) - Capture live incoming data
+- [create](docs/sdks/captures/README.md#create) - Capture live incoming data
 
 ### [System.Settings](docs/sdks/settings/README.md)
 
-* [restart](docs/sdks/settings/README.md#restart) - Restart the Cribl server
+- [restart](docs/sdks/settings/README.md#restart) - Restart the Cribl server
 
 #### [System.Settings.Cribl](docs/sdks/cribl/README.md)
 
-* [list](docs/sdks/cribl/README.md#list) - Get Cribl system settings
-* [update](docs/sdks/cribl/README.md#update) - Update Cribl system settings
+- [list](docs/sdks/cribl/README.md#list) - Get Cribl system settings
+- [update](docs/sdks/cribl/README.md#update) - Update Cribl system settings
 
 ### [Versions.Branches](docs/sdks/branches/README.md)
 
-* [list](docs/sdks/branches/README.md#list) - List all branches in the Git repository used for Cribl configuration
-* [get](docs/sdks/branches/README.md#get) - Get the name of the Git branch that the Cribl configuration is checked out to
+- [list](docs/sdks/branches/README.md#list) - List all branches in the Git repository used for Cribl configuration
+- [get](docs/sdks/branches/README.md#get) - Get the name of the Git branch that the Cribl configuration is checked out to
 
 ### [Versions.Commits](docs/sdks/commits/README.md)
 
-* [create](docs/sdks/commits/README.md#create) - Create a new commit for pending changes to the Cribl configuration
-* [diff](docs/sdks/commits/README.md#diff) - Get the diff for a commit
-* [list](docs/sdks/commits/README.md#list) - List the commit history
-* [push](docs/sdks/commits/README.md#push) - Push local commits to the remote repository
-* [revert](docs/sdks/commits/README.md#revert) - Revert a commit in the local repository
-* [get](docs/sdks/commits/README.md#get) - Get the diff and log message for a commit
-* [undo](docs/sdks/commits/README.md#undo) - Discard uncommitted (staged) changes
+- [create](docs/sdks/commits/README.md#create) - Create a new commit for pending changes to the Cribl configuration
+- [diff](docs/sdks/commits/README.md#diff) - Get the diff for a commit
+- [list](docs/sdks/commits/README.md#list) - List the commit history
+- [push](docs/sdks/commits/README.md#push) - Push local commits to the remote repository
+- [revert](docs/sdks/commits/README.md#revert) - Revert a commit in the local repository
+- [get](docs/sdks/commits/README.md#get) - Get the diff and log message for a commit
+- [undo](docs/sdks/commits/README.md#undo) - Discard uncommitted (staged) changes
 
 #### [Versions.Commits.Files](docs/sdks/files/README.md)
 
-* [count](docs/sdks/files/README.md#count) - Get a count of files that changed since a commit
-* [list](docs/sdks/files/README.md#list) - Get the names and statuses of files that changed since a commit
+- [count](docs/sdks/files/README.md#count) - Get a count of files that changed since a commit
+- [list](docs/sdks/files/README.md#list) - Get the names and statuses of files that changed since a commit
 
 ### [Versions.Configs](docs/sdks/versionsconfigs/README.md)
 
-* [get](docs/sdks/versionsconfigs/README.md#get) - Get the configuration and status for the Git integration
+- [get](docs/sdks/versionsconfigs/README.md#get) - Get the configuration and status for the Git integration
 
 ### [Versions.Statuses](docs/sdks/versionsstatuses/README.md)
 
-* [get](docs/sdks/versionsstatuses/README.md#get) - Get the status of the current working tree
+- [get](docs/sdks/versionsstatuses/README.md#get) - Get the status of the current working tree
 
 </details>
 <!-- End Available Resources and Operations [operations] -->
 
 <!-- Start Json Streaming [jsonl] -->
+
 ## Json Streaming
 
 Json Streaming ([jsonl][jsonl-format] / [x-ndjson][x-ndjson]) content type can be used to stream content from certain operations. These operations will expose the stream as [Generator][generator] that
@@ -495,9 +503,11 @@ with CriblControlPlane(
 [x-ndjson]: https://github.com/ndjson/ndjson-spec
 [generator]: https://book.pythontips.com/en/latest/generators.html
 [context-manager]: https://book.pythontips.com/en/latest/context_managers.html
+
 <!-- End Json Streaming [jsonl] -->
 
 <!-- Start Pagination [pagination] -->
+
 ## Pagination
 
 Some of the endpoints in this SDK support pagination. To use pagination, you make your SDK calls as usual, but the
@@ -505,6 +515,7 @@ returned response object will have a `Next` method that can be called to pull do
 return value of `Next` is `None`, then there are no more pages to be fetched.
 
 Here's an example of one such pagination call:
+
 ```python
 from cribl_control_plane import CriblControlPlane, models
 import os
@@ -525,17 +536,17 @@ with CriblControlPlane(
         res = res.next()
 
 ```
+
 <!-- End Pagination [pagination] -->
 
 <!-- Start File uploads [file-upload] -->
+
 ## File uploads
 
 Certain SDK methods accept file objects as part of a request body or multi-part request. It is possible and typically recommended to upload files as a stream rather than reading the entire contents into memory. This avoids excessive memory consumption and potentially crashing with out-of-memory errors when working with very large files. The following example demonstrates how to attach a file stream to a request.
 
 > [!TIP]
->
-> For endpoints that handle file uploads bytes arrays can also be used. However, using streams is recommended for large files.
->
+> For endpoints that handle file uploads byte arrays can also be used. However, using streams is recommended for large files.
 
 ```python
 from cribl_control_plane import CriblControlPlane, models
@@ -555,6 +566,7 @@ with CriblControlPlane(
     print(res)
 
 ```
+
 <!-- End File uploads [file-upload] -->
 
 ## Retries
@@ -562,6 +574,7 @@ with CriblControlPlane(
 Some of the endpoints in this SDK support retries. If you use the SDK without any configuration, it will fall back to the default retry strategy provided by the API. However, the default retry strategy can be overridden on a per-operation basis, or across the entire SDK.
 
 To change the default retry strategy for a single API call, simply provide a `RetryConfig` object to the call:
+
 ```python
 from cribl_control_plane import CriblControlPlane, models
 from cribl_control_plane.utils import BackoffStrategy, RetryConfig
@@ -579,6 +592,7 @@ with CriblControlPlane(
 ```
 
 If you'd like to override the default retry strategy for all operations that support retries, you can use the `retry_config` optional parameter when initializing the SDK:
+
 ```python
 from cribl_control_plane import CriblControlPlane, models
 from cribl_control_plane.utils import BackoffStrategy, RetryConfig
@@ -594,6 +608,7 @@ with CriblControlPlane(
     res = ccp_client.sources.list(server_url="https://api.example.com/m/my-group")
     print(res)
 ```
+
 <!-- No End Retries [retries] -->
 
 ## Error Handling
@@ -610,6 +625,7 @@ with CriblControlPlane(
 | `err.data`         |                  | Optional. Some errors may contain structured data. [See Error Classes](#error-classes). |
 
 ### Example
+
 ```python
 from cribl_control_plane import CriblControlPlane, errors, models
 import os
@@ -638,37 +654,43 @@ with CriblControlPlane(
 ```
 
 ### Error Classes
+
 **Primary errors:**
-* [`CriblControlPlaneError`](./src/cribl_control_plane/errors/criblcontrolplaneerror.py): The base class for HTTP error responses.
-  * [`Error`](./src/cribl_control_plane/errors/error.py): Unexpected error. Status code `500`.
+
+- [`CriblControlPlaneError`](./src/cribl_control_plane/errors/criblcontrolplaneerror.py): The base class for HTTP error responses.
+  - [`Error`](./src/cribl_control_plane/errors/error.py): Unexpected error. Status code `500`.
 
 <details><summary>Less common errors (6)</summary>
 
 <br />
 
 **Network errors:**
-* [`httpx.RequestError`](https://www.python-httpx.org/exceptions/#httpx.RequestError): Base class for request errors.
-    * [`httpx.ConnectError`](https://www.python-httpx.org/exceptions/#httpx.ConnectError): HTTP client was unable to make a request to a server.
-    * [`httpx.TimeoutException`](https://www.python-httpx.org/exceptions/#httpx.TimeoutException): HTTP request timed out.
 
+- [`httpx.RequestError`](https://www.python-httpx.org/exceptions/#httpx.RequestError): Base class for request errors.
+  - [`httpx.ConnectError`](https://www.python-httpx.org/exceptions/#httpx.ConnectError): HTTP client was unable to make a request to a server.
+  - [`httpx.TimeoutException`](https://www.python-httpx.org/exceptions/#httpx.TimeoutException): HTTP request timed out.
 
 **Inherit from [`CriblControlPlaneError`](./src/cribl_control_plane/errors/criblcontrolplaneerror.py)**:
-* [`HealthServerStatusError`](./src/cribl_control_plane/errors/healthserverstatuserror.py): Healthy status. Status code `420`. Applicable to 1 of 72 methods.*
-* [`ResponseValidationError`](./src/cribl_control_plane/errors/responsevalidationerror.py): Type mismatch between the response data and the expected Pydantic model. Provides access to the Pydantic validation error via the `cause` attribute.
+
+- [`HealthServerStatusError`](./src/cribl_control_plane/errors/healthserverstatuserror.py): Healthy status. Status code `420`. Applicable to 1 of 72 methods.\*
+- [`ResponseValidationError`](./src/cribl_control_plane/errors/responsevalidationerror.py): Type mismatch between the response data and the expected Pydantic model. Provides access to the Pydantic validation error via the `cause` attribute.
 
 </details>
 
 \* Check [the method documentation](#available-resources-and-operations) to see if the error is applicable.
+
 <!-- No Error Handling [errors] -->
 
 <!-- Start Custom HTTP Client [http-client] -->
+
 ## Custom HTTP Client
 
-The Python SDK makes API calls using the [httpx](https://www.python-httpx.org/) HTTP library.  In order to provide a convenient way to configure timeouts, cookies, proxies, custom headers, and other low-level configuration, you can initialize the SDK client with your own HTTP client instance.
-Depending on whether you are using the sync or async version of the SDK, you can pass an instance of `HttpClient` or `AsyncHttpClient` respectively, which are Protocol's ensuring that the client has the necessary methods to make API calls.
+The Python SDK makes API calls using the [httpx](https://www.python-httpx.org/) HTTP library. In order to provide a convenient way to configure timeouts, cookies, proxies, custom headers, and other low-level configuration, you can initialize the SDK client with your own HTTP client instance.
+Depending on whether you are using the sync or async version of the SDK, you can pass an instance of `HttpClient` or `AsyncHttpClient` respectively, which are Protocols ensuring that the client has the necessary methods to make API calls.
 This allows you to wrap the client with your own custom logic, such as adding custom headers, logging, or error handling, or you can just pass an instance of `httpx.Client` or `httpx.AsyncClient` directly.
 
 For example, you could specify a header for every request that this sdk makes as follows:
+
 ```python
 from cribl_control_plane import CriblControlPlane
 import httpx
@@ -678,6 +700,7 @@ s = CriblControlPlane(client=http_client)
 ```
 
 or you could wrap the client with your own custom logic:
+
 ```python
 from cribl_control_plane import CriblControlPlane
 from cribl_control_plane.httpclient import AsyncHttpClient
@@ -740,9 +763,11 @@ class CustomClient(AsyncHttpClient):
 
 s = CriblControlPlane(async_client=CustomClient(httpx.AsyncClient()))
 ```
+
 <!-- End Custom HTTP Client [http-client] -->
 
 <!-- Start Resource Management [resource-management] -->
+
 ## Resource Management
 
 The `CriblControlPlane` class implements the context manager protocol and registers a finalizer function to close the underlying sync and async HTTPX clients it uses under the hood. This will close HTTP connections, release memory and free up other resources held by the SDK. In short-lived Python programs and notebooks that make a few SDK method calls, resource management may not be a concern. However, in longer-lived programs, it is beneficial to create a single SDK instance via a [context manager][context-manager] and reuse it across the application.
@@ -774,14 +799,17 @@ async def amain():
     ) as ccp_client:
         # Rest of application here...
 ```
+
 <!-- End Resource Management [resource-management] -->
 
 <!-- Start Debugging [debug] -->
+
 ## Debugging
 
 You can setup your SDK to emit debug logs for SDK requests and responses.
 
 You can pass your own logger class directly into your SDK.
+
 ```python
 from cribl_control_plane import CriblControlPlane
 import logging
@@ -791,6 +819,7 @@ s = CriblControlPlane(server_url="https://example.com", debug_logger=logging.get
 ```
 
 You can also enable a default debug logger by setting an environment variable `CRIBLCONTROLPLANE_DEBUG` to true.
+
 <!-- End Debugging [debug] -->
 
 <!-- Placeholder for Future Speakeasy SDK Sections -->
