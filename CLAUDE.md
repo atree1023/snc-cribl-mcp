@@ -8,7 +8,7 @@ MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and 
 
 **Key components:**
 
-- Nine tools: list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, copy_resource_config, validate_resource_sync
+- Eleven tools: list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync
 - Seven resources mirroring tools (cribl://groups, cribl://sources, etc.)
 - Four prompts for common Cribl workflows
 - Token-based authentication with automatic refresh
@@ -69,6 +69,13 @@ uv run pyright                             # then type check
 
 - Distributed Cribl requires `/m/{group_id}/` in URLs
 - Always pass `server_url=f"{base}/m/{group_id}"` to SDK client factory
+
+**Consolidated config object tooling:**
+
+- `get_config_objects` is the preferred read path for broad queries because it returns bounded summaries, cursors, and optional dependency references.
+- `validate_config_objects` wraps the existing sync validation path with semantic comparison so environment identity differences are visible but non-blocking.
+- Keep using SDK-backed collectors when available; use direct HTTP collectors for unsupported SDK endpoints such as breakers and lookups.
+- Semantic validation should preserve target-local identity values such as hostnames, endpoint server lists, generated IDs, credential references, and volatile metadata.
 
 ## Adding a New Tool
 

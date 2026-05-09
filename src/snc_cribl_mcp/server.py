@@ -40,6 +40,7 @@ from .operations.routes import collect_product_routes
 from .operations.sources import collect_product_sources
 from .operations.sync import copy_resource_config, validate_resource_sync
 from .tools.copy_resource_config import register as register_copy_resource_config
+from .tools.get_config_objects import register as register_get_config_objects
 from .tools.list_breakers import register as register_list_breakers
 from .tools.list_destinations import register as register_list_destinations
 from .tools.list_groups import register as register_list_groups
@@ -47,6 +48,7 @@ from .tools.list_lookups import register as register_list_lookups
 from .tools.list_pipelines import register as register_list_pipelines
 from .tools.list_routes import register as register_list_routes
 from .tools.list_sources import register as register_list_sources
+from .tools.validate_config_objects import register as register_validate_config_objects
 from .tools.validate_resource_sync import register as register_validate_resource_sync
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -130,8 +132,10 @@ def _register_capabilities() -> None:
     register_list_routes(app, deps=deps)
     register_list_breakers(app, deps=deps)
     register_list_lookups(app, deps=deps)
+    register_get_config_objects(app, deps=deps)
     register_copy_resource_config(app, impl=copy_resource_config)
     register_validate_resource_sync(app, impl=validate_resource_sync)
+    register_validate_config_objects(app, impl=validate_resource_sync)
     resources.register(app, deps=deps)
     prompts.register(app)
 

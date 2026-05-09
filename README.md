@@ -137,7 +137,7 @@ uv run python -m snc_cribl_mcp.server
 
 ### Available MCP Tools
 
-The server exposes nine MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`):
+The server exposes eleven MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`):
 
 #### `list_groups`
 
@@ -180,6 +180,18 @@ Lists all configured event breakers across all groups and products.
 Lists all configured lookups across all groups and products.
 
 - **Returns:** JSON containing lookups organized by product and group, including lookup IDs, file info, and configurations.
+
+#### `get_config_objects`
+
+Queries supported config objects through one bounded read tool: groups, sources, destinations, pipelines, routes, breakers, and lookups.
+
+- **Returns:** Compact summaries by default, including product, group, ID, type, enabled state, optional dependency references, truncation state, and a cursor for follow-up calls. Use `detail="full"` with filters such as `selector`, `product`, and `group_id` to retrieve selected payloads without flooding the MCP response.
+
+#### `validate_config_objects`
+
+Semantically compares groups, sources, destinations, pipelines, or routes between two configured leaders.
+
+- **Returns:** Functional validation results that classify differences as blocking functional drift, non-blocking environment identity differences, or volatile metadata differences. Hostnames, endpoint server lists, generated IDs, credential references, and timestamps are reported but do not count as functional drift.
 
 #### `copy_resource_config`
 
@@ -236,7 +248,9 @@ snc_cribl_mcp/
 │   │   ├── routes.py         # Route collection helpers
 │   │   ├── breakers.py       # Event breaker collection helpers
 │   │   ├── lookups.py        # Lookup collection helpers
+│   │   ├── config_objects.py # Consolidated config object response shaping
 │   │   ├── resource_actions.py  # Context-free CRUD helpers over the SDK
+│   │   ├── semantic_diff.py  # Functional vs environment identity comparison
 │   │   ├── sync.py           # Cross-leader copy and validation helpers
 │   │   └── validation_errors.py  # SDK validation error handling
 │   ├── tools/            # MCP tool registrations
@@ -249,6 +263,8 @@ snc_cribl_mcp/
 │   │   ├── list_routes.py
 │   │   ├── list_breakers.py
 │   │   ├── list_lookups.py
+│   │   ├── get_config_objects.py
+│   │   ├── validate_config_objects.py
 │   │   ├── sync_common.py
 │   │   └── validate_resource_sync.py
 │   ├── config.py         # Configuration management
