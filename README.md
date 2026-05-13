@@ -86,8 +86,8 @@ oauth_audience = "https://api.cribl.cloud"
 
 [golden.oak]
 url = "http://localhost:19000"
-username = "admin"
-password = "${GOLDEN_OAK_PASS}"
+# Optional for on-prem; defaults to your local macOS user.
+# username = "admin"
 
 [cribl.cloud]
 url = "https://<workspace>-<org>.cribl.cloud"
@@ -95,8 +95,24 @@ client_id = "your-client-id"
 client_secret = "${CRIBL_CLOUD_SECRET}"
 ```
 
-If you use `${VAR}` placeholders, set the values in a `.env` file (or your shell environment). Only placeholder
-expansion uses environment variables; configuration values are otherwise read directly from `config.toml`.
+For on-prem servers, omit `password` to use the local credential chain:
+
+1. Use the configured `username`, or default to the locally logged-in macOS user.
+2. Read the password from the macOS Keychain via Python `keyring`, using service
+   `snc-cribl-mcp:<server-name>` and the resolved username. For `[golden.oak]`, the service is
+   `snc-cribl-mcp:golden.oak`.
+3. Fall back to per-server environment variables loaded from `.env` or your shell. For `[golden.oak]`,
+   the resolver checks `SNC_CRIBL_MCP_GOLDEN_OAK_PASSWORD`, `CRIBL_GOLDEN_OAK_PASSWORD`,
+   `GOLDEN_OAK_PASSWORD`, then `GOLDEN_OAK_PASS`.
+
+To store a local Keychain password:
+
+```bash
+uv run keyring set snc-cribl-mcp:golden.oak "$(whoami)"
+```
+
+If you use `${VAR}` placeholders, set the values in a `.env` file (or your shell environment). Explicit
+placeholder values still take precedence over keychain lookup and must exist when referenced.
 
 When a tool call omits a server name, the first non-`[defaults]` section in `config.toml` is used.
 
@@ -111,13 +127,13 @@ Logging is still controlled via the `LOG_LEVEL` environment variable (default: `
 | `[defaults]` | `oauth_token_url` | OAuth token URL for Cribl.Cloud                            | No       |
 | `[defaults]` | `oauth_audience`  | OAuth audience for Cribl.Cloud                             | No       |
 | `[server]`   | `url`             | Base URL of your Cribl deployment (auto-appends `/api/v1`) | Yes      |
-| `[server]`   | `username`        | On-prem username                                           | Yes\*    |
-| `[server]`   | `password`        | On-prem password                                           | Yes\*    |
+| `[server]`   | `username`        | On-prem username; defaults to local macOS user             | No\*     |
+| `[server]`   | `password`        | On-prem password; defaults to Keychain/env lookup          | No\*     |
 | `[server]`   | `client_id`       | Cribl.Cloud client ID                                      | Yes\*    |
 | `[server]`   | `client_secret`   | Cribl.Cloud client secret                                  | Yes\*    |
 
-\*Cribl.Cloud URLs (ending in `.cribl.cloud`) require `client_id`/`client_secret`. On-prem URLs require
-`username`/`password`.
+\*Cribl.Cloud URLs (ending in `.cribl.cloud`) require `client_id`/`client_secret`. On-prem URLs ultimately require a
+resolved username/password pair, but the password can come from macOS Keychain or a per-server environment fallback.
 
 ## Usage
 
@@ -316,7 +332,9 @@ uv run ruff format
 The server retrieves bearer tokens automatically based on the configured server type:
 
 - **Cribl.Cloud**: Uses OAuth client credentials (`client_id`/`client_secret`) and refreshes tokens automatically.
-- **On-prem**: Uses `username`/`password` to fetch bearer tokens and refreshes using the JWT `exp` claim when available.
+- **On-prem**: Uses a resolved `username`/`password` pair to fetch bearer tokens, defaulting to the local macOS user and
+  macOS Keychain before falling back to per-server environment variables. It refreshes using the JWT `exp` claim when
+  available.
 
 Tokens expire based on your Cribl settings (default: 1 hour on-prem, 24 hours on Cribl.Cloud). For production use, configure TLS and use HTTPS.
 

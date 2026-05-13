@@ -7,6 +7,8 @@ with ``[defaults]`` and selected by name at runtime.
 
 from __future__ import annotations
 
+import getpass
+import logging
 import os
 import re
 import tomllib
@@ -14,7 +16,9 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
+import keyring
 from dotenv import load_dotenv
+from keyring.errors import KeyringError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 # Load variables from a local .env file for development convenience
@@ -22,6 +26,9 @@ load_dotenv()
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.toml"
 _ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)\}")
+_KEYRING_SERVICE_PREFIX = "snc-cribl-mcp"
+
+logger = logging.getLogger("snc_cribl_mcp.config")
 
 type TomlPrimitive = str | int | float | bool | None
 type TomlValue = TomlPrimitive | list[TomlValue] | dict[str, TomlValue]
@@ -156,6 +163,132 @@ def _collect_server_tables(source: TomlTable, *, prefix: str = "") -> dict[str, 
     return servers
 
 
+def _non_empty_string(value: object) -> str | None:
+    """Return a stripped string when the value is a non-empty string."""
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _get_local_username() -> str | None:
+    """Return the current local login username, if available."""
+    try:
+        return _non_empty_string(getpass.getuser())
+    except KeyError, OSError, RuntimeError:
+        logger.debug("Could not resolve the local username.", exc_info=True)
+        return None
+
+
+def _keyring_service_name(server_name: str | None, base_url: str) -> str:
+    """Return the keyring service name for a Cribl server."""
+    identifier = _non_empty_string(server_name) or _non_empty_string(urlparse(base_url).hostname) or base_url
+    return f"{_KEYRING_SERVICE_PREFIX}:{identifier}"
+
+
+def _get_keyring_password(service_name: str, username: str) -> str | None:
+    """Return a stored password from the active keyring backend, if available."""
+    try:
+        password = keyring.get_password(service_name, username)
+    except KeyringError, OSError, RuntimeError:
+        logger.debug(
+            "Could not read password from keyring service '%s' for username '%s'.",
+            service_name,
+            username,
+            exc_info=True,
+        )
+        return None
+
+    return password or None
+
+
+def _server_env_fragment(server_name: str) -> str:
+    """Return the environment-variable fragment for a server name."""
+    return re.sub(r"[^A-Z0-9]+", "_", server_name.upper()).strip("_")
+
+
+def _password_env_names(server_name: str) -> tuple[str, ...]:
+    """Return per-server environment variable names for password fallback."""
+    fragment = _server_env_fragment(server_name)
+    if not fragment:
+        return ()
+
+    candidates = (
+        f"SNC_CRIBL_MCP_{fragment}_PASSWORD",
+        f"CRIBL_{fragment}_PASSWORD",
+        f"{fragment}_PASSWORD",
+        f"{fragment}_PASS",
+    )
+    return tuple(dict.fromkeys(candidates))
+
+
+def _get_env_password(server_name: str) -> str | None:
+    """Return the first configured per-server environment password."""
+    for env_name in _password_env_names(server_name):
+        password = os.getenv(env_name)
+        if password:
+            return password
+    return None
+
+
+def _on_prem_base_url_for_password_resolution(values: TomlTable) -> str | None:
+    """Return a base URL when the server should use on-prem password fallback."""
+    raw_url = _non_empty_string(values.get("url"))
+    if raw_url is None:
+        return None
+
+    try:
+        base_url = _normalize_base_url(raw_url)
+    except ValueError:
+        return None
+
+    if _is_cloud_url(base_url) or _non_empty_string(values.get("client_id")) or _non_empty_string(values.get("client_secret")):
+        return None
+
+    return base_url
+
+
+def _missing_on_prem_password_message(server_name: str, service_name: str, username: str | None) -> str:
+    """Return a clear missing password message for on-prem credential lookup."""
+    username_description = username or "<unavailable local user>"
+    env_names = ", ".join(_password_env_names(server_name))
+    msg = (
+        f"On-prem server '{server_name}' is missing a password. Tried macOS keychain service "
+        f"'{service_name}' for username '{username_description}'"
+    )
+    return f"{msg} and environment variables: {env_names}." if env_names else f"{msg}."
+
+
+def _resolve_on_prem_credentials(server_name: str, values: TomlTable) -> TomlTable:
+    """Resolve local-user, keyring, and environment credentials for on-prem servers."""
+    base_url = _on_prem_base_url_for_password_resolution(values)
+    if base_url is None:
+        return values
+
+    resolved: TomlTable = dict(values)
+    username = _non_empty_string(resolved.get("username")) or _get_local_username()
+    if username is not None:
+        resolved["username"] = username
+
+    password = _non_empty_string(resolved.get("password"))
+    service_name = _keyring_service_name(server_name, base_url)
+
+    if password is None and username is not None:
+        password = _get_keyring_password(service_name, username)
+        if password:
+            resolved["password"] = password
+
+    if password is None:
+        password = _get_env_password(server_name)
+        if password:
+            resolved["password"] = password
+
+    if _non_empty_string(resolved.get("password")) is None:
+        raise RuntimeError(_missing_on_prem_password_message(server_name, service_name, username))
+
+    return resolved
+
+
 def _load_config_data() -> TomlTable:
     """Load and expand the config.toml file.
 
@@ -214,6 +347,7 @@ def _load_configs() -> dict[str, CriblConfig]:
     configs: dict[str, CriblConfig] = {}
     for server_name, server_values in servers.items():
         merged: TomlTable = {**defaults, **server_values, "server_name": server_name}
+        merged = _resolve_on_prem_credentials(server_name, merged)
         try:
             configs[server_name] = CriblConfig.model_validate(merged)
         except ValidationError as exc:

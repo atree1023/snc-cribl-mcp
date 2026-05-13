@@ -153,8 +153,11 @@ Configuration file (`config.toml`) loaded by `src/snc_cribl_mcp/config.py`:
 - When no server is provided, the first non-`[defaults]` section is used as the default.
 - `url` is used as the base URL and auto-appends `/api/v1` if missing.
 - Cribl.Cloud URLs (ending in `.cribl.cloud`) require `client_id`/`client_secret`.
-- On-prem URLs require `username`/`password`.
-- `${VAR}` placeholders in `config.toml` expand using `.env` or environment variables.
+- On-prem URLs ultimately require a resolved `username`/`password`, but `username` defaults to the local macOS user and
+  `password` defaults to macOS Keychain service `snc-cribl-mcp:<server-name>` before per-server env fallbacks such as
+  `GOLDEN_OAK_PASS`.
+- `${VAR}` placeholders in `config.toml` expand using `.env` or environment variables and take precedence when set
+  explicitly.
 - Logging remains controlled via the `LOG_LEVEL` environment variable.
 
 ## File Locations
