@@ -83,11 +83,15 @@ verify_ssl = true
 timeout_ms = 10_000
 oauth_token_url = "https://login.cribl.cloud/oauth/token"
 oauth_audience = "https://api.cribl.cloud"
+# Optional for on-prem; defaults to snc-cribl-mcp:<server-name>.
+# keychain_name = "shared-cribl-login"
 
 [golden.oak]
 url = "http://localhost:19000"
 # Optional for on-prem; defaults to your local macOS user.
 # username = "admin"
+# Optional for on-prem; overrides the default Keychain service name.
+# keychain_name = "golden-oak-login"
 
 [cribl.cloud]
 url = "https://<workspace>-<org>.cribl.cloud"
@@ -99,8 +103,9 @@ For on-prem servers, omit `password` to use the local credential chain:
 
 1. Use the configured `username`, or default to the locally logged-in macOS user.
 2. Read the password from the macOS Keychain via Python `keyring`, using service
-   `snc-cribl-mcp:<server-name>` and the resolved username. For `[golden.oak]`, the service is
-   `snc-cribl-mcp:golden.oak`.
+   `keychain_name` when configured in `[defaults]` or the server section. If omitted, the service defaults to
+   `snc-cribl-mcp:<server-name>` and the resolved username. For `[golden.oak]`, the default service is
+   `snc-cribl-mcp:golden.oak`. A server-level `keychain_name` overrides `[defaults]`.
 3. Fall back to per-server environment variables loaded from `.env` or your shell. For `[golden.oak]`,
    the resolver checks `SNC_CRIBL_MCP_GOLDEN_OAK_PASSWORD`, `CRIBL_GOLDEN_OAK_PASSWORD`,
    `GOLDEN_OAK_PASSWORD`, then `GOLDEN_OAK_PASS`.
@@ -126,9 +131,11 @@ Logging is still controlled via the `LOG_LEVEL` environment variable (default: `
 | `[defaults]` | `timeout_ms`      | API request timeout in milliseconds                        | No       |
 | `[defaults]` | `oauth_token_url` | OAuth token URL for Cribl.Cloud                            | No       |
 | `[defaults]` | `oauth_audience`  | OAuth audience for Cribl.Cloud                             | No       |
+| `[defaults]` | `keychain_name`   | Shared macOS Keychain service name for on-prem passwords   | No       |
 | `[server]`   | `url`             | Base URL of your Cribl deployment (auto-appends `/api/v1`) | Yes      |
 | `[server]`   | `username`        | On-prem username; defaults to local macOS user             | No\*     |
 | `[server]`   | `password`        | On-prem password; defaults to Keychain/env lookup          | No\*     |
+| `[server]`   | `keychain_name`   | Per-server macOS Keychain service name override            | No       |
 | `[server]`   | `client_id`       | Cribl.Cloud client ID                                      | Yes\*    |
 | `[server]`   | `client_secret`   | Cribl.Cloud client secret                                  | Yes\*    |
 

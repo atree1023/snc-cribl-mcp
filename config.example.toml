@@ -5,6 +5,8 @@ verify_ssl = true
 timeout_ms = 10_000
 oauth_token_url = "https://login.cribl.cloud/oauth/token"
 oauth_audience = "https://api.cribl.cloud"
+# Optional shared macOS Keychain service name for on-prem passwords.
+# keychain_name = "shared-cribl-login"
 
 
 # Begin list of on-prem or cloud servers.
@@ -17,6 +19,8 @@ url = "http://localhost:19000"
 # username = "admin"
 # password is optional for on-prem and defaults to macOS Keychain service
 # "snc-cribl-mcp:onprem.server", then env fallbacks such as ONPREM_SERVER_PASS.
+# keychain_name is optional for on-prem and overrides the Keychain service name.
+# keychain_name = "onprem-server-login"
 
 [cribl.cloud]
 url = "https://your-organization-name.cribl.cloud"
