@@ -226,3 +226,31 @@ def test_semantic_validation_from_sync_result_handles_items_without_payloads() -
         "volatile_differences": [],
         "warnings": ["Source and target payloads were not available for semantic comparison."],
     }
+
+
+def test_semantic_validation_from_sync_result_is_not_in_sync_when_omitted_items_may_differ() -> None:
+    """Truncated validation output should not report semantic equivalence from returned items only."""
+    result = semantic_validation_from_sync_result(
+        "sources",
+        {
+            "resource_kind": "sources",
+            "in_sync": False,
+            "response_truncated": True,
+            "returned_item_count": 1,
+            "omitted_item_count": 2,
+            "items": [
+                {
+                    "item_id": "returned",
+                    "status": "different",
+                    "source": {"id": "returned", "host": "phx"},
+                    "target": {"id": "returned-aus", "host": "aus"},
+                }
+            ],
+        },
+    )
+
+    assert result["semantic_in_sync"] is False
+    assert result["semantic_evaluation_complete"] is False
+    assert result["warnings"] == [
+        "Semantic validation was incomplete because 2 item result(s) were omitted from the sync response."
+    ]

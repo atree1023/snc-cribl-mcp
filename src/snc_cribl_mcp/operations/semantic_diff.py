@@ -200,6 +200,37 @@ def _semantic_item_from_sync_item(kind: ConfigObjectKind, item: dict[str, Any]) 
     return result
 
 
+def _omitted_item_count(sync_result: dict[str, Any]) -> int:
+    omitted = sync_result.get("omitted_item_count", 0)
+    return omitted if isinstance(omitted, int) and omitted > 0 else 0
+
+
+def _sync_response_was_truncated(sync_result: dict[str, Any]) -> bool:
+    return sync_result.get("response_truncated") is True or _omitted_item_count(sync_result) > 0
+
+
+def _semantic_in_sync(sync_result: dict[str, Any], items: list[dict[str, Any]]) -> bool:
+    if sync_result.get("in_sync") is True:
+        return True
+    if _sync_response_was_truncated(sync_result):
+        return False
+    return all(item["semantic_status"] == "functionally_equivalent" for item in items)
+
+
+def _semantic_warnings(sync_result: dict[str, Any]) -> list[str]:
+    warnings = [
+        warning
+        for warning in sync_result.get("warnings", [])
+        if isinstance(warning, str)
+    ]
+    omitted_count = _omitted_item_count(sync_result)
+    if _sync_response_was_truncated(sync_result) and sync_result.get("in_sync") is not True:
+        warnings.append(
+            f"Semantic validation was incomplete because {omitted_count} item result(s) were omitted from the sync response."
+        )
+    return warnings
+
+
 def semantic_validation_from_sync_result(kind: ConfigObjectKind, sync_result: dict[str, Any]) -> dict[str, Any]:
     """Convert byte-level sync validation output into semantic validation output."""
     items = [
@@ -207,10 +238,11 @@ def semantic_validation_from_sync_result(kind: ConfigObjectKind, sync_result: di
         for item in sync_result.get("items", [])
         if isinstance(item, dict)
     ]
-    semantic_in_sync = all(item["semantic_status"] == "functionally_equivalent" for item in items)
-    return {
-        **{key: value for key, value in sync_result.items() if key not in {"in_sync", "items", "counts"}},
-        "semantic_in_sync": semantic_in_sync,
+    warnings = _semantic_warnings(sync_result)
+    result: dict[str, Any] = {
+        **{key: value for key, value in sync_result.items() if key not in {"in_sync", "items", "counts", "warnings"}},
+        "semantic_evaluation_complete": not _sync_response_was_truncated(sync_result),
+        "semantic_in_sync": _semantic_in_sync(sync_result, items),
         "semantic_counts": {
             "functionally_equivalent": sum(item["semantic_status"] == "functionally_equivalent" for item in items),
             "functional_difference": sum(item["semantic_status"] == "functional_difference" for item in items),
@@ -220,6 +252,9 @@ def semantic_validation_from_sync_result(kind: ConfigObjectKind, sync_result: di
         },
         "items": items,
     }
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 __all__ = ["compare_config_objects", "semantic_validation_from_sync_result"]
