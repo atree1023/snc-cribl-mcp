@@ -180,8 +180,12 @@ def _get_local_username() -> str | None:
         return None
 
 
-def _keyring_service_name(server_name: str | None, base_url: str) -> str:
+def _keyring_service_name(server_name: str | None, base_url: str, keychain_name: str | None = None) -> str:
     """Return the keyring service name for a Cribl server."""
+    configured_name = _non_empty_string(keychain_name)
+    if configured_name is not None:
+        return configured_name
+
     identifier = _non_empty_string(server_name) or _non_empty_string(urlparse(base_url).hostname) or base_url
     return f"{_KEYRING_SERVICE_PREFIX}:{identifier}"
 
@@ -271,7 +275,7 @@ def _resolve_on_prem_credentials(server_name: str, values: TomlTable) -> TomlTab
         resolved["username"] = username
 
     password = _non_empty_string(resolved.get("password"))
-    service_name = _keyring_service_name(server_name, base_url)
+    service_name = _keyring_service_name(server_name, base_url, _non_empty_string(resolved.get("keychain_name")))
 
     if password is None and username is not None:
         password = _get_keyring_password(service_name, username)
@@ -371,6 +375,7 @@ class CriblConfig(BaseModel):
     base_url: str = Field(alias="url")
     username: str | None = None
     password: str | None = None
+    keychain_name: str | None = None
     client_id: str | None = None
     client_secret: str | None = None
     oauth_token_url: str | None = None

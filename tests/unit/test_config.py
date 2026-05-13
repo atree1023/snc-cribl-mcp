@@ -222,6 +222,79 @@ def test_load_configs_defaults_on_prem_username_to_local_user_and_keyring_passwo
     assert lookups == [("snc-cribl-mcp:golden.oak", "scott")]
 
 
+def test_load_configs_uses_default_keychain_name_for_on_prem_password(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On-prem password lookup should honor a keychain name from defaults."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [defaults]
+        keychain_name = "shared-cribl-login"
+
+        [golden.oak]
+        url = "https://cribl.example.com"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(config_module, "_get_local_username", lambda: "scott")
+
+    lookups: list[tuple[str, str]] = []
+
+    def _fake_keyring_password(service_name: str, username: str) -> str | None:
+        lookups.append((service_name, username))
+        return "keychain-pass"
+
+    monkeypatch.setattr(config_module, "_get_keyring_password", _fake_keyring_password)
+    config_module.clear_config_cache()
+
+    config = CriblConfig.resolve("golden.oak")
+
+    assert config.username == "scott"
+    assert config.password == "keychain-pass"
+    assert config.keychain_name == "shared-cribl-login"
+    assert lookups == [("shared-cribl-login", "scott")]
+
+
+def test_load_configs_server_keychain_name_overrides_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Server keychain names should override inherited defaults."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [defaults]
+        keychain_name = "shared-cribl-login"
+
+        [golden.oak]
+        url = "https://cribl.example.com"
+        keychain_name = "golden-oak-login"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(config_module, "_get_local_username", lambda: "scott")
+
+    lookups: list[tuple[str, str]] = []
+
+    def _fake_keyring_password(service_name: str, username: str) -> str | None:
+        lookups.append((service_name, username))
+        return "keychain-pass"
+
+    monkeypatch.setattr(config_module, "_get_keyring_password", _fake_keyring_password)
+    config_module.clear_config_cache()
+
+    config = CriblConfig.resolve("golden.oak")
+
+    assert config.username == "scott"
+    assert config.password == "keychain-pass"
+    assert config.keychain_name == "golden-oak-login"
+    assert lookups == [("golden-oak-login", "scott")]
+
+
 def test_load_configs_falls_back_to_env_password_when_keyring_has_no_entry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
