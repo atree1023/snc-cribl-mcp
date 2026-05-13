@@ -7,14 +7,16 @@ oauth_token_url = "https://login.cribl.cloud/oauth/token"
 oauth_audience = "https://api.cribl.cloud"
 
 
-# Begin list of servers onprem or cloud
-# Server name can be refernced in the promt
-# If no server name is specified, default to the first server in the list
+# Begin list of on-prem or cloud servers.
+# Server names can be referenced in prompts.
+# If no server name is specified, the first server in the list is the default.
 
 [onprem.server]
 url = "http://localhost:19000"
-username = "admin"
-password = "${ONPREM_PASS}" # Loads environment variable or from .env file
+# username is optional for on-prem and defaults to the local macOS user.
+# username = "admin"
+# password is optional for on-prem and defaults to macOS Keychain service
+# "snc-cribl-mcp:onprem.server", then env fallbacks such as ONPREM_SERVER_PASS.
 
 [cribl.cloud]
 url = "https://your-organization-name.cribl.cloud"

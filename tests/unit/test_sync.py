@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+# pyright: reportPrivateUsage=false
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+from cribl_control_plane.errors import CriblControlPlaneError
 from cribl_control_plane.models.productscore import ProductsCore
 
 import snc_cribl_mcp.operations.sync as sync_module
@@ -22,12 +26,221 @@ def _resolved(name: str) -> SimpleNamespace:
     )
 
 
+def test_sync_diff_and_group_text_helpers_cover_edge_cases() -> None:
+    """Private sync helpers should handle root/list diffs and group text matching."""
+    assert sync_module._diff_paths([1, 2], [1]) == ["length"]
+    assert sync_module._diff_paths([1, 2], [1, 3]) == ["[1]"]
+    assert len(sync_module._diff_paths(list(range(30)), list(range(30, 60)))) == 25
+    assert sync_module._diff_paths("left", "right") == ["$"]
+    assert len(sync_module._diff_paths({f"key_{index:03d}": index for index in range(30)}, {})) == 25
+    assert len(sync_module._diff_paths({"nested": {f"key_{index:03d}": index for index in range(30)}}, {"nested": {}})) == 25
+
+    assert sync_module._normalize_group_text(None) is None
+    assert sync_module._normalize_group_text("  ") is None
+    assert sync_module._normalize_group_text("  Default  ") == "Default"
+
+    groups = [
+        {"id": "one", "name": None},
+        {"id": "two", "name": "Default"},
+        {"id": "three", "name": "default"},
+    ]
+    assert sync_module._match_groups(groups, selector="DEFAULT", field="name", case_sensitive=False) == groups[1:]
+    duplicate_groups = [
+        {"id": "one", "description": "duplicate"},
+        {"id": "two", "description": "duplicate"},
+    ]
+    with pytest.raises(ValueError, match="matched multiple groups"):
+        sync_module._select_group_match(
+            duplicate_groups,
+            selector="duplicate",
+            server_name="leader",
+            product=ProductsCore.STREAM,
+        )
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_selector_handles_validation_errors_and_passthrough(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Group selector resolution should validate selectors before API lookup."""
+    resolved = cast("sync_module.ResolvedControlPlane", _resolved("source"))
+
+    with pytest.raises(ValueError, match="selector is required"):
+        await sync_module._resolve_group_selector(resolved, selector=None, product=ProductsCore.STREAM)
+
+    with pytest.raises(ValueError, match="must not be blank"):
+        await sync_module._resolve_group_selector(resolved, selector="  ", product=ProductsCore.STREAM)
+
+    passthrough = await sync_module._resolve_group_selector(resolved, selector=" default ", product=None)
+    assert passthrough.as_dict() == {
+        "selector": " default ",
+        "id": "default",
+        "matched_by": "passthrough",
+        "name": None,
+        "description": None,
+    }
+
+    list_resource = AsyncMock(return_value=[{"id": "Default", "name": "Default Group"}])
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+
+    case_insensitive = await sync_module._resolve_group_selector(
+        resolved,
+        selector="default",
+        product=ProductsCore.STREAM,
+    )
+
+    assert case_insensitive.group_id == "Default"
+    assert case_insensitive.matched_by == "id"
+    assert case_insensitive.name == "Default Group"
+
+    list_resource.return_value = []
+    with pytest.raises(ValueError, match="Could not resolve group selector"):
+        await sync_module._resolve_group_selector(resolved, selector="missing", product=ProductsCore.STREAM)
+
+    list_resource.return_value = [{"name": "nameless"}]
+    with pytest.raises(ValueError, match="did not include an id"):
+        await sync_module._resolve_group_selector(resolved, selector="nameless", product=ProductsCore.STREAM)
+
+
+def test_apply_validate_response_limit_handles_each_reduction_phase(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Response limiting should strip payloads, summarize extras, then truncate items."""
+    assert sync_module._apply_validate_response_limit({"items": []}) == {"items": []}
+
+    monkeypatch.setattr(sync_module, "_MAX_VALIDATE_RESPONSE_BYTES", 250)
+    payload_limited = sync_module._apply_validate_response_limit(
+        {
+            "items": [
+                {
+                    "item_id": "pipe1",
+                    "status": "different",
+                    "differing_paths": ["conf"],
+                    "source": {"blob": "x" * 1000},
+                    "target": {"blob": "y" * 1000},
+                }
+            ]
+        }
+    )
+
+    assert "source" not in payload_limited["items"][0]
+    assert "target" not in payload_limited["items"][0]
+    assert payload_limited["warnings"] == ["Omitted per-item source and target payloads to stay within MCP response limits."]
+
+    summarized = sync_module._apply_validate_response_limit(
+        {
+            "items": [
+                {
+                    "item_id": "pipe2",
+                    "status": "different",
+                    "differing_paths": ["conf"],
+                    "extra": "x" * 1000,
+                }
+            ]
+        }
+    )
+
+    assert summarized["items"] == [{"item_id": "pipe2", "status": "different", "differing_paths": ["conf"]}]
+    assert summarized["warnings"] == ["Reduced validation item details to summary fields to stay within MCP response limits."]
+
+    monkeypatch.setattr(sync_module, "_MAX_VALIDATE_RESPONSE_BYTES", 500)
+    truncated = sync_module._apply_validate_response_limit(
+        {"items": [{"item_id": f"item-{index}", "status": "different", "differing_paths": ["x" * 150]} for index in range(3)]}
+    )
+
+    assert truncated["response_truncated"] is True
+    assert truncated["returned_item_count"] == 1
+    assert truncated["omitted_item_count"] == 2
+    assert truncated["warnings"] == ["Returned 1 of 3 validation item results to stay within MCP response limits."]
+
+    monkeypatch.setattr(sync_module, "_MAX_VALIDATE_RESPONSE_BYTES", 1)
+    fully_reduced = sync_module._apply_validate_response_limit(
+        {
+            "items": [
+                {
+                    "item_id": "pipe3",
+                    "status": "different",
+                    "differing_paths": ["conf"],
+                    "source": {"blob": "x" * 1000},
+                    "target": {"blob": "y" * 1000},
+                    "extra": "z" * 1000,
+                }
+            ]
+        }
+    )
+
+    assert fully_reduced["response_truncated"] is True
+    assert fully_reduced["returned_item_count"] == 0
+    assert fully_reduced["omitted_item_count"] == 1
+
+
+def test_apply_validate_response_limit_can_exhaust_truncation_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The final truncation loop should also support keeping every summary item."""
+    estimates = iter([2, 0, 0])
+    monkeypatch.setattr(sync_module, "_MAX_VALIDATE_RESPONSE_BYTES", 1)
+
+    def _estimate_json_size_bytes(_payload: dict[str, Any]) -> int:
+        return next(estimates)
+
+    monkeypatch.setattr(sync_module, "_estimate_json_size_bytes", _estimate_json_size_bytes)
+
+    result = sync_module._apply_validate_response_limit(
+        {
+            "items": [
+                {"item_id": "one", "status": "different", "differing_paths": []},
+                {"item_id": "two", "status": "different", "differing_paths": []},
+            ]
+        }
+    )
+
+    assert result["response_truncated"] is False
+    assert result["returned_item_count"] == 2
+    assert result["omitted_item_count"] == 0
+    assert result["warnings"] == []
+
+
+def test_index_items_skips_entries_without_ids() -> None:
+    """Indexing should ignore resources that do not include id or groupId."""
+    assert sync_module._index_items([{"id": "one"}, {"name": "skip"}, {"groupId": "three"}]) == {
+        "one": {"id": "one"},
+        "three": {"groupId": "three"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_maybe_get_item_returns_none_only_for_http_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Single-item lookup should translate HTTP 404 to None and re-raise other errors."""
+    not_found = CriblControlPlaneError("missing", httpx.Response(404, text="missing"))
+    server_error = CriblControlPlaneError("boom", httpx.Response(500, text="boom"))
+    get_resource = AsyncMock(side_effect=[not_found, server_error])
+    monkeypatch.setattr(sync_module, "get_resource", get_resource)
+
+    resolved = cast("sync_module.ResolvedControlPlane", _resolved("target"))
+
+    assert await sync_module._maybe_get_item(resolved, "groups", item_id="missing") is None
+
+    with pytest.raises(CriblControlPlaneError, match="boom"):
+        await sync_module._maybe_get_item(resolved, "groups", item_id="broken")
+
+
+def test_copy_error_helpers_include_status_codes_and_validate_target_group() -> None:
+    """Copy error serialization should preserve HTTP status details when available."""
+    error = CriblControlPlaneError("missing", httpx.Response(404, text="missing"))
+
+    assert sync_module._serialize_copy_error(error) == {
+        "type": "CriblControlPlaneError",
+        "message": "missing",
+        "status_code": 404,
+    }
+    assert sync_module._require_resolved_target_group_id("default") == "default"
+    with pytest.raises(ValueError, match="resolved target group id is missing"):
+        sync_module._require_resolved_target_group_id(None)
+
+
 @pytest.mark.asyncio
 async def test_validate_resource_sync_collection_reports_differences(monkeypatch: pytest.MonkeyPatch) -> None:
     """Collection validation should classify in-sync, missing, and changed items."""
 
     @asynccontextmanager
-    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
         yield _resolved("source"), _resolved("target")
 
     list_resource = AsyncMock(
@@ -76,7 +289,7 @@ async def test_copy_resource_config_creates_missing_target_item(monkeypatch: pyt
     """Copy should create a missing target item and validate it afterward."""
 
     @asynccontextmanager
-    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
         yield _resolved("source"), _resolved("target")
 
     source_item = {"id": "in_http", "type": "http", "port": 10080}
@@ -110,7 +323,7 @@ async def test_copy_resource_config_appends_routes_when_requested(monkeypatch: p
     """Route copies can use append mode instead of replace mode."""
 
     @asynccontextmanager
-    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
         yield _resolved("source"), _resolved("target")
 
     route_set: dict[str, object] = {
@@ -152,7 +365,7 @@ async def test_copy_resource_config_skips_existing_item_when_overwrite_disabled(
     """Existing targets should be skipped when overwrite is disabled."""
 
     @asynccontextmanager
-    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
         yield _resolved("source"), _resolved("target")
 
     source_item = {"id": "pipe1", "conf": {"output": "default"}}
@@ -187,7 +400,7 @@ async def test_copy_resource_config_continues_after_per_item_write_failure(
     """A failed write for one item should not abort the rest of the copy batch."""
 
     @asynccontextmanager
-    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
         yield _resolved("source"), _resolved("target")
 
     source_items = [
@@ -239,7 +452,7 @@ async def test_copy_resource_config_preserves_success_when_validation_lookup_fai
     """Validation lookup failures should be reported per item without discarding a successful write."""
 
     @asynccontextmanager
-    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
         yield _resolved("source"), _resolved("target")
 
     source_items = [
@@ -290,7 +503,7 @@ async def test_validate_resource_sync_resolves_distinct_group_selectors(
     """Validation should resolve source and target group selectors independently."""
 
     @asynccontextmanager
-    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
         yield _resolved("source"), _resolved("target")
 
     list_resource = AsyncMock(
@@ -342,7 +555,7 @@ async def test_validate_resource_sync_single_item_reports_missing_on_both(
     """Single-item validation should explicitly report when neither leader has the item."""
 
     @asynccontextmanager
-    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
         yield _resolved("source"), _resolved("target")
 
     maybe_get_item = AsyncMock(side_effect=[None, None])
@@ -375,7 +588,7 @@ async def test_validate_resource_sync_single_item_can_include_payloads(
     """Single-item validation can include canonicalized payloads when requested."""
 
     @asynccontextmanager
-    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
         yield _resolved("source"), _resolved("target")
 
     source_item: dict[str, object] = {
@@ -416,7 +629,7 @@ async def test_validate_resource_sync_truncates_large_collection_response(
     """Collection validation should trim oversized responses and report the truncation."""
 
     @asynccontextmanager
-    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
         yield _resolved("source"), _resolved("target")
 
     list_resource = AsyncMock(
@@ -459,7 +672,7 @@ async def test_copy_resource_config_resolves_target_group_selector_before_write(
     """Copy should resolve group selectors before reading and writing resources."""
 
     @asynccontextmanager
-    async def _pair(_source: str, _target: str) -> AsyncIterator[tuple[SimpleNamespace, SimpleNamespace]]:
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
         yield _resolved("source"), _resolved("target")
 
     source_item = {"id": "cisco_asa", "conf": {"output": "default"}}
@@ -496,3 +709,150 @@ async def test_copy_resource_config_resolves_target_group_selector_before_write(
     assert create_resource.await_args is not None
     assert get_resource.await_args.kwargs["group_id"] == "source-group-id"
     assert create_resource.await_args.kwargs["group_id"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_updates_existing_target_item(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existing targets should be updated when overwrite is enabled."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_item: dict[str, Any] = {"id": "pipe1", "conf": {"functions": []}}
+    get_resource = AsyncMock(return_value=source_item)
+    maybe_get_item = AsyncMock(return_value={"id": "pipe1", "conf": {"functions": [{"id": "eval"}]}})
+    update_resource = AsyncMock(return_value=[source_item])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "get_resource", get_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "update_resource", update_resource)
+
+    result = await sync_module.copy_resource_config(
+        "pipelines",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+        item_id="pipe1",
+        validate_after=False,
+    )
+
+    assert result["updated_count"] == 1
+    assert result["items"] == [{"item_id": "pipe1", "action": "updated"}]
+    update_resource.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_updates_product_scoped_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Product-scoped group copies should not attempt group selector resolution."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_group: dict[str, Any] = {"id": "default", "description": "Default", "lookupDeployments": [], "type": "stream"}
+    get_resource = AsyncMock(return_value=source_group)
+    maybe_get_item = AsyncMock(return_value={"id": "default", "description": "Old", "lookupDeployments": [], "type": "stream"})
+    update_resource = AsyncMock(return_value=[source_group])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "get_resource", get_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "update_resource", update_resource)
+
+    result = await sync_module.copy_resource_config(
+        "groups",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+        item_id="default",
+        validate_after=False,
+    )
+
+    assert result["updated_count"] == 1
+    assert result["group_id"] is None
+    assert result["target_group_id"] is None
+    assert update_resource.await_args is not None
+    assert update_resource.await_args.kwargs["product"] == ProductsCore.STREAM
+    assert update_resource.await_args.kwargs["group_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_reports_missing_route_target_as_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Routes require a target route set before copy can update or append them."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    route_set: dict[str, Any] = {"id": "default", "routes": [], "comments": [], "groups": {}}
+    get_resource = AsyncMock(return_value=route_set)
+    maybe_get_item = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "get_resource", get_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+
+    result = await sync_module.copy_resource_config(
+        "routes",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+        item_id="default",
+        validate_after=False,
+    )
+
+    assert result["unsupported_count"] == 1
+    assert result["items"] == [
+        {
+            "item_id": "default",
+            "action": "unsupported",
+            "reason": "Routes require an existing target route set before they can be updated or appended.",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_reports_generic_unsupported_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generic unsupported-create path should remain stable for future specs."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    def _supports(_action: object) -> bool:
+        return False
+
+    fake_spec = SimpleNamespace(scope="group", supports=_supports)
+    route_set: dict[str, Any] = {"id": "default", "routes": [], "comments": [], "groups": {}}
+
+    def _get_resource_spec(_kind: object) -> SimpleNamespace:
+        return fake_spec
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "get_resource_spec", _get_resource_spec)
+    monkeypatch.setattr(sync_module, "get_resource", AsyncMock(return_value=route_set))
+    monkeypatch.setattr(sync_module, "_maybe_get_item", AsyncMock(return_value=None))
+
+    result = await sync_module.copy_resource_config(
+        "routes",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+        item_id="default",
+        validate_after=False,
+    )
+
+    assert result["unsupported_count"] == 1
+    assert result["items"] == [
+        {
+            "item_id": "default",
+            "action": "unsupported",
+            "reason": "Create is not supported for resource kind 'routes'.",
+        }
+    ]

@@ -113,3 +113,55 @@ async def test_validate_resource_sync_tool_rejects_invalid_product_value(mock_ct
             target_server="cribl.cloud",
             product="Stream",  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_tool_requires_source_group_for_group_scoped_resources(
+    mock_ctx: Context,
+) -> None:
+    """Group-scoped sync validation should require a source_group selector."""
+    impl = AsyncMock(return_value={})
+
+    app = _FakeApp()
+    register_validate_resource_sync(app, impl=impl)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="source_group is required"):
+        await app.tools["validate_resource_sync"](
+            mock_ctx,
+            resource_kind="sources",
+            source_server="golden.oak",
+            target_server="cribl.cloud",
+        )
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_tool_forwards_group_scoped_resources(
+    mock_ctx: Context,
+) -> None:
+    """Group-scoped sync validation should forward source and target selectors."""
+    impl = AsyncMock(return_value={"in_sync": True})
+
+    app = _FakeApp()
+    register_validate_resource_sync(app, impl=impl)  # type: ignore[arg-type]
+
+    result = await app.tools["validate_resource_sync"](
+        mock_ctx,
+        resource_kind="sources",
+        source_server="golden.oak",
+        target_server="cribl.cloud",
+        source_group="default",
+        target_group="edge-default",
+        include_payloads=True,
+    )
+
+    assert result == {"in_sync": True}
+    impl.assert_awaited_once_with(
+        "sources",
+        "golden.oak",
+        "cribl.cloud",
+        product=ProductsCore.STREAM,
+        group_id="default",
+        target_group_id="edge-default",
+        item_id=None,
+        include_payloads=True,
+    )

@@ -159,7 +159,7 @@ def _extract_object_info(body: str | None, index: int) -> tuple[str | None, str 
             obj_id = item.get("id") or item.get("name") or item.get("_id")
             obj_type = item.get("type")
             return str(obj_id) if obj_id else None, str(obj_type) if obj_type else None
-    except (json.JSONDecodeError, KeyError, TypeError, IndexError):
+    except json.JSONDecodeError, KeyError, TypeError, IndexError:
         pass
 
     return None, None
@@ -209,7 +209,7 @@ def _extract_field_value(
                 current = None
             if current is None:
                 break
-    except (json.JSONDecodeError, KeyError, TypeError, IndexError, ValueError):
+    except json.JSONDecodeError, KeyError, TypeError, IndexError, ValueError:
         return None
     else:
         return current
@@ -228,7 +228,7 @@ def _format_json_value(value: JsonValue, max_length: int = MAX_JSON_VALUE_LENGTH
     """
     try:
         formatted = json.dumps(value, indent=2)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return str(value)[:max_length]
     else:
         if len(formatted) > max_length:

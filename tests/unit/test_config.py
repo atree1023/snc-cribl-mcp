@@ -190,6 +190,105 @@ def test_resolve_case_insensitive(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert config.server_name == "Alpha"
 
 
+def test_load_configs_defaults_on_prem_username_to_local_user_and_keyring_password(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On-prem configs without credentials should use the local user and keyring password first."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [golden.oak]
+        url = "https://cribl.example.com"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(config_module, "_get_local_username", lambda: "scott")
+
+    lookups: list[tuple[str, str]] = []
+
+    def _fake_keyring_password(service_name: str, username: str) -> str | None:
+        lookups.append((service_name, username))
+        return "keychain-pass"
+
+    monkeypatch.setattr(config_module, "_get_keyring_password", _fake_keyring_password)
+    config_module.clear_config_cache()
+
+    config = CriblConfig.resolve("golden.oak")
+
+    assert config.username == "scott"
+    assert config.password == "keychain-pass"
+    assert lookups == [("snc-cribl-mcp:golden.oak", "scott")]
+
+
+def test_load_configs_falls_back_to_env_password_when_keyring_has_no_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On-prem configs should fall back to per-server environment password names after keyring."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [golden.oak]
+        url = "https://cribl.example.com"
+        username = "admin"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+
+    def _missing_keyring_password(_service_name: str, _username: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(config_module, "_get_keyring_password", _missing_keyring_password)
+    monkeypatch.setenv("GOLDEN_OAK_PASS", "env-pass")
+    config_module.clear_config_cache()
+
+    config = CriblConfig.resolve("golden.oak")
+
+    assert config.username == "admin"
+    assert config.password == "env-pass"
+
+
+def test_load_configs_missing_on_prem_password_error_names_lookup_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing on-prem passwords should explain the keyring and env fallback paths that were tried."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [golden.oak]
+        url = "https://cribl.example.com"
+        username = "admin"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+
+    def _missing_keyring_password(_service_name: str, _username: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(config_module, "_get_keyring_password", _missing_keyring_password)
+    for env_name in (
+        "SNC_CRIBL_MCP_GOLDEN_OAK_PASSWORD",
+        "CRIBL_GOLDEN_OAK_PASSWORD",
+        "GOLDEN_OAK_PASSWORD",
+        "GOLDEN_OAK_PASS",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+    config_module.clear_config_cache()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        CriblConfig.resolve("golden.oak")
+
+    message = str(exc_info.value)
+    assert "snc-cribl-mcp:golden.oak" in message
+    assert "admin" in message
+    assert "GOLDEN_OAK_PASS" in message
+
+
 def test_base_url_str_property() -> None:
     """base_url_str should return the normalized string URL."""
     config = CriblConfig(url="https://cribl.example.com", username="user", password="pass")

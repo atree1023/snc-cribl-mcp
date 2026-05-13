@@ -169,7 +169,7 @@ class TokenManager:
             if expires_at <= datetime.now(UTC):
                 msg = "Cribl authentication returned an expired token."
                 raise RuntimeError(msg)
-        except (ValueError, IndexError, json.JSONDecodeError):
+        except ValueError, IndexError, json.JSONDecodeError:
             logger.warning("Could not parse token expiration, token refresh might not work as expected.")
             return datetime.now(UTC) + timedelta(hours=1)
         else:
@@ -247,7 +247,7 @@ class TokenManager:
         else:
             try:
                 expires_in = int(expires_in_raw)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 logger.warning("Invalid expires_in value in OAuth response; ignoring expiration override.")
                 expires_in = None
         return token, expires_in

@@ -4,7 +4,7 @@ Provides the async context manager to create a configured ``CriblControlPlane``
 client instance with shared HTTP settings.
 """
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -31,7 +31,7 @@ async def create_control_plane(
     config: CriblConfig,
     *,
     security: Security | Callable[[], Security] | None = None,
-) -> AsyncIterator[CriblControlPlane]:
+) -> AsyncGenerator[CriblControlPlane]:
     """Create a configured Cribl Control Plane client.
 
     Args:
@@ -60,7 +60,7 @@ async def create_control_plane(
 
 
 @asynccontextmanager
-async def connect_to_server(server: str | None) -> AsyncIterator[ResolvedControlPlane]:
+async def connect_to_server(server: str | None) -> AsyncGenerator[ResolvedControlPlane]:
     """Resolve a configured server name and yield an authenticated SDK client."""
     config = CriblConfig.resolve(server)
     token_manager = get_token_manager(config)
@@ -78,7 +78,7 @@ async def connect_to_server(server: str | None) -> AsyncIterator[ResolvedControl
 async def connect_server_pair(
     source_server: str,
     target_server: str,
-) -> AsyncIterator[tuple[ResolvedControlPlane, ResolvedControlPlane]]:
+) -> AsyncGenerator[tuple[ResolvedControlPlane, ResolvedControlPlane]]:
     """Yield authenticated SDK clients for a source/target server pair."""
     async with connect_to_server(source_server) as source, connect_to_server(target_server) as target:
         yield source, target

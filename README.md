@@ -86,8 +86,8 @@ oauth_audience = "https://api.cribl.cloud"
 
 [golden.oak]
 url = "http://localhost:19000"
-username = "admin"
-password = "${GOLDEN_OAK_PASS}"
+# Optional for on-prem; defaults to your local macOS user.
+# username = "admin"
 
 [cribl.cloud]
 url = "https://<workspace>-<org>.cribl.cloud"
@@ -95,8 +95,24 @@ client_id = "your-client-id"
 client_secret = "${CRIBL_CLOUD_SECRET}"
 ```
 
-If you use `${VAR}` placeholders, set the values in a `.env` file (or your shell environment). Only placeholder
-expansion uses environment variables; configuration values are otherwise read directly from `config.toml`.
+For on-prem servers, omit `password` to use the local credential chain:
+
+1. Use the configured `username`, or default to the locally logged-in macOS user.
+2. Read the password from the macOS Keychain via Python `keyring`, using service
+   `snc-cribl-mcp:<server-name>` and the resolved username. For `[golden.oak]`, the service is
+   `snc-cribl-mcp:golden.oak`.
+3. Fall back to per-server environment variables loaded from `.env` or your shell. For `[golden.oak]`,
+   the resolver checks `SNC_CRIBL_MCP_GOLDEN_OAK_PASSWORD`, `CRIBL_GOLDEN_OAK_PASSWORD`,
+   `GOLDEN_OAK_PASSWORD`, then `GOLDEN_OAK_PASS`.
+
+To store a local Keychain password:
+
+```bash
+uv run keyring set snc-cribl-mcp:golden.oak "$(whoami)"
+```
+
+If you use `${VAR}` placeholders, set the values in a `.env` file (or your shell environment). Explicit
+placeholder values still take precedence over keychain lookup and must exist when referenced.
 
 When a tool call omits a server name, the first non-`[defaults]` section in `config.toml` is used.
 
@@ -111,13 +127,13 @@ Logging is still controlled via the `LOG_LEVEL` environment variable (default: `
 | `[defaults]` | `oauth_token_url` | OAuth token URL for Cribl.Cloud                            | No       |
 | `[defaults]` | `oauth_audience`  | OAuth audience for Cribl.Cloud                             | No       |
 | `[server]`   | `url`             | Base URL of your Cribl deployment (auto-appends `/api/v1`) | Yes      |
-| `[server]`   | `username`        | On-prem username                                           | Yes\*    |
-| `[server]`   | `password`        | On-prem password                                           | Yes\*    |
+| `[server]`   | `username`        | On-prem username; defaults to local macOS user             | No\*     |
+| `[server]`   | `password`        | On-prem password; defaults to Keychain/env lookup          | No\*     |
 | `[server]`   | `client_id`       | Cribl.Cloud client ID                                      | Yes\*    |
 | `[server]`   | `client_secret`   | Cribl.Cloud client secret                                  | Yes\*    |
 
-\*Cribl.Cloud URLs (ending in `.cribl.cloud`) require `client_id`/`client_secret`. On-prem URLs require
-`username`/`password`.
+\*Cribl.Cloud URLs (ending in `.cribl.cloud`) require `client_id`/`client_secret`. On-prem URLs ultimately require a
+resolved username/password pair, but the password can come from macOS Keychain or a per-server environment fallback.
 
 ## Usage
 
@@ -137,7 +153,7 @@ uv run python -m snc_cribl_mcp.server
 
 ### Available MCP Tools
 
-The server exposes nine MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`):
+The server exposes eleven MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`):
 
 #### `list_groups`
 
@@ -180,6 +196,18 @@ Lists all configured event breakers across all groups and products.
 Lists all configured lookups across all groups and products.
 
 - **Returns:** JSON containing lookups organized by product and group, including lookup IDs, file info, and configurations.
+
+#### `get_config_objects`
+
+Queries supported config objects through one bounded read tool: groups, sources, destinations, pipelines, routes, breakers, and lookups.
+
+- **Returns:** Compact summaries by default, including product, group, ID, type, enabled state, optional dependency references, truncation state, and a cursor for follow-up calls. Use `detail="full"` with filters such as `selector`, `product`, and `group_id` to retrieve selected payloads without flooding the MCP response.
+
+#### `validate_config_objects`
+
+Semantically compares groups, sources, destinations, pipelines, or routes between two configured leaders.
+
+- **Returns:** Functional validation results that classify differences as blocking functional drift, non-blocking environment identity differences, or volatile metadata differences. Hostnames, endpoint server lists, generated IDs, credential references, and timestamps are reported but do not count as functional drift.
 
 #### `copy_resource_config`
 
@@ -236,7 +264,9 @@ snc_cribl_mcp/
 │   │   ├── routes.py         # Route collection helpers
 │   │   ├── breakers.py       # Event breaker collection helpers
 │   │   ├── lookups.py        # Lookup collection helpers
+│   │   ├── config_objects.py # Consolidated config object response shaping
 │   │   ├── resource_actions.py  # Context-free CRUD helpers over the SDK
+│   │   ├── semantic_diff.py  # Functional vs environment identity comparison
 │   │   ├── sync.py           # Cross-leader copy and validation helpers
 │   │   └── validation_errors.py  # SDK validation error handling
 │   ├── tools/            # MCP tool registrations
@@ -249,6 +279,8 @@ snc_cribl_mcp/
 │   │   ├── list_routes.py
 │   │   ├── list_breakers.py
 │   │   ├── list_lookups.py
+│   │   ├── get_config_objects.py
+│   │   ├── validate_config_objects.py
 │   │   ├── sync_common.py
 │   │   └── validate_resource_sync.py
 │   ├── config.py         # Configuration management
@@ -300,7 +332,9 @@ uv run ruff format
 The server retrieves bearer tokens automatically based on the configured server type:
 
 - **Cribl.Cloud**: Uses OAuth client credentials (`client_id`/`client_secret`) and refreshes tokens automatically.
-- **On-prem**: Uses `username`/`password` to fetch bearer tokens and refreshes using the JWT `exp` claim when available.
+- **On-prem**: Uses a resolved `username`/`password` pair to fetch bearer tokens, defaulting to the local macOS user and
+  macOS Keychain before falling back to per-server environment variables. It refreshes using the JWT `exp` claim when
+  available.
 
 Tokens expire based on your Cribl settings (default: 1 hour on-prem, 24 hours on Cribl.Cloud). For production use, configure TLS and use HTTPS.
 
