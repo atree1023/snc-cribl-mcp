@@ -89,6 +89,9 @@ def _resolve_pack_file(file_path: str | Path) -> Path:
     if not path.is_file():
         msg = f"Pack file not found: {path}"
         raise ValueError(msg)
+    if path.suffix.lower() != ".crbl":
+        msg = f"Invalid Pack file extension: {path.suffix}. Expected .crbl"
+        raise ValueError(msg)
     return path
 
 
