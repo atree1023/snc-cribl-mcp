@@ -238,5 +238,22 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
         )
         return _build_response("lookups", data, base_url=resolved_deps.config.base_url_str)
 
+    @app.resource(
+        uri="cribl://packs",
+        name="Cribl Packs",
+        description="Return a JSON list of installed Packs.",
+        mime_type="application/json",
+        tags={"packs", "config"},
+    )
+    async def get_packs(ctx: Context) -> dict[str, Any]:  # noqa: ARG001
+        resolved_deps = resolve_tool_deps(deps, server=None)
+        security = await resolved_deps.token_manager.get_security()
+        async with resolved_deps.create_cp(resolved_deps.config, security=security) as client:
+            data = await resolved_deps.collect_packs(
+                client,
+                timeout_ms=resolved_deps.config.timeout_ms,
+            )
+        return _build_response("packs", data, base_url=resolved_deps.config.base_url_str)
+
 
 __all__ = ["register"]

@@ -12,6 +12,14 @@ Registered tools:
 - ``list_routes``: list configured routes per group across products
 - ``list_breakers``: list configured event breakers per group across products
 - ``list_lookups``: list configured lookups per group across products
+- ``list_packs``: list installed Packs
+- ``get_pack``: get an installed Pack
+- ``install_pack``: install a Pack
+- ``upload_pack``: upload a Pack file
+- ``update_pack``: upgrade a Pack
+- ``delete_pack``: uninstall a Pack
+- ``get_config_objects``: query supported config objects with bounded responses
+- ``validate_config_objects``: semantically compare supported configs between leaders
 - ``copy_resource_config``: copy supported configs between configured leaders
 - ``validate_resource_sync``: compare supported configs between configured leaders
 """
@@ -35,6 +43,7 @@ from .operations.breakers import collect_product_breakers
 from .operations.destinations import collect_product_destinations
 from .operations.groups import collect_product_groups, serialize_config_group
 from .operations.lookups import collect_product_lookups
+from .operations.packs import collect_packs
 from .operations.pipelines import collect_product_pipelines
 from .operations.routes import collect_product_routes
 from .operations.sources import collect_product_sources
@@ -48,6 +57,7 @@ from .tools.list_lookups import register as register_list_lookups
 from .tools.list_pipelines import register as register_list_pipelines
 from .tools.list_routes import register as register_list_routes
 from .tools.list_sources import register as register_list_sources
+from .tools.packs import register as register_pack_tools
 from .tools.validate_config_objects import register as register_validate_config_objects
 from .tools.validate_resource_sync import register as register_validate_resource_sync
 
@@ -125,6 +135,7 @@ def _register_capabilities() -> None:
         collect_product_routes=collect_product_routes,
         collect_product_breakers=collect_product_breakers,
         collect_product_lookups=collect_product_lookups,
+        collect_packs=collect_packs,
     )
     register_list_sources(app, deps=deps)
     register_list_destinations(app, deps=deps)
@@ -132,6 +143,7 @@ def _register_capabilities() -> None:
     register_list_routes(app, deps=deps)
     register_list_breakers(app, deps=deps)
     register_list_lookups(app, deps=deps)
+    register_pack_tools(app, deps=deps)
     register_get_config_objects(app, deps=deps)
     register_copy_resource_config(app, impl=copy_resource_config)
     register_validate_resource_sync(app, impl=validate_resource_sync)

@@ -29,7 +29,7 @@ A Model Context Protocol (MCP) server that provides tools for querying Cribl dep
 
 ## What It Does
 
-This MCP server connects to Cribl Stream and Edge deployments to retrieve and compare metadata about worker groups, fleets, sources, destinations, pipelines, and routes. It also supports targeted cross-leader copy and validation workflows so AI assistants can help keep multiple leaders aligned without passing entire configs through context.
+This MCP server connects to Cribl Stream and Edge deployments to retrieve and compare metadata about worker groups, fleets, sources, destinations, pipelines, routes, and Packs. It also supports targeted cross-leader copy and validation workflows so AI assistants can help keep multiple leaders aligned without passing entire configs through context.
 
 The server handles authentication with bearer tokens, manages token refresh automatically, and provides a clean JSON interface for exploring your Cribl infrastructure.
 
@@ -43,6 +43,10 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Retrieve configured routes across all products and groups.
   - Retrieve configured event breakers across all products and groups.
   - Retrieve configured lookups across all products and groups.
+- **Pack Management**:
+  - List and inspect installed Packs.
+  - Install Packs from IDs, URLs, Git repositories, or previously uploaded Pack files.
+  - Upload, upgrade, and uninstall Packs through the cribl-control-plane SDK.
 - **Cross-Leader Sync Workflows**:
   - Copy supported resources between configured leaders.
   - Validate whether supported resources are in sync between configured leaders.
@@ -160,7 +164,7 @@ uv run python -m snc_cribl_mcp.server
 
 ### Available MCP Tools
 
-The server exposes eleven MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`):
+The server exposes seventeen MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://packs`):
 
 #### `list_groups`
 
@@ -203,6 +207,47 @@ Lists all configured event breakers across all groups and products.
 Lists all configured lookups across all groups and products.
 
 - **Returns:** JSON containing lookups organized by product and group, including lookup IDs, file info, and configurations.
+
+#### `list_packs`
+
+Lists installed Packs. Optionally pass `with_="inputs"`, `with_="outputs"`, or `with_="inputs,outputs"` to include Pack input/output counts. For distributed environments, pass `product="stream"` or `product="edge"` and `group="<group id, name, or description>"` to scope the request to `/m/{group}`.
+
+- **Returns:** JSON containing Pack IDs, sources, versions, metadata, and any requested counts.
+
+#### `get_pack`
+
+Gets one installed Pack by Pack ID.
+
+- **Returns:** JSON containing the matching Pack metadata.
+- **Distributed scope:** Supports the same optional `product` and `group` arguments as `list_packs`.
+
+#### `install_pack`
+
+Installs a Pack using the SDK Pack request body. The request can create an empty Pack by ID, install from a URL, install from a `git+` repository URL, or install from an uploaded Pack source returned by `upload_pack`.
+
+- **Returns:** JSON containing installed Pack metadata and any warnings returned by Cribl.
+- **Distributed scope:** Supports the same optional `product` and `group` arguments as `list_packs`.
+
+#### `upload_pack`
+
+Uploads a local `.crbl` Pack file.
+
+- **Returns:** JSON containing the uploaded `source` value to pass to `install_pack`.
+- **Distributed scope:** Supports the same optional `product` and `group` arguments as `list_packs`.
+
+#### `update_pack`
+
+Upgrades an installed Pack from a source URL or uploaded source ID.
+
+- **Returns:** JSON containing the upgraded Pack metadata.
+- **Distributed scope:** Supports the same optional `product` and `group` arguments as `list_packs`.
+
+#### `delete_pack`
+
+Uninstalls an installed Pack by Pack ID.
+
+- **Returns:** JSON containing uninstall metadata returned by Cribl.
+- **Distributed scope:** Supports the same optional `product` and `group` arguments as `list_packs`.
 
 #### `get_config_objects`
 
@@ -271,6 +316,7 @@ snc_cribl_mcp/
 │   │   ├── routes.py         # Route collection helpers
 │   │   ├── breakers.py       # Event breaker collection helpers
 │   │   ├── lookups.py        # Lookup collection helpers
+│   │   ├── packs.py          # Top-level Pack management helpers
 │   │   ├── config_objects.py # Consolidated config object response shaping
 │   │   ├── resource_actions.py  # Context-free CRUD helpers over the SDK
 │   │   ├── semantic_diff.py  # Functional vs environment identity comparison
@@ -286,6 +332,7 @@ snc_cribl_mcp/
 │   │   ├── list_routes.py
 │   │   ├── list_breakers.py
 │   │   ├── list_lookups.py
+│   │   ├── packs.py
 │   │   ├── get_config_objects.py
 │   │   ├── validate_config_objects.py
 │   │   ├── sync_common.py

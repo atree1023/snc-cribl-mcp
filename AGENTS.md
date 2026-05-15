@@ -57,6 +57,7 @@ Before writing code:
 
 - "On-prem", "onprem", and "customer managed" are equivalent terms
 - Distributed environments require `/m/{group_id}/` URL scoping
+- Pack management tools support distributed scoping with `product` plus `group`; resolve the group selector before calling SDK Pack methods with `server_url`.
 
 ## File Structure
 
@@ -77,9 +78,9 @@ docs/                      # SDK docs, schemas, examples
 
 ## MCP Capabilities
 
-**Tools:** list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, copy_resource_config, validate_resource_sync
+**Tools:** list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync
 
-**Resources:** cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups
+**Resources:** cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups, cribl://packs
 
 **Prompts:** Summarize Cribl Configuration, Find Broken Sources, Analyze Pipeline, Troubleshoot Destination
 

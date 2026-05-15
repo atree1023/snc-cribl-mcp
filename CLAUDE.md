@@ -8,8 +8,8 @@ MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and 
 
 **Key components:**
 
-- Eleven tools: list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync
-- Seven resources mirroring tools (cribl://groups, cribl://sources, etc.)
+- Seventeen tools: list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync
+- Eight resources mirroring read-oriented tools (cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups, cribl://packs)
 - Four prompts for common Cribl workflows
 - Token-based authentication with automatic refresh
 
@@ -69,6 +69,7 @@ uv run pyright                             # then type check
 
 - Distributed Cribl requires `/m/{group_id}/` in URLs
 - Always pass `server_url=f"{base}/m/{group_id}"` to SDK client factory
+- Pack tools support both leader-level and distributed use. When `group` is provided, resolve it against the requested `product` (`stream` or `edge`) and pass `server_url=f"{base}/m/{resolved_group_id}"` to the SDK Pack methods.
 
 **Consolidated config object tooling:**
 
