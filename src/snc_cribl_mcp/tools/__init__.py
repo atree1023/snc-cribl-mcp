@@ -8,5 +8,6 @@ Contains MCP tool registration modules:
 - ``list_routes``: Enumerate configured routes per group
 - ``list_breakers``: Enumerate configured event breakers per group
 - ``list_lookups``: Enumerate configured lookups per group
+- ``packs``: Manage installed Packs
 - ``common``: Shared utilities for tool registration
 """

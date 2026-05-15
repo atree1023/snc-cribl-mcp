@@ -59,6 +59,35 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
 
         return results
 
+    async def _collect_top_level_resource_payload(
+        *,
+        collect_fn: Callable[..., Awaitable[dict[str, Any]]],
+        resolved_deps: SimpleNamespace,
+    ) -> dict[str, Any]:
+        """Collect leader-level data while guarding against collector errors.
+
+        Args:
+            collect_fn: Async collector function to invoke once against the leader.
+            resolved_deps: Dependencies resolved for the current server.
+
+        Returns:
+            Collected result dictionary, or an error payload on failure.
+
+        """
+        security = await resolved_deps.token_manager.get_security()
+        async with resolved_deps.create_cp(resolved_deps.config, security=security) as client:
+            try:
+                return await collect_fn(
+                    client,
+                    timeout_ms=resolved_deps.config.timeout_ms,
+                )
+            except Exception as exc:  # noqa: BLE001 - propagated as JSON error payload
+                return {
+                    "status": "error",
+                    "error": str(exc),
+                    "error_type": exc.__class__.__name__,
+                }
+
     async def _run_collect_fn(  # noqa: PLR0913
         collect_fn: Callable[..., Awaitable[dict[str, Any]]],
         *,
@@ -237,6 +266,22 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
             resolved_deps=resolved_deps,
         )
         return _build_response("lookups", data, base_url=resolved_deps.config.base_url_str)
+
+    @app.resource(
+        uri="cribl://packs",
+        name="Cribl Packs",
+        description="Return a JSON list of installed Packs.",
+        mime_type="application/json",
+        tags={"packs", "config"},
+    )
+    async def get_packs(ctx: Context) -> dict[str, Any]:
+        _ = ctx
+        resolved_deps = resolve_tool_deps(deps, server=None)
+        data = await _collect_top_level_resource_payload(
+            collect_fn=deps.collect_packs,
+            resolved_deps=resolved_deps,
+        )
+        return _build_response("packs", data, base_url=resolved_deps.config.base_url_str)
 
 
 __all__ = ["register"]

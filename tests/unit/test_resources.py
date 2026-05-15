@@ -10,6 +10,7 @@ import pytest
 from fastmcp import Context, FastMCP
 
 from snc_cribl_mcp import resources
+from snc_cribl_mcp.operations.packs import collect_packs
 
 
 @pytest.fixture
@@ -40,6 +41,7 @@ def mock_deps() -> SimpleNamespace:
     deps.collect_product_routes = AsyncMock(return_value={"status": "ok"})
     deps.collect_product_breakers = AsyncMock(return_value={"status": "ok"})
     deps.collect_product_lookups = AsyncMock(return_value={"status": "ok"})
+    deps.collect_packs = AsyncMock(return_value={"status": "ok"})
 
     return deps
 
@@ -59,6 +61,7 @@ async def test_register_resources(mock_deps: SimpleNamespace) -> None:
     assert "cribl://routes" in registered_resources
     assert "cribl://breakers" in registered_resources
     assert "cribl://lookups" in registered_resources
+    assert "cribl://packs" in registered_resources
 
     resource = await app.get_resource("cribl://groups")
     assert resource is not None
@@ -182,6 +185,68 @@ async def test_get_lookups_resource(mock_deps: SimpleNamespace) -> None:
     mock_deps.collect_product_lookups.assert_called_once()
     call_args = mock_deps.collect_product_lookups.call_args
     assert call_args.kwargs["security"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_get_packs_resource(mock_deps: SimpleNamespace) -> None:
+    """Test the top-level Packs resource."""
+    app = FastMCP("test")
+    resources.register(app, deps=mock_deps)
+
+    resource = await app.get_resource("cribl://packs")
+    assert resource is not None
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
+    assert isinstance(result, dict)
+
+    data = cast("dict[str, Any]", result)
+    assert "packs" in data
+    assert data["packs"]["status"] == "ok"
+    mock_deps.collect_packs.assert_awaited_once()
+    assert mock_deps.collect_packs.await_args.kwargs == {"timeout_ms": 1000}
+
+
+@pytest.mark.asyncio
+async def test_get_packs_resource_uses_top_level_collect_signature(mock_deps: SimpleNamespace) -> None:
+    """The Packs resource should call collect_packs once at leader scope."""
+    pack_model = MagicMock()
+    pack_model.model_dump.return_value = {"id": "cribl-okta", "source": "git+repo"}
+    sdk_response = MagicMock(items=[pack_model], count=1)
+    client = MagicMock()
+    client.packs.list_async = AsyncMock(return_value=sdk_response)
+    mock_deps.create_cp.return_value.__aenter__.return_value = client
+    mock_deps.collect_packs = collect_packs
+
+    app = FastMCP("test")
+    resources.register(app, deps=mock_deps)
+
+    resource = await app.get_resource("cribl://packs")
+    assert resource is not None
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
+    data = cast("dict[str, Any]", result)
+
+    client.packs.list_async.assert_awaited_once_with(with_=None, timeout_ms=1000)
+    assert data["packs"]["items"] == [{"id": "cribl-okta", "source": "git+repo"}]
+
+
+@pytest.mark.asyncio
+async def test_packs_resource_handles_collector_error(mock_deps: SimpleNamespace) -> None:
+    """Ensure packs resource degrades gracefully when the leader-level collector fails."""
+    mock_deps.collect_packs.side_effect = RuntimeError("boom")
+
+    app = FastMCP("test")
+    resources.register(app, deps=mock_deps)
+
+    resource = await app.get_resource("cribl://packs")
+    assert resource is not None
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
+    data = cast("dict[str, Any]", result)
+
+    assert data["packs"]["status"] == "error"
+    assert data["packs"]["error"] == "boom"
+    assert data["packs"]["error_type"] == "RuntimeError"
 
 
 @pytest.mark.asyncio
