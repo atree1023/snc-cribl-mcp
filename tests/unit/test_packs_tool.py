@@ -286,6 +286,21 @@ async def test_get_pack_tool_forwards_detail_arguments(deps: SimpleNamespace, mo
 
 
 @pytest.mark.asyncio
+async def test_get_pack_tool_reports_validation_error_for_aggregate_cursor(
+    deps: SimpleNamespace,
+    mock_ctx: Context,
+) -> None:
+    """get_pack should surface operation validation errors in the standard tool envelope."""
+    app = _FakeApp()
+    register_pack_tools(app, deps=deps)  # type: ignore[arg-type]
+
+    result = await app.tools["get_pack"](mock_ctx, pack_id="cribl-okta", cursor="1")
+
+    assert result["pack"]["status"] == "validation_error"
+    assert "cursor and limit" in result["pack"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_pack_tool_rejects_product_without_group(deps: SimpleNamespace, mock_ctx: Context) -> None:
     """Pack tools should fail fast when product is supplied without distributed group scope."""
     app = _FakeApp()

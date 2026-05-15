@@ -174,8 +174,21 @@ class ResolvedPackGroupScope:
 
 
 def _serialize_counted_response(response: object) -> dict[str, Any]:
-    """Serialize an SDK counted response into the MCP response shape."""
-    raw_items: list[object] = getattr(response, "items", None) or []
+    """Serialize an SDK counted or single-object response into the MCP response shape."""
+    raw_items_value: object = getattr(response, "items", None)
+    raw_items: list[object] | None = None
+    if isinstance(raw_items_value, list):
+        raw_items = cast("list[object]", raw_items_value)
+    elif isinstance(raw_items_value, tuple):
+        raw_items = list(cast("tuple[object, ...]", raw_items_value))
+    if raw_items is None:
+        item = serialize_model(response)
+        return {
+            "status": "ok",
+            "count": 1 if item else 0,
+            "items": [item] if item else [],
+        }
+
     items = [serialize_model(item) for item in raw_items]
     reported_count = getattr(response, "count", None)
 
@@ -198,8 +211,11 @@ def _serialize_http_counted_payload(payload: object) -> dict[str, Any]:
     """Serialize a direct HTTP Pack response into the counted response shape."""
     if isinstance(payload, dict):
         payload_dict = cast("dict[str, Any]", payload)
-        items_value: object = payload_dict.get("items", [])
-        items = cast("list[object]", items_value) if isinstance(items_value, list) else []
+        if "items" in payload_dict:
+            items_value: object = payload_dict.get("items", [])
+            items = cast("list[object]", items_value) if isinstance(items_value, list) else []
+        else:
+            items = [payload_dict] if payload_dict else []
         result: dict[str, Any] = {
             "status": "ok",
             "count": len(items),
@@ -250,6 +266,7 @@ def _coerce_cursor(cursor: str | None) -> int:
     try:
         parsed = int(cursor)
     except ValueError:
+        # MCP callers may retry stale or typoed cursors; fall back to the first page instead of failing the read.
         return 0
     return max(parsed, 0)
 
@@ -377,17 +394,29 @@ def _group_pack_categories(categories: dict[str, dict[str, Any]], *, detail: Pac
     """Return a grouped response for Pack knowledge or settings categories."""
     total_count = 0
     has_error = False
+    unavailable_count = 0
     for category in categories.values():
         if category.get("status") == "ok":
             total = category.get("total_count")
             if isinstance(total, int):
                 total_count += total
-        elif category.get("status") != "unavailable":
+        elif category.get("status") == "unavailable":
+            unavailable_count += 1
+        else:
             has_error = True
+    if has_error:
+        status = "partial_error"
+    elif categories and unavailable_count == len(categories):
+        status = "unavailable"
+    elif unavailable_count > 0:
+        status = "partial_unavailable"
+    else:
+        status = "ok"
     return {
-        "status": "partial_error" if has_error else "ok",
+        "status": status,
         "detail": detail,
         "total_count": total_count,
+        "unavailable_count": unavailable_count,
         "categories": categories,
     }
 
@@ -615,11 +644,93 @@ async def _collect_shaped_http_section(  # noqa: PLR0913
     )
 
 
-def _security_or_empty(security: Security | None) -> Security:
-    """Return a concrete Security object for direct HTTP helpers."""
+async def _gather_pack_http_categories(  # noqa: PLR0913
+    client: CriblControlPlane,
+    *,
+    security: Security,
+    endpoints: Mapping[str, str],
+    category_names: Mapping[str, str],
+    timeout_ms: int,
+    pack_id: str,
+    server_url: str | None,
+    detail: PackObjectDetail,
+    cursor: str | None,
+    limit: int | None,
+) -> dict[str, dict[str, Any]]:
+    """Collect direct-HTTP Pack categories and return them keyed by friendly category name."""
+    results = await asyncio.gather(
+        *[
+            _collect_shaped_http_section(
+                client,
+                security=security,
+                section_kind=endpoint_kind,
+                endpoint_path=endpoint_path,
+                timeout_ms=timeout_ms,
+                pack_id=pack_id,
+                server_url=server_url,
+                object_id=None,
+                detail=detail,
+                cursor=cursor,
+                limit=limit,
+            )
+            for endpoint_kind, endpoint_path in endpoints.items()
+        ]
+    )
+    return {category_names[endpoint_kind]: category for endpoint_kind, category in zip(endpoints, results, strict=True)}
+
+
+def _require_security(security: Security | None) -> Security:
+    """Return direct-HTTP security or fail with a clear validation error."""
     if security is not None:
         return security
-    return Security(bearer_auth="")
+    msg = "security is required for HTTP-backed Pack kinds"
+    raise ValueError(msg)
+
+
+def _aggregate_kind(kind: PackObjectKind | None) -> bool:
+    """Return whether a Pack kind targets a multi-section aggregate."""
+    return kind in (None, "knowledge", "settings")
+
+
+def _validate_pack_detail_request(
+    *,
+    kind: PackObjectKind | None,
+    detail: PackObjectDetail,
+    cursor: str | None,
+    limit: int | None,
+) -> None:
+    """Validate options that only make sense for one concrete Pack section."""
+    if _aggregate_kind(kind) and (cursor is not None or limit is not None):
+        msg = "cursor and limit are only supported when kind names one Pack section or category."
+        raise ValueError(msg)
+    if _aggregate_kind(kind) and detail == "full":
+        msg = "detail='full' is only supported when kind names one Pack section or category."
+        raise ValueError(msg)
+
+
+def _metadata_failure_response(
+    metadata: dict[str, Any],
+    *,
+    pack_id: str,
+    detail: PackObjectDetail,
+    kind: PackObjectKind | None,
+) -> dict[str, Any] | None:
+    """Return a short-circuit payload when Pack metadata lookup failed."""
+    status = metadata.get("status")
+    if status == "ok":
+        return None
+    response: dict[str, Any] = {
+        "status": status if isinstance(status, str) else "error",
+        "pack_id": pack_id,
+        "detail": detail,
+        "metadata": metadata,
+    }
+    if kind is not None:
+        response["kind"] = kind
+        response["objects"] = _group_pack_categories({}, detail=detail)
+    else:
+        response["sections"] = {}
+    return response
 
 
 def _validate_install_pack_request(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -787,7 +898,7 @@ async def collect_packs(
     )
 
 
-async def get_pack(  # noqa: PLR0913
+async def get_pack(  # noqa: PLR0911, PLR0913
     client: CriblControlPlane,
     *,
     timeout_ms: int,
@@ -807,6 +918,15 @@ async def get_pack(  # noqa: PLR0913
     if object_id is not None and kind == "settings":
         msg = "Use a concrete settings kind such as 'settings.conf' when object_id is provided."
         raise ValueError(msg)
+    if (
+        kind not in (None, "knowledge", "settings")
+        and kind not in _SDK_SECTION_TO_CONFIG_KIND
+        and kind not in _KNOWLEDGE_ENDPOINTS
+        and kind not in _SETTINGS_ENDPOINTS
+    ):
+        msg = f"Unsupported Pack object kind: {kind}"
+        raise ValueError(msg)
+    _validate_pack_detail_request(kind=kind, detail=detail, cursor=cursor, limit=limit)
 
     if kind in _SDK_SECTION_TO_CONFIG_KIND:
         objects = await _collect_shaped_sdk_section(
@@ -828,7 +948,7 @@ async def get_pack(  # noqa: PLR0913
             "objects": objects,
         }
 
-    http_security = _security_or_empty(security)
+    http_security = _require_security(security)
     if kind in _KNOWLEDGE_ENDPOINTS:
         objects = await _collect_shaped_http_section(
             client,
@@ -873,10 +993,6 @@ async def get_pack(  # noqa: PLR0913
             "objects": objects,
         }
 
-    if kind not in (None, "knowledge", "settings"):
-        msg = f"Unsupported Pack object kind: {kind}"
-        raise ValueError(msg)
-
     metadata = await _run_pack_api_call(
         lambda: client.packs.get_async(
             id=pack_id,
@@ -886,70 +1002,55 @@ async def get_pack(  # noqa: PLR0913
         resource_type="packs",
         server_url=server_url,
     )
+    metadata_failure = _metadata_failure_response(metadata, pack_id=pack_id, detail=detail, kind=kind)
+    if metadata_failure is not None:
+        return metadata_failure
 
     if kind == "knowledge":
-        knowledge_pairs = await asyncio.gather(
-            *[
-                _collect_shaped_http_section(
-                    client,
-                    security=http_security,
-                    section_kind=endpoint_kind,
-                    endpoint_path=endpoint_path,
-                    timeout_ms=timeout_ms,
-                    pack_id=pack_id,
-                    server_url=server_url,
-                    object_id=None,
-                    detail=detail,
-                    cursor=cursor,
-                    limit=limit,
-                )
-                for endpoint_kind, endpoint_path in _KNOWLEDGE_ENDPOINTS.items()
-            ]
+        knowledge_categories = await _gather_pack_http_categories(
+            client,
+            security=http_security,
+            endpoints=_KNOWLEDGE_ENDPOINTS,
+            category_names=_KNOWLEDGE_CATEGORY_NAMES,
+            timeout_ms=timeout_ms,
+            pack_id=pack_id,
+            server_url=server_url,
+            detail=detail,
+            cursor=cursor,
+            limit=limit,
         )
-        knowledge_categories = {
-            _KNOWLEDGE_CATEGORY_NAMES[endpoint_kind]: category
-            for endpoint_kind, category in zip(_KNOWLEDGE_ENDPOINTS, knowledge_pairs, strict=True)
-        }
         objects = _group_pack_categories(knowledge_categories, detail=detail)
         return {
             "status": objects["status"],
             "pack_id": pack_id,
             "kind": kind,
+            "metadata": metadata,
             "objects": objects,
         }
 
     if kind == "settings":
-        settings_pairs = await asyncio.gather(
-            *[
-                _collect_shaped_http_section(
-                    client,
-                    security=http_security,
-                    section_kind=endpoint_kind,
-                    endpoint_path=endpoint_path,
-                    timeout_ms=timeout_ms,
-                    pack_id=pack_id,
-                    server_url=server_url,
-                    object_id=None,
-                    detail=detail,
-                    cursor=cursor,
-                    limit=limit,
-                )
-                for endpoint_kind, endpoint_path in _SETTINGS_ENDPOINTS.items()
-            ]
+        settings_categories = await _gather_pack_http_categories(
+            client,
+            security=http_security,
+            endpoints=_SETTINGS_ENDPOINTS,
+            category_names=_SETTINGS_CATEGORY_NAMES,
+            timeout_ms=timeout_ms,
+            pack_id=pack_id,
+            server_url=server_url,
+            detail=detail,
+            cursor=cursor,
+            limit=limit,
         )
-        settings_categories = {
-            _SETTINGS_CATEGORY_NAMES[endpoint_kind]: category
-            for endpoint_kind, category in zip(_SETTINGS_ENDPOINTS, settings_pairs, strict=True)
-        }
         objects = _group_pack_categories(settings_categories, detail=detail)
         return {
             "status": objects["status"],
             "pack_id": pack_id,
             "kind": kind,
+            "metadata": metadata,
             "objects": objects,
         }
 
-    sources, destinations, pipelines, routes = await asyncio.gather(
+    sources, destinations, pipelines, routes, knowledge_categories, settings_categories = await asyncio.gather(
         _collect_shaped_sdk_section(
             client,
             section_kind="sources",
@@ -957,9 +1058,9 @@ async def get_pack(  # noqa: PLR0913
             pack_id=pack_id,
             server_url=server_url,
             object_id=None,
-            detail="summary",
-            cursor=cursor,
-            limit=limit,
+            detail=detail,
+            cursor=None,
+            limit=None,
         ),
         _collect_shaped_sdk_section(
             client,
@@ -968,9 +1069,9 @@ async def get_pack(  # noqa: PLR0913
             pack_id=pack_id,
             server_url=server_url,
             object_id=None,
-            detail="summary",
-            cursor=cursor,
-            limit=limit,
+            detail=detail,
+            cursor=None,
+            limit=None,
         ),
         _collect_shaped_sdk_section(
             client,
@@ -979,9 +1080,9 @@ async def get_pack(  # noqa: PLR0913
             pack_id=pack_id,
             server_url=server_url,
             object_id=None,
-            detail="summary",
-            cursor=cursor,
-            limit=limit,
+            detail=detail,
+            cursor=None,
+            limit=None,
         ),
         _collect_shaped_sdk_section(
             client,
@@ -990,72 +1091,51 @@ async def get_pack(  # noqa: PLR0913
             pack_id=pack_id,
             server_url=server_url,
             object_id=None,
-            detail="summary",
-            cursor=cursor,
-            limit=limit,
+            detail=detail,
+            cursor=None,
+            limit=None,
+        ),
+        _gather_pack_http_categories(
+            client,
+            security=http_security,
+            endpoints=_KNOWLEDGE_ENDPOINTS,
+            category_names=_KNOWLEDGE_CATEGORY_NAMES,
+            timeout_ms=timeout_ms,
+            pack_id=pack_id,
+            server_url=server_url,
+            detail=detail,
+            cursor=None,
+            limit=None,
+        ),
+        _gather_pack_http_categories(
+            client,
+            security=http_security,
+            endpoints=_SETTINGS_ENDPOINTS,
+            category_names=_SETTINGS_CATEGORY_NAMES,
+            timeout_ms=timeout_ms,
+            pack_id=pack_id,
+            server_url=server_url,
+            detail=detail,
+            cursor=None,
+            limit=None,
         ),
     )
-
-    knowledge_results = await asyncio.gather(
-        *[
-            _collect_shaped_http_section(
-                client,
-                security=http_security,
-                section_kind=endpoint_kind,
-                endpoint_path=endpoint_path,
-                timeout_ms=timeout_ms,
-                pack_id=pack_id,
-                server_url=server_url,
-                object_id=None,
-                detail="summary",
-                cursor=cursor,
-                limit=limit,
-            )
-            for endpoint_kind, endpoint_path in _KNOWLEDGE_ENDPOINTS.items()
-        ]
-    )
-    settings_results = await asyncio.gather(
-        *[
-            _collect_shaped_http_section(
-                client,
-                security=http_security,
-                section_kind=endpoint_kind,
-                endpoint_path=endpoint_path,
-                timeout_ms=timeout_ms,
-                pack_id=pack_id,
-                server_url=server_url,
-                object_id=None,
-                detail="summary",
-                cursor=cursor,
-                limit=limit,
-            )
-            for endpoint_kind, endpoint_path in _SETTINGS_ENDPOINTS.items()
-        ]
-    )
-    knowledge_categories = {
-        _KNOWLEDGE_CATEGORY_NAMES[endpoint_kind]: category
-        for endpoint_kind, category in zip(_KNOWLEDGE_ENDPOINTS, knowledge_results, strict=True)
-    }
-    settings_categories = {
-        _SETTINGS_CATEGORY_NAMES[endpoint_kind]: category
-        for endpoint_kind, category in zip(_SETTINGS_ENDPOINTS, settings_results, strict=True)
-    }
 
     sections = {
         "sources": sources,
         "destinations": destinations,
         "pipelines": pipelines,
         "routes": routes,
-        "knowledge": _group_pack_categories(knowledge_categories, detail="summary"),
-        "settings": _group_pack_categories(settings_categories, detail="summary"),
+        "knowledge": _group_pack_categories(knowledge_categories, detail=detail),
+        "settings": _group_pack_categories(settings_categories, detail=detail),
     }
-    has_error = metadata.get("status") not in ("ok", "unavailable") or any(
-        section.get("status") not in ("ok", "unavailable") for section in sections.values()
-    )
+    section_statuses = [section.get("status") for section in sections.values()]
+    has_error = any(status not in ("ok", "unavailable", "partial_unavailable") for status in section_statuses)
+    has_unavailable = any(status in ("unavailable", "partial_unavailable") for status in section_statuses)
     return {
-        "status": "partial_error" if has_error else "ok",
+        "status": "partial_error" if has_error else "partial_unavailable" if has_unavailable else "ok",
         "pack_id": pack_id,
-        "detail": "summary",
+        "detail": detail,
         "metadata": metadata,
         "sections": sections,
     }

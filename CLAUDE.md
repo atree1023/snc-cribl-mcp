@@ -70,7 +70,7 @@ uv run pyright                             # then type check
 - Distributed Cribl requires `/m/{group_id}/` in URLs
 - Always pass `server_url=f"{base}/m/{group_id}"` to SDK client factory
 - Pack tools support both leader-level and distributed use. When `group` is provided, resolve it against the requested `product` (`stream` or `edge`) and pass `server_url=f"{base}/m/{resolved_group_id}"` to the SDK Pack methods.
-- `get_pack` is the single Pack inspection surface: without `kind`, it returns a bounded summary of Pack metadata, sources, destinations, pipelines, routes, settings, and knowledge; with `kind`, `object_id`, and `detail`, it drills into a Pack section or object.
+- `get_pack` is the single Pack inspection surface: without `kind`, it returns a bounded summary of Pack metadata, sources, destinations, pipelines, routes, settings, and knowledge; with a concrete `kind`, `object_id`, and `detail`, it drills into a Pack section or object. Use `cursor` and `limit` only with concrete section/category kinds.
 - Prefer SDK Pack subresources for `sources`, `destinations`, `pipelines`, and `routes`; use read-only direct HTTP against `/p/{pack}/...` for Pack knowledge/settings categories that are missing from the installed SDK.
 
 **Consolidated config object tooling:**

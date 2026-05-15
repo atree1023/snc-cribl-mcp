@@ -178,8 +178,8 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
         description=(
             "Return JSON describing one installed Cribl Pack by Pack ID. By default this summarizes Pack contents "
             "including sources, destinations, pipelines, routes, settings, and knowledge. Pass kind to drill into "
-            'one section, object_id to fetch one object, detail="full" for raw payloads, and cursor/limit for '
-            f"large Pack sections. {_PACK_SCOPE_DESCRIPTION}"
+            'one concrete section, object_id to fetch one object, detail="full" for raw payloads from that '
+            f"section, and cursor/limit to page that section. {_PACK_SCOPE_DESCRIPTION}"
         ),
         annotations={
             "title": "Get Pack",
