@@ -216,9 +216,10 @@ Lists installed Packs. Optionally pass `with_="inputs"`, `with_="outputs"`, or `
 
 #### `get_pack`
 
-Gets one installed Pack by Pack ID.
+Gets one installed Pack by Pack ID. By default, this returns the Pack metadata plus a bounded summary of the Pack's sources, destinations, pipelines, routes, knowledge categories, and settings categories. Pass `kind` to drill into one concrete section or category, `object_id` to fetch one object, `detail="full"` to include raw payloads from that selected section/category, and `cursor`/`limit` to page that selected section/category.
 
-- **Returns:** JSON containing the matching Pack metadata.
+- **Supported `kind` values:** `sources`, `destinations`, `pipelines`, `routes`, `knowledge`, `knowledge.lookups`, `knowledge.breakers`, `knowledge.parsers`, `knowledge.variables`, `knowledge.samples`, `knowledge.regexes`, `knowledge.grok`, `knowledge.schemas`, `knowledge.functions`, `knowledge.hmac_functions`, `knowledge.appscope_configs`, `knowledge.database_connections`, `settings`, `settings.system`, `settings.cribl`, `settings.conf`, `settings.auth`, `settings.git`.
+- **Returns:** JSON containing Pack metadata and either section summaries or the requested Pack object details.
 - **Distributed scope:** Supports the same optional `product` and `group` arguments as `list_packs`.
 
 #### `install_pack`

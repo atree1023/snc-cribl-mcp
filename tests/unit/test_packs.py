@@ -1,13 +1,14 @@
 """Unit tests for top-level Pack operations."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from cribl_control_plane.errors import CriblControlPlaneError
 from cribl_control_plane.models.productscore import ProductsCore
+from cribl_control_plane.models.security import Security
 
 from snc_cribl_mcp.operations import packs
 
@@ -33,17 +34,120 @@ def _single_response(payload: dict[str, Any]) -> MagicMock:
     return response
 
 
+def _json_response(url: str, payload: dict[str, Any], status_code: int = 200) -> httpx.Response:
+    """Build an httpx JSON response with an attached request."""
+    return httpx.Response(
+        status_code,
+        json=payload,
+        request=httpx.Request("GET", url),
+    )
+
+
+def _text_response(url: str, text: str, status_code: int = 200) -> httpx.Response:
+    """Build an httpx text response with an attached request."""
+    return httpx.Response(
+        status_code,
+        text=text,
+        request=httpx.Request("GET", url),
+    )
+
+
 @pytest.fixture
 def mock_client() -> MagicMock:
     """Return a fake Cribl client with Pack SDK methods."""
     client = MagicMock()
     client.packs.list_async = AsyncMock(return_value=_counted_response({"id": "cribl-okta", "source": "git+repo"}))
     client.packs.get_async = AsyncMock(return_value=_counted_response({"id": "cribl-okta", "source": "git+repo"}))
+    client.packs.sources.list_async = AsyncMock(return_value=_counted_response({"id": "in_http", "type": "http"}))
+    client.packs.sources.get_async = AsyncMock(return_value=_counted_response({"id": "in_http", "type": "http"}))
+    client.packs.destinations.list_async = AsyncMock(return_value=_counted_response({"id": "devnull", "type": "devnull"}))
+    client.packs.destinations.get_async = AsyncMock(return_value=_counted_response({"id": "devnull", "type": "devnull"}))
+    client.packs.pipelines.list_async = AsyncMock(
+        return_value=_counted_response(
+            {
+                "id": "main",
+                "conf": {
+                    "functions": [
+                        {"id": "lookup", "conf": {"file": "http_status.csv"}},
+                    ],
+                },
+            }
+        )
+    )
+    client.packs.pipelines.get_async = AsyncMock(
+        return_value=_counted_response(
+            {
+                "id": "main",
+                "conf": {
+                    "functions": [
+                        {"id": "lookup", "conf": {"file": "http_status.csv"}},
+                    ],
+                },
+            }
+        )
+    )
+    client.packs.routes.list_async = AsyncMock(
+        return_value=_counted_response(
+            {
+                "id": "default",
+                "routes": [
+                    {"name": "main", "pipeline": "main", "output": "devnull"},
+                ],
+            }
+        )
+    )
+    client.packs.routes.get_async = AsyncMock(
+        return_value=_counted_response(
+            {
+                "id": "default",
+                "routes": [
+                    {"name": "main", "pipeline": "main", "output": "devnull"},
+                ],
+            }
+        )
+    )
     client.packs.install_async = AsyncMock(return_value=_counted_response({"id": "cribl-duo", "source": "git+repo"}))
     client.packs.upload_async = AsyncMock(return_value=_single_response({"source": "cribl-duo-1.0.0.crbl"}))
     client.packs.update_async = AsyncMock(return_value=_counted_response({"id": "cribl-duo", "source": "git+repo"}))
     client.packs.delete_async = AsyncMock(return_value=_counted_response({"id": "cribl-duo", "source": "git+repo"}))
+    client.sdk_configuration = MagicMock(
+        server_url="https://cribl.example.com/api/v1",
+        async_client=MagicMock(spec=httpx.AsyncClient),
+    )
     return client
+
+
+def _install_pack_http_responder(mock_client: MagicMock) -> dict[str, dict[str, Any]]:
+    """Install a fake direct-HTTP responder for Pack knowledge/settings sections."""
+    base = "https://cribl.example.com/api/v1/m/worker-main/p/cribl-okta"
+    payloads: dict[str, dict[str, Any]] = {
+        f"{base}/system/lookups": {"count": 1, "items": [{"id": "http_status.csv", "size": 817}]},
+        f"{base}/lib/breakers": {"count": 1, "items": [{"id": "Apache Ruleset", "rules": []}]},
+        f"{base}/lib/parsers": {"count": 0, "items": []},
+        f"{base}/lib/vars": {"count": 1, "items": [{"id": "theAnswer", "value": 42}]},
+        f"{base}/system/samples": {"count": 1, "items": [{"id": "apache_common"}]},
+        f"{base}/lib/regex": {"count": 0, "items": []},
+        f"{base}/lib/grok": {"count": 0, "items": []},
+        f"{base}/lib/schemas": {"count": 0, "items": []},
+        f"{base}/functions": {"count": 1, "items": [{"id": "eval"}]},
+        f"{base}/lib/hmac-functions": {"count": 0, "items": []},
+        f"{base}/lib/appscope-configs": {"count": 0, "items": []},
+        f"{base}/lib/database-connections": {"count": 0, "items": []},
+        f"{base}/system/settings": {"count": 1, "items": [{"id": "settings", "api": {"protocol": "http1.1"}}]},
+        f"{base}/system/settings/cribl": {"count": 1, "items": [{"id": "cribl", "intercom": True}]},
+        f"{base}/system/settings/conf": {"count": 1, "items": [{"id": "conf", "api": {"retryCount": 120}}]},
+        f"{base}/system/settings/auth": {"count": 1, "items": [{"id": "auth", "type": "local"}]},
+        f"{base}/system/settings/git-settings": {"count": 0, "items": []},
+    }
+
+    async def get(url: str, **_: object) -> httpx.Response:
+        payload = payloads.get(url)
+        if payload is None:
+            return _json_response(url, {"message": "missing"}, status_code=404)
+        return _json_response(url, payload)
+
+    mock_client.sdk_configuration.async_client.get = AsyncMock(side_effect=get)
+    return payloads
 
 
 @pytest.mark.asyncio
@@ -126,12 +230,289 @@ async def test_collect_packs_returns_unavailable_for_404(mock_client: MagicMock)
 
 
 @pytest.mark.asyncio
-async def test_get_pack_forwards_pack_id(mock_client: MagicMock) -> None:
-    """Pack lookup should forward the SDK id parameter."""
-    result = await packs.get_pack(mock_client, timeout_ms=1234, pack_id="cribl-okta")
+async def test_get_pack_returns_pack_contents_summary(mock_client: MagicMock) -> None:
+    """Pack lookup should summarize the config content inside the Pack."""
+    payloads = _install_pack_http_responder(mock_client)
 
-    mock_client.packs.get_async.assert_awaited_once_with(id="cribl-okta", timeout_ms=1234)
-    assert result["items"] == [{"id": "cribl-okta", "source": "git+repo"}]
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-okta",
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+        security=Security(bearer_auth="test-token"),
+    )
+
+    mock_client.packs.get_async.assert_awaited_once_with(
+        id="cribl-okta",
+        timeout_ms=1234,
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+    )
+    mock_client.packs.sources.list_async.assert_awaited_once_with(
+        pack="cribl-okta",
+        timeout_ms=1234,
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+    )
+    assert result["status"] == "ok"
+    assert result["pack_id"] == "cribl-okta"
+    assert result["metadata"]["items"] == [{"id": "cribl-okta", "source": "git+repo"}]
+    assert result["sections"]["sources"]["total_count"] == 1
+    assert result["sections"]["destinations"]["items"][0]["id"] == "devnull"
+    assert result["sections"]["pipelines"]["items"][0]["refs"] == {"lookups": ["http_status.csv"]}
+    assert result["sections"]["routes"]["items"][0]["refs"] == {"destinations": ["devnull"], "pipelines": ["main"]}
+    assert result["sections"]["knowledge"]["categories"]["lookups"]["items"][0]["id"] == "http_status.csv"
+    assert result["sections"]["knowledge"]["total_count"] == 5
+    assert result["sections"]["settings"]["categories"]["conf"]["items"][0]["keys"] == ["api", "id"]
+    assert mock_client.sdk_configuration.async_client.get.await_count == len(payloads)
+
+
+@pytest.mark.asyncio
+async def test_get_pack_rejects_aggregate_pagination(mock_client: MagicMock) -> None:
+    """Cursor and limit should only be accepted for a concrete Pack section."""
+    with pytest.raises(ValueError, match="cursor and limit"):
+        await packs.get_pack(
+            mock_client,
+            timeout_ms=1234,
+            pack_id="cribl-okta",
+            security=Security(bearer_auth="test-token"),
+            cursor="50",
+        )
+
+    mock_client.packs.get_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_pack_rejects_aggregate_full_detail(mock_client: MagicMock) -> None:
+    """Raw payload detail should require selecting one Pack section or category."""
+    with pytest.raises(ValueError, match="detail='full'"):
+        await packs.get_pack(
+            mock_client,
+            timeout_ms=1234,
+            pack_id="cribl-okta",
+            kind="knowledge",
+            detail="full",
+            security=Security(bearer_auth="test-token"),
+        )
+
+    mock_client.packs.get_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_pack_requires_security_for_http_backed_summary(mock_client: MagicMock) -> None:
+    """Default Pack summaries should fail clearly when direct HTTP auth is unavailable."""
+    with pytest.raises(ValueError, match="security is required"):
+        await packs.get_pack(mock_client, timeout_ms=1234, pack_id="cribl-okta")
+
+    mock_client.packs.get_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_pack_preserves_missing_metadata_status(mock_client: MagicMock) -> None:
+    """A missing Pack metadata lookup should not be reported as a successful content summary."""
+    mock_client.packs.get_async = AsyncMock(
+        side_effect=CriblControlPlaneError(
+            "Not found",
+            httpx.Response(404, text="missing"),
+        )
+    )
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="missing-pack",
+        security=Security(bearer_auth="test-token"),
+    )
+
+    assert result["status"] == "unavailable"
+    assert result["metadata"]["status"] == "unavailable"
+    assert result["sections"] == {}
+    mock_client.sdk_configuration.async_client.get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_pack_returns_single_full_sdk_backed_object(mock_client: MagicMock) -> None:
+    """Pack lookup should drill into one object when kind and object_id are provided."""
+    mock_client.packs.pipelines.get_async = AsyncMock(
+        return_value=_single_response(
+            {
+                "id": "main",
+                "conf": {
+                    "functions": [
+                        {"id": "lookup", "conf": {"file": "http_status.csv"}},
+                    ],
+                },
+            }
+        )
+    )
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-okta",
+        kind="pipelines",
+        object_id="main",
+        detail="full",
+    )
+
+    mock_client.packs.pipelines.get_async.assert_awaited_once_with(id="main", pack="cribl-okta", timeout_ms=1234)
+    assert result["kind"] == "pipelines"
+    assert result["object_id"] == "main"
+    assert result["objects"]["items"][0]["payload"]["id"] == "main"
+    assert result["objects"]["items"][0]["payload"]["conf"]["functions"][0]["id"] == "lookup"
+
+
+@pytest.mark.asyncio
+async def test_get_pack_returns_single_full_http_backed_object(mock_client: MagicMock) -> None:
+    """HTTP-backed object drill-down should preserve single-object JSON payloads."""
+    base = "https://cribl.example.com/api/v1/m/worker-main/p/cribl-okta/system/lookups/http_status.csv"
+
+    async def get(url: str, **_: object) -> httpx.Response:
+        assert url == base
+        return _json_response(url, {"id": "http_status.csv", "size": 817})
+
+    mock_client.sdk_configuration.async_client.get = AsyncMock(side_effect=get)
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-okta",
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+        security=Security(bearer_auth="test-token"),
+        kind="knowledge.lookups",
+        object_id="http_status.csv",
+        detail="full",
+    )
+
+    assert result["status"] == "ok"
+    assert result["objects"]["total_count"] == 1
+    assert result["objects"]["items"][0]["id"] == "http_status.csv"
+    assert result["objects"]["items"][0]["payload"]["size"] == 817
+
+
+@pytest.mark.asyncio
+async def test_get_pack_reports_http_error_for_direct_endpoint(mock_client: MagicMock) -> None:
+    """Direct HTTP Pack reads should surface non-404 status failures."""
+    url = "https://cribl.example.com/api/v1/m/worker-main/p/cribl-okta/system/lookups"
+    mock_client.sdk_configuration.async_client.get = AsyncMock(
+        return_value=_json_response(url, {"message": "boom"}, status_code=500)
+    )
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-okta",
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+        security=Security(bearer_auth="test-token"),
+        kind="knowledge.lookups",
+    )
+
+    assert result["status"] == "error"
+    assert result["objects"]["status_code"] == 500
+
+
+@pytest.mark.asyncio
+async def test_get_pack_reports_invalid_json_for_direct_endpoint(mock_client: MagicMock) -> None:
+    """Direct HTTP Pack reads should surface invalid JSON responses."""
+    url = "https://cribl.example.com/api/v1/m/worker-main/p/cribl-okta/system/lookups"
+    mock_client.sdk_configuration.async_client.get = AsyncMock(return_value=_text_response(url, "not-json"))
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-okta",
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+        security=Security(bearer_auth="test-token"),
+        kind="knowledge.lookups",
+    )
+
+    assert result["status"] == "error"
+    assert result["objects"]["error_type"] == "JSONDecodeError"
+
+
+@pytest.mark.asyncio
+async def test_get_pack_marks_all_unavailable_categories(mock_client: MagicMock) -> None:
+    """Aggregate category groups should distinguish all-404 categories from empty categories."""
+
+    async def get(url: str, **_: object) -> httpx.Response:
+        return _json_response(url, {"message": "missing"}, status_code=404)
+
+    mock_client.sdk_configuration.async_client.get = AsyncMock(side_effect=get)
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-okta",
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+        security=Security(bearer_auth="test-token"),
+        kind="knowledge",
+    )
+
+    assert result["status"] == "unavailable"
+    assert result["objects"]["status"] == "unavailable"
+    assert result["objects"]["total_count"] == 0
+    assert result["objects"]["unavailable_count"] == len(result["objects"]["categories"])
+
+
+@pytest.mark.asyncio
+async def test_get_pack_paginates_concrete_sdk_section(mock_client: MagicMock) -> None:
+    """Concrete sections should return cursor metadata when the result is truncated."""
+    mock_client.packs.sources.list_async = AsyncMock(return_value=_counted_response({"id": "a"}, {"id": "b"}, {"id": "c"}))
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-okta",
+        kind="sources",
+        cursor="1",
+        limit=1,
+    )
+
+    assert result["objects"]["items"] == [{"id": "b", "refs": {}}]
+    assert result["objects"]["truncated"] is True
+    assert result["objects"]["next_cursor"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_get_pack_requires_concrete_knowledge_kind_for_object_id(mock_client: MagicMock) -> None:
+    """Object drill-down under knowledge should require an explicit knowledge category."""
+    with pytest.raises(ValueError, match="Use a concrete knowledge kind"):
+        await packs.get_pack(
+            mock_client,
+            timeout_ms=1234,
+            pack_id="cribl-okta",
+            kind="knowledge",
+            object_id="http_status.csv",
+        )
+
+    mock_client.packs.get_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_pack_requires_concrete_settings_kind_for_object_id(mock_client: MagicMock) -> None:
+    """Object drill-down under settings should require an explicit settings category."""
+    with pytest.raises(ValueError, match="Use a concrete settings kind"):
+        await packs.get_pack(
+            mock_client,
+            timeout_ms=1234,
+            pack_id="cribl-okta",
+            kind="settings",
+            object_id="conf",
+        )
+
+    mock_client.packs.get_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_pack_rejects_unsupported_kind(mock_client: MagicMock) -> None:
+    """Unsupported Pack object kinds should fail before any API calls."""
+    with pytest.raises(ValueError, match="Unsupported Pack object kind"):
+        await packs.get_pack(
+            mock_client,
+            timeout_ms=1234,
+            pack_id="cribl-okta",
+            kind=cast("Any", "widgets"),
+        )
+
+    mock_client.packs.get_async.assert_not_awaited()
 
 
 @pytest.mark.asyncio
