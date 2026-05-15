@@ -1,10 +1,12 @@
 """Unit tests for top-level Pack operations."""
 
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from cribl_control_plane.errors import CriblControlPlaneError
 from cribl_control_plane.models.productscore import ProductsCore
 
 from snc_cribl_mcp.operations import packs
@@ -69,7 +71,7 @@ async def test_resolve_pack_group_scope_matches_group_name(mock_client: MagicMoc
     scope = await packs.resolve_pack_group_scope(
         mock_client,
         product=ProductsCore.STREAM,
-        group="main workers",
+        group=" main workers ",
         timeout_ms=1234,
     )
 
@@ -104,6 +106,26 @@ async def test_collect_packs_forwards_group_server_url(mock_client: MagicMock) -
 
 
 @pytest.mark.asyncio
+async def test_collect_packs_returns_unavailable_for_404(mock_client: MagicMock) -> None:
+    """Pack listing should return a structured unavailable payload for missing Pack APIs."""
+    mock_client.packs.list_async = AsyncMock(
+        side_effect=CriblControlPlaneError(
+            "Not found",
+            httpx.Response(404, text="missing"),
+        )
+    )
+
+    result = await packs.collect_packs(mock_client, timeout_ms=1234)
+
+    assert result == {
+        "status": "unavailable",
+        "message": "Endpoint returned HTTP 404 (Not Found).",
+        "count": 0,
+        "items": [],
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_pack_forwards_pack_id(mock_client: MagicMock) -> None:
     """Pack lookup should forward the SDK id parameter."""
     result = await packs.get_pack(mock_client, timeout_ms=1234, pack_id="cribl-okta")
@@ -124,14 +146,23 @@ async def test_install_pack_forwards_request_body(mock_client: MagicMock) -> Non
 
 
 @pytest.mark.asyncio
+async def test_install_pack_rejects_unknown_request_fields(mock_client: MagicMock) -> None:
+    """Pack install should fail fast for typoed top-level request fields."""
+    with pytest.raises(ValueError, match="Unsupported Pack install request field"):
+        await packs.install_pack(mock_client, timeout_ms=1234, request={"sourse": "git+repo"})
+
+    mock_client.packs.install_async.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_upload_pack_reads_file_and_forwards_filename(mock_client: MagicMock, tmp_path: Path) -> None:
     """Pack upload should stream the selected local file to the SDK."""
     pack_file = tmp_path / "cribl-duo-1.0.0.crbl"
     pack_file.write_bytes(b"pack-bytes")
 
-    async def upload_async(*, filename: str, request_body: BinaryIO, timeout_ms: int) -> MagicMock:
+    async def upload_async(*, filename: str, request_body: bytes, timeout_ms: int) -> MagicMock:
         assert filename == "cribl-duo-1.0.0.crbl"
-        assert request_body.read() == b"pack-bytes"
+        assert request_body == b"pack-bytes"
         assert timeout_ms == 1234
         return _single_response({"source": "cribl-duo-1.0.0.crbl"})
 
@@ -149,6 +180,18 @@ async def test_upload_pack_rejects_missing_file(mock_client: MagicMock, tmp_path
 
     with pytest.raises(ValueError, match="Pack file not found"):
         await packs.upload_pack(mock_client, timeout_ms=1234, file_path=missing)
+
+    mock_client.packs.upload_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_pack_rejects_non_crbl_file(mock_client: MagicMock, tmp_path: Path) -> None:
+    """Pack upload should reject existing files that are not Pack archives."""
+    not_a_pack = tmp_path / "notes.txt"
+    not_a_pack.write_text("not a pack")
+
+    with pytest.raises(ValueError, match="Invalid Pack file extension"):
+        await packs.upload_pack(mock_client, timeout_ms=1234, file_path=not_a_pack)
 
     mock_client.packs.upload_async.assert_not_called()
 
@@ -184,9 +227,45 @@ async def test_update_pack_forwards_upgrade_options(mock_client: MagicMock) -> N
 
 
 @pytest.mark.asyncio
+async def test_update_pack_omits_unset_upgrade_options(mock_client: MagicMock) -> None:
+    """Pack upgrade should avoid forwarding optional fields that callers did not set."""
+    result = await packs.update_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-duo",
+        request=packs.PackUpdateRequest(source="https://example.com/cribl-duo.crbl"),
+    )
+
+    mock_client.packs.update_async.assert_awaited_once_with(
+        id="cribl-duo",
+        source="https://example.com/cribl-duo.crbl",
+        timeout_ms=1234,
+    )
+    assert result["items"] == [{"id": "cribl-duo", "source": "git+repo"}]
+
+
+@pytest.mark.asyncio
 async def test_delete_pack_forwards_pack_id(mock_client: MagicMock) -> None:
     """Pack uninstall should forward the SDK id parameter."""
     result = await packs.delete_pack(mock_client, timeout_ms=1234, pack_id="cribl-duo")
 
     mock_client.packs.delete_async.assert_awaited_once_with(id="cribl-duo", timeout_ms=1234)
     assert result["items"] == [{"id": "cribl-duo", "source": "git+repo"}]
+
+
+@pytest.mark.asyncio
+async def test_resolve_pack_group_scope_rejects_ambiguous_group_selector(mock_client: MagicMock) -> None:
+    """Pack group resolution should fail clearly when a selector matches multiple groups."""
+    first = MagicMock()
+    first.model_dump.return_value = {"id": "worker-a", "name": "Main Workers"}
+    second = MagicMock()
+    second.model_dump.return_value = {"id": "worker-b", "name": "Main Workers"}
+    mock_client.groups.list_async = AsyncMock(return_value=MagicMock(items=[first, second]))
+
+    with pytest.raises(ValueError, match="matched multiple stream groups by name"):
+        await packs.resolve_pack_group_scope(
+            mock_client,
+            product=ProductsCore.STREAM,
+            group="Main Workers",
+            timeout_ms=1234,
+        )

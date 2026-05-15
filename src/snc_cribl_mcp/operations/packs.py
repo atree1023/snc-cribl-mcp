@@ -1,16 +1,49 @@
 """Helpers for managing top-level Cribl Packs."""
 
-from collections.abc import Mapping
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
+import httpx
 from cribl_control_plane import CriblControlPlane
+from cribl_control_plane.errors import CriblControlPlaneError, ResponseValidationError
 from cribl_control_plane.models.productscore import ProductsCore
+from pydantic import ValidationError
 
-from .common import extract_group_id, get_group_url, list_groups_minimal, serialize_model
+from .common import (
+    HTTP_NOT_FOUND,
+    build_unavailable_result,
+    extract_group_id,
+    get_group_url,
+    list_groups_minimal,
+    serialize_model,
+)
+from .validation_errors import format_validation_error_response, parse_validation_error
 
 type GroupMatchField = Literal["description", "id", "name"]
+type PackApiCall = Callable[[], Awaitable[object]]
+type PackSerializer = Callable[[object], dict[str, Any]]
+
+_INSTALL_REQUEST_FIELDS = frozenset(
+    {
+        "allowCustomFunctions",
+        "allow_custom_functions",
+        "author",
+        "description",
+        "displayName",
+        "display_name",
+        "force",
+        "id",
+        "minLogStreamVersion",
+        "min_log_stream_version",
+        "source",
+        "spec",
+        "tags",
+        "version",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +116,96 @@ def _pack_call_kwargs(*, timeout_ms: int, server_url: str | None) -> dict[str, A
     return kwargs
 
 
+def _pack_scope_label(server_url: str | None) -> str:
+    """Return a short label for top-level versus group-scoped Pack API calls."""
+    return "group-scoped" if server_url is not None else "top-level"
+
+
+def _pack_api_error_payload(
+    exc: CriblControlPlaneError,
+    *,
+    resource_type: str,
+    server_url: str | None,
+) -> dict[str, Any]:
+    """Convert SDK errors into structured Pack operation payloads."""
+    if isinstance(exc, ResponseValidationError):
+        cause = exc.cause
+        validation_errors = parse_validation_error(cause) if isinstance(cause, ValidationError) else []
+        return format_validation_error_response(
+            resource_type=resource_type,
+            product="packs",
+            group_id=_pack_scope_label(server_url),
+            body=exc.body,
+            validation_errors=validation_errors,
+        )
+
+    if exc.status_code == HTTP_NOT_FOUND:
+        return build_unavailable_result(is_grouped=False)
+
+    return {
+        "status": "error",
+        "error": str(exc),
+        "error_type": exc.__class__.__name__,
+        "status_code": exc.status_code,
+    }
+
+
+async def _run_pack_api_call(
+    call: PackApiCall,
+    *,
+    serializer: PackSerializer,
+    resource_type: str,
+    server_url: str | None,
+) -> dict[str, Any]:
+    """Run a Pack SDK call and return either serialized data or a structured error."""
+    try:
+        response = await call()
+    except CriblControlPlaneError as exc:
+        return _pack_api_error_payload(exc, resource_type=resource_type, server_url=server_url)
+    except httpx.HTTPError as exc:
+        return {
+            "status": "error",
+            "error": f"Network error while managing Cribl Packs: {exc}",
+            "error_type": exc.__class__.__name__,
+        }
+
+    return serializer(response)
+
+
+def _validate_install_pack_request(request: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Reject unknown Pack install request fields before invoking the SDK."""
+    unknown_fields = sorted(field for field in request if field not in _INSTALL_REQUEST_FIELDS)
+    if unknown_fields:
+        allowed = ", ".join(sorted(_INSTALL_REQUEST_FIELDS))
+        unknown = ", ".join(unknown_fields)
+        msg = f"Unsupported Pack install request field(s): {unknown}. Allowed fields: {allowed}."
+        raise ValueError(msg)
+    return request
+
+
+def _pack_update_kwargs(
+    *,
+    pack_id: str,
+    request: PackUpdateRequest,
+    timeout_ms: int,
+    server_url: str | None,
+) -> dict[str, Any]:
+    """Build Pack update SDK kwargs without forwarding unset optional fields."""
+    kwargs = {
+        "id": pack_id,
+        "source": request.source,
+        **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url),
+    }
+    options = request.options
+    if options.allow_custom_functions is not None:
+        kwargs["allow_custom_functions"] = options.allow_custom_functions
+    if options.minor is not None:
+        kwargs["minor"] = options.minor
+    if options.spec is not None:
+        kwargs["spec"] = options.spec
+    return kwargs
+
+
 def _resolve_pack_file(file_path: str | Path) -> Path:
     """Return an existing Pack file path or raise a clear error."""
     path = Path(file_path).expanduser()
@@ -130,6 +253,8 @@ def _select_group_match(
     product: ProductsCore,
 ) -> tuple[dict[str, Any], GroupMatchField] | None:
     """Find the best matching distributed group by id, name, or description."""
+    # Prefer exact/case-sensitive matches before broader case-insensitive matches.
+    # Within each pass, stable identifiers intentionally win over display metadata.
     for case_sensitive in (True, False):
         for match_field in ("id", "name", "description"):
             matches = _matching_groups(
@@ -162,18 +287,18 @@ async def resolve_pack_group_scope(
     groups = await list_groups_minimal(client, product=product, timeout_ms=timeout_ms)
     matched = _select_group_match(groups, selector=normalized_group, product=product)
     if matched is None:
-        msg = f"Could not resolve group selector '{group}' for product '{product.value}'."
+        msg = f"Could not resolve group selector '{normalized_group}' for product '{product.value}'."
         raise ValueError(msg)
 
     matched_group, matched_by = matched
     group_id = extract_group_id(matched_group)
     if group_id is None:
-        msg = f"Resolved group selector '{group}' but the matching group did not include an id."
+        msg = f"Resolved group selector '{normalized_group}' but the matching group did not include an id."
         raise ValueError(msg)
 
     return ResolvedPackGroupScope(
         product=product,
-        group_selector=group,
+        group_selector=normalized_group,
         group_id=group_id,
         matched_by=matched_by,
         group_name=_normalize_group_text(matched_group.get("name")),
@@ -189,7 +314,7 @@ async def collect_packs(
     with_: str | None = None,
     server_url: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch all installed Packs.
+    """Fetch installed Packs, optionally against a group-scoped Pack API URL.
 
     Args:
         client: The Cribl Control Plane client.
@@ -201,8 +326,15 @@ async def collect_packs(
         Serialized counted Pack response.
 
     """
-    response = await client.packs.list_async(with_=with_, **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url))
-    return _serialize_counted_response(response)
+    return await _run_pack_api_call(
+        lambda: client.packs.list_async(
+            with_=with_,
+            **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url),
+        ),
+        serializer=_serialize_counted_response,
+        resource_type="packs",
+        server_url=server_url,
+    )
 
 
 async def get_pack(
@@ -213,8 +345,15 @@ async def get_pack(
     server_url: str | None = None,
 ) -> dict[str, Any]:
     """Fetch one installed Pack by ID."""
-    response = await client.packs.get_async(id=pack_id, **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url))
-    return _serialize_counted_response(response)
+    return await _run_pack_api_call(
+        lambda: client.packs.get_async(
+            id=pack_id,
+            **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url),
+        ),
+        serializer=_serialize_counted_response,
+        resource_type="packs",
+        server_url=server_url,
+    )
 
 
 async def install_pack(
@@ -225,11 +364,16 @@ async def install_pack(
     server_url: str | None = None,
 ) -> dict[str, Any]:
     """Install a Pack from an ID/source request body."""
-    response = await client.packs.install_async(
-        request=cast("Any", request),
-        **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url),
+    validated_request = _validate_install_pack_request(request)
+    return await _run_pack_api_call(
+        lambda: client.packs.install_async(
+            request=cast("Any", validated_request),
+            **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url),
+        ),
+        serializer=_serialize_counted_response,
+        resource_type="packs",
+        server_url=server_url,
     )
-    return _serialize_counted_response(response)
 
 
 async def upload_pack(
@@ -241,14 +385,18 @@ async def upload_pack(
 ) -> dict[str, Any]:
     """Upload a local Pack file and return the install source returned by Cribl."""
     path = _resolve_pack_file(file_path)
+    request_body = await asyncio.to_thread(path.read_bytes)
 
-    with path.open("rb") as request_body:
-        response = await client.packs.upload_async(
+    return await _run_pack_api_call(
+        lambda: client.packs.upload_async(
             filename=path.name,
             request_body=request_body,
             **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url),
-        )
-    return _serialize_single_response(response)
+        ),
+        serializer=_serialize_single_response,
+        resource_type="packs",
+        server_url=server_url,
+    )
 
 
 async def update_pack(
@@ -260,15 +408,19 @@ async def update_pack(
     server_url: str | None = None,
 ) -> dict[str, Any]:
     """Upgrade an installed Pack from a source URL or uploaded source ID."""
-    response = await client.packs.update_async(
-        id=pack_id,
-        source=request.source,
-        allow_custom_functions=request.options.allow_custom_functions,
-        minor=request.options.minor,
-        spec=request.options.spec,
-        **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url),
+    return await _run_pack_api_call(
+        lambda: client.packs.update_async(
+            **_pack_update_kwargs(
+                pack_id=pack_id,
+                request=request,
+                timeout_ms=timeout_ms,
+                server_url=server_url,
+            ),
+        ),
+        serializer=_serialize_counted_response,
+        resource_type="packs",
+        server_url=server_url,
     )
-    return _serialize_counted_response(response)
 
 
 async def delete_pack(
@@ -279,8 +431,15 @@ async def delete_pack(
     server_url: str | None = None,
 ) -> dict[str, Any]:
     """Uninstall an installed Pack by ID."""
-    response = await client.packs.delete_async(id=pack_id, **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url))
-    return _serialize_counted_response(response)
+    return await _run_pack_api_call(
+        lambda: client.packs.delete_async(
+            id=pack_id,
+            **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url),
+        ),
+        serializer=_serialize_counted_response,
+        resource_type="packs",
+        server_url=server_url,
+    )
 
 
 __all__ = [

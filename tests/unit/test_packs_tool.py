@@ -121,12 +121,32 @@ async def test_pack_tools_register_with_expected_annotations(deps: SimpleNamespa
         "update_pack",
         "delete_pack",
     }
-    assert app.annotations["list_packs"] == {"title": "List Packs", "readOnlyHint": True}
-    assert app.annotations["get_pack"] == {"title": "Get Pack", "readOnlyHint": True}
-    assert app.annotations["install_pack"] == {"title": "Install Pack", "readOnlyHint": False}
-    assert app.annotations["upload_pack"] == {"title": "Upload Pack", "readOnlyHint": False}
-    assert app.annotations["update_pack"] == {"title": "Upgrade Pack", "readOnlyHint": False}
-    assert app.annotations["delete_pack"] == {"title": "Uninstall Pack", "readOnlyHint": False}
+    assert app.annotations["list_packs"] == {"title": "List Packs", "readOnlyHint": True, "idempotentHint": True}
+    assert app.annotations["get_pack"] == {"title": "Get Pack", "readOnlyHint": True, "idempotentHint": True}
+    assert app.annotations["install_pack"] == {
+        "title": "Install Pack",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+    }
+    assert app.annotations["upload_pack"] == {
+        "title": "Upload Pack",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+    }
+    assert app.annotations["update_pack"] == {
+        "title": "Upgrade Pack",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+    }
+    assert app.annotations["delete_pack"] == {
+        "title": "Uninstall Pack",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+    }
 
 
 @pytest.mark.asyncio
@@ -208,8 +228,6 @@ async def test_pack_mutation_tools_forward_arguments(
         id="cribl-duo",
         source="https://example.com/cribl-duo.crbl",
         allow_custom_functions=True,
-        minor=None,
-        spec=None,
         timeout_ms=10000,
     )
     deps.client.packs.delete_async.assert_awaited_once_with(id="cribl-duo", timeout_ms=10000)
@@ -229,3 +247,16 @@ async def test_get_pack_tool_returns_singular_section(deps: SimpleNamespace, moc
 
     deps.client.packs.get_async.assert_awaited_once_with(id="cribl-okta", timeout_ms=10000)
     assert result["pack"]["items"] == [{"id": "cribl-okta", "source": "git+repo"}]
+
+
+@pytest.mark.asyncio
+async def test_pack_tool_rejects_product_without_group(deps: SimpleNamespace, mock_ctx: Context) -> None:
+    """Pack tools should fail fast when product is supplied without distributed group scope."""
+    app = _FakeApp()
+    register_pack_tools(app, deps=deps)  # type: ignore[arg-type]
+
+    result = await app.tools["list_packs"](mock_ctx, product="edge")
+
+    assert result["packs"]["status"] == "validation_error"
+    assert "product is only used when group is provided" in result["packs"]["message"]
+    deps.client.packs.list_async.assert_not_awaited()
