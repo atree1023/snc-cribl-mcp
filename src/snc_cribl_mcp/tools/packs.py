@@ -9,9 +9,12 @@ from types import SimpleNamespace
 from typing import Any
 
 from cribl_control_plane import CriblControlPlane
+from cribl_control_plane.models.security import Security
 from fastmcp import Context, FastMCP
 
 from ..operations.packs import (
+    PackObjectDetail,
+    PackObjectKind,
     PackUpdateRequest,
     PackUpgradeOptions,
     collect_packs,
@@ -25,7 +28,7 @@ from ..operations.packs import (
 from .common import resolve_tool_deps
 from .sync_common import ProductName, parse_product
 
-type PackOperation = Callable[[CriblControlPlane, int, str | None], Awaitable[dict[str, Any]]]
+type PackOperation = Callable[[CriblControlPlane, int, str | None, Security], Awaitable[dict[str, Any]]]
 
 _PACK_SCOPE_DESCRIPTION = (
     'For distributed environments, pass both product="stream" or product="edge" and a group selector. '
@@ -114,7 +117,7 @@ async def _run_pack_operation(
                 )
                 server_url = resolved_scope.server_url
                 scope = resolved_scope.as_dict()
-            payload = await call.operation(client, resolved_deps.config.timeout_ms, server_url)
+            payload = await call.operation(client, resolved_deps.config.timeout_ms, server_url, security)
     except ValueError as exc:
         payload = _validation_error_payload(str(exc))
 
@@ -149,7 +152,12 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
         product: ProductName = "stream",
         group: str | None = None,
     ) -> dict[str, Any]:
-        async def _operation(client: CriblControlPlane, timeout_ms: int, server_url: str | None) -> dict[str, Any]:
+        async def _operation(
+            client: CriblControlPlane,
+            timeout_ms: int,
+            server_url: str | None,
+            security: Security,  # noqa: ARG001
+        ) -> dict[str, Any]:
             return await collect_packs(client, timeout_ms=timeout_ms, with_=with_, server_url=server_url)
 
         return await _run_pack_operation(
@@ -167,22 +175,48 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
 
     @app.tool(
         name="get_pack",
-        description=f"Return JSON describing one installed Cribl Pack by Pack ID. {_PACK_SCOPE_DESCRIPTION}",
+        description=(
+            "Return JSON describing one installed Cribl Pack by Pack ID. By default this summarizes Pack contents "
+            "including sources, destinations, pipelines, routes, settings, and knowledge. Pass kind to drill into "
+            'one section, object_id to fetch one object, detail="full" for raw payloads, and cursor/limit for '
+            f"large Pack sections. {_PACK_SCOPE_DESCRIPTION}"
+        ),
         annotations={
             "title": "Get Pack",
             "readOnlyHint": True,
             "idempotentHint": True,
         },
     )
-    async def get_pack_tool(
+    async def get_pack_tool(  # noqa: PLR0913
         ctx: Context,
         pack_id: str,
         server: str | None = None,
         product: ProductName = "stream",
         group: str | None = None,
+        kind: PackObjectKind | None = None,
+        object_id: str | None = None,
+        detail: PackObjectDetail = "summary",
+        cursor: str | None = None,
+        limit: int | None = None,
     ) -> dict[str, Any]:
-        async def _operation(client: CriblControlPlane, timeout_ms: int, server_url: str | None) -> dict[str, Any]:
-            return await get_pack(client, timeout_ms=timeout_ms, pack_id=pack_id, server_url=server_url)
+        async def _operation(
+            client: CriblControlPlane,
+            timeout_ms: int,
+            server_url: str | None,
+            security: Security,
+        ) -> dict[str, Any]:
+            return await get_pack(
+                client,
+                timeout_ms=timeout_ms,
+                pack_id=pack_id,
+                server_url=server_url,
+                security=security,
+                kind=kind,
+                object_id=object_id,
+                detail=detail,
+                cursor=cursor,
+                limit=limit,
+            )
 
         return await _run_pack_operation(
             ctx,
@@ -219,7 +253,12 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
         product: ProductName = "stream",
         group: str | None = None,
     ) -> dict[str, Any]:
-        async def _operation(client: CriblControlPlane, timeout_ms: int, server_url: str | None) -> dict[str, Any]:
+        async def _operation(
+            client: CriblControlPlane,
+            timeout_ms: int,
+            server_url: str | None,
+            security: Security,  # noqa: ARG001
+        ) -> dict[str, Any]:
             return await install_pack(client, timeout_ms=timeout_ms, request=request, server_url=server_url)
 
         return await _run_pack_operation(
@@ -256,7 +295,12 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
         product: ProductName = "stream",
         group: str | None = None,
     ) -> dict[str, Any]:
-        async def _operation(client: CriblControlPlane, timeout_ms: int, server_url: str | None) -> dict[str, Any]:
+        async def _operation(
+            client: CriblControlPlane,
+            timeout_ms: int,
+            server_url: str | None,
+            security: Security,  # noqa: ARG001
+        ) -> dict[str, Any]:
             return await upload_pack(client, timeout_ms=timeout_ms, file_path=file_path, server_url=server_url)
 
         return await _run_pack_operation(
@@ -293,7 +337,12 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
         minor: str | None = None,
         spec: str | None = None,
     ) -> dict[str, Any]:
-        async def _operation(client: CriblControlPlane, timeout_ms: int, server_url: str | None) -> dict[str, Any]:
+        async def _operation(
+            client: CriblControlPlane,
+            timeout_ms: int,
+            server_url: str | None,
+            security: Security,  # noqa: ARG001
+        ) -> dict[str, Any]:
             return await update_pack(
                 client,
                 timeout_ms=timeout_ms,
@@ -339,7 +388,12 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
         product: ProductName = "stream",
         group: str | None = None,
     ) -> dict[str, Any]:
-        async def _operation(client: CriblControlPlane, timeout_ms: int, server_url: str | None) -> dict[str, Any]:
+        async def _operation(
+            client: CriblControlPlane,
+            timeout_ms: int,
+            server_url: str | None,
+            security: Security,  # noqa: ARG001
+        ) -> dict[str, Any]:
             return await delete_pack(client, timeout_ms=timeout_ms, pack_id=pack_id, server_url=server_url)
 
         return await _run_pack_operation(

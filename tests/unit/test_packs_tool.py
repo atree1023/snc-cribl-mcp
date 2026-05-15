@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from cribl_control_plane.models.productscore import ProductsCore
 from cribl_control_plane.models.security import Security
@@ -83,11 +84,27 @@ def deps() -> SimpleNamespace:
     client = MagicMock()
     client.packs.list_async = AsyncMock(return_value=_counted_response({"id": "cribl-okta", "source": "git+repo"}))
     client.packs.get_async = AsyncMock(return_value=_counted_response({"id": "cribl-okta", "source": "git+repo"}))
+    client.packs.sources.list_async = AsyncMock(return_value=_counted_response())
+    client.packs.sources.get_async = AsyncMock(return_value=_counted_response({"id": "in_http", "type": "http"}))
+    client.packs.destinations.list_async = AsyncMock(return_value=_counted_response())
+    client.packs.destinations.get_async = AsyncMock(return_value=_counted_response({"id": "devnull", "type": "devnull"}))
+    client.packs.pipelines.list_async = AsyncMock(return_value=_counted_response())
+    client.packs.pipelines.get_async = AsyncMock(return_value=_counted_response({"id": "main"}))
+    client.packs.routes.list_async = AsyncMock(return_value=_counted_response())
+    client.packs.routes.get_async = AsyncMock(return_value=_counted_response({"id": "default"}))
     client.packs.install_async = AsyncMock(return_value=_counted_response({"id": "cribl-duo", "source": "git+repo"}))
     client.packs.upload_async = AsyncMock(return_value=_single_response({"source": "uploaded.crbl"}))
     client.packs.update_async = AsyncMock(return_value=_counted_response({"id": "cribl-duo", "source": "git+repo"}))
     client.packs.delete_async = AsyncMock(return_value=_counted_response({"id": "cribl-duo", "source": "git+repo"}))
-    client.sdk_configuration = MagicMock(server_url=config.base_url_str)
+    async_client = MagicMock(spec=httpx.AsyncClient)
+    async_client.get = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            json={"count": 0, "items": []},
+            request=httpx.Request("GET", "https://cribl.example.com/api/v1/m/worker-main/p/cribl-okta/system/lookups"),
+        )
+    )
+    client.sdk_configuration = MagicMock(server_url=config.base_url_str, async_client=async_client)
     group_model = MagicMock()
     group_model.model_dump.return_value = {"id": "worker-main", "name": "Main Workers"}
     client.groups.list_async = AsyncMock(return_value=MagicMock(items=[group_model]))
@@ -239,14 +256,33 @@ async def test_pack_mutation_tools_forward_arguments(
 
 @pytest.mark.asyncio
 async def test_get_pack_tool_returns_singular_section(deps: SimpleNamespace, mock_ctx: Context) -> None:
-    """get_pack should wrap the counted SDK response under a singular section."""
+    """get_pack should wrap the new Pack content summary under a singular section."""
     app = _FakeApp()
     register_pack_tools(app, deps=deps)  # type: ignore[arg-type]
 
     result = await app.tools["get_pack"](mock_ctx, pack_id="cribl-okta")
 
     deps.client.packs.get_async.assert_awaited_once_with(id="cribl-okta", timeout_ms=10000)
-    assert result["pack"]["items"] == [{"id": "cribl-okta", "source": "git+repo"}]
+    assert result["pack"]["metadata"]["items"] == [{"id": "cribl-okta", "source": "git+repo"}]
+    assert result["pack"]["sections"]["sources"]["total_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_pack_tool_forwards_detail_arguments(deps: SimpleNamespace, mock_ctx: Context) -> None:
+    """get_pack should forward kind, object_id, and detail to the operation layer."""
+    app = _FakeApp()
+    register_pack_tools(app, deps=deps)  # type: ignore[arg-type]
+
+    result = await app.tools["get_pack"](
+        mock_ctx,
+        pack_id="cribl-okta",
+        kind="pipelines",
+        object_id="main",
+        detail="full",
+    )
+
+    deps.client.packs.pipelines.get_async.assert_awaited_once_with(id="main", pack="cribl-okta", timeout_ms=10000)
+    assert result["pack"]["objects"]["items"][0]["payload"]["id"] == "main"
 
 
 @pytest.mark.asyncio
