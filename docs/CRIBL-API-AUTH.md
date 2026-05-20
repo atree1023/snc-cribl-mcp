@@ -121,7 +121,6 @@ The response is a JSON object like the following example. The value of the `toke
 
 ## Authentication Response Example (On-Prem Deployment)
 
-```json
 {
   "token": "abcdefg1234567890...exampleBearerToken",
   "forcePasswordChange": false
