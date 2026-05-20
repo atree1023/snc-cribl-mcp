@@ -1,6 +1,6 @@
 # Cribl API README
 
-- For the complete documentation index, see [llms.txt](./llms.txt).
+- For the complete documentation index, see [llms.txt](./cribl-llms.txt).
 
 The Cribl API is a RESTful API that provides a centrally managed control plane for programmatically configuring and managing Cribl resources. Developers can use the API to:
 
