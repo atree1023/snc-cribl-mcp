@@ -11,7 +11,7 @@ The Cribl API is a RESTful API that provides a centrally managed control plane f
 
 The Cribl API generally follows a resource-based structure in which each endpoint corresponds with a specific Cribl resource or collection of resources. In request URLs, resource-specific paths branch off from the [base URL](#base-urls).
 
-Read the [Authentication](api-auth) page to learn how to authenticate to the Cribl API.
+Read the [Authentication](./CRIBL-API-AUTH.md) page to learn how to authenticate to the Cribl API.
 
 ## About PATCH Requests
 
