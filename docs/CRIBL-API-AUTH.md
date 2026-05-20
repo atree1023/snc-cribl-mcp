@@ -14,7 +14,7 @@ You are responsible for ensuring that your applications obtain a new Bearer toke
 
 - For on-prem deployments, if you're using SSO/OpenID Connect Authentication, you must toggle on **Allow login as Local User** in Cribl (see [Set Up Fallback Access](/iam/sso-on-prem/#fallback-access-on-prem)). You'll need to be a Local user when you authenticate.
 
-- To use `https` for on-prem requests, you must [configure Transport Layer Security (TLS)](/stream/securing-tls/). If you do not configure TLS, use `http` instead. Use `http` only for testing in development environments. In production, configure TLS and use `https` to secure your communications.
+- To use `https` for on-prem requests, you must [configure Transport Layer Security (TLS)](https://docs.cribl.io/stream/securing-tls/). If you do not configure TLS, use `http` instead. Use `http` only for testing in development environments. In production, configure TLS and use `https` to secure your communications.
 
 ## Authenticate in Cribl.Cloud and Hybrid Deployments {#api-auth-cloud}
 
