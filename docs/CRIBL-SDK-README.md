@@ -14,7 +14,7 @@ Complementary API reference documentation is available at https://docs.cribl.io/
 
 ## Table of Contents
 
-- [cribl_control_plane_sdk_python](#criblcontrolplanesdkpython)
+- [cribl_control_plane_sdk_python](#cribl_control_plane_sdk_python)
 - [SDK Installation](#sdk-installation)
 - [IDE Support](#ide-support)
 - [SDK Example Usage](#sdk-example-usage)
