@@ -80,7 +80,6 @@ As shown in the following example response, the JSON object in the response incl
 
 ## Authentication Response Example (Cribl.Cloud/Hybrid)
 
-````json
 {
   "access_token": "abcdefg1234567890...exampleBearerToken",
   "scope": "user:read:workergroups user:update:workergroups user:read:connections user:update:connections user:update:workspaces user:read:workspaces",
