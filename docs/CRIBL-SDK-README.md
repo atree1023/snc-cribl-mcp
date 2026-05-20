@@ -199,7 +199,7 @@ The [On-Prem Authentication Example](https://github.com/criblio/cribl_control_pl
 
 ## Available methods
 
-### [Auth.Tokens](https://github.com/criblio/cribl_control_plane_sdk_python/blob/docs/sdks/tokens/README.md)
+### [Auth.Tokens](https://github.com/criblio/cribl_control_plane_sdk_python/blob/main/docs/sdks/tokens/README.md)
 
 - [get](https://github.com/criblio/cribl_control_plane_sdk_python/blob/docs/sdks/tokens/README.md#get) - Log in and fetch an authentication token
 
