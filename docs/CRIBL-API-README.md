@@ -125,7 +125,7 @@ https://gateway.cribl.cloud/v1/organizations/${organizationId}/workspaces
 
 ## Path Parameters
 
-Many Cribl API endpoints require to you provide path parameters. Most path parameters are used to specify individual resources. For example, in the endpoint `GET /pack/{id}`, the `{id}` identifies the specific Cribl Pack to retrieve.
+Many Cribl API endpoints require you to provide path parameters. Most path parameters are used to specify individual resources. For example, in the endpoint `GET /pack/{id}`, the `{id}` identifies the specific Cribl Pack to retrieve.
 
 For some endpoints, path parameters limit the scope of the request in some way. For example, in the endpoint `GET /products/{product}/groups`, the `{product}` path parameter indicates the Cribl product whose Worker Groups or Edge Fleets should be listed in the response. In another example, `GET /p/{pack}/pipelines`, the `{pack}` path parameter limits the response to Pipelines within the specified Pack.
 
