@@ -6,24 +6,24 @@ Cribl is a suite of observability products that help organizations collect, proc
 
 ## Browse by documentation area
 
-- [Cribl Stream â€” full page index](https://docs.cribl.io/stream/llms.txt): Cribl Stream is an observability pipeline that gives you the flexibility to collect, reduce, enrich, normalize, and route data from any source to any destination within your existing data infrastructure.
-- [Cribl Edge â€” full page index](https://docs.cribl.io/edge/llms.txt): Cribl Edge is an agent-based observability solution that enables collection from edge locations. It provides distributed data collection with centralized configuration and management.
-- [Cribl Search â€” full page index](https://docs.cribl.io/search/llms.txt): Cribl Search helps you explore data in place, right where it lives. You can query logs, metrics, or any sort of machine data immediately, without first moving it to specialized storage.
-- [Cribl Lake â€” full page index](https://docs.cribl.io/lake/llms.txt): Cribl Lake is an open data lake platform built on Parquet format. It provides cost-effective data storage with instant searchability and integrates seamlessly with Cribl Stream and Cribl Search.
-- [Cribl Insights â€” full page index](https://docs.cribl.io/insights/llms.txt): Cribl Insights provides analytics and visibility across your observability data in the Cribl suite.
-- [Cribl AI â€” full page index](https://docs.cribl.io/copilot/llms.txt): Cribl AI tools and capabilities help you use natural language to streamline your work and maximize your productivity with Cribl products.
-- [Cribl Guard â€” full page index](https://docs.cribl.io/guard/llms.txt): Cribl Guard helps you protect your data pipelines with security rules and policies.
-- [Cribl Identity and Access Management â€” full page index](https://docs.cribl.io/iam/llms.txt): Identity and Access Management documentation for users, groups, roles, and authentication with Cribl products.
-- [Cribl as Code â€” full page index](https://docs.cribl.io/cribl-as-code/llms.txt): The Cribl API provides programmatic access to manage and configure Cribl products.
-- [Cribl Reference Architectures â€” full page index](https://docs.cribl.io/reference-architectures/llms.txt): Reference architectures, deployment patterns, and best-practice guides for Cribl solutions.
-- [Cribl LLM Observability â€” full page index](https://docs.cribl.io/llm-observability/llms.txt): Guides for observing, securing, and governing large language model workloads and related telemetry.
-- [Cribl Common Use Cases â€” full page index](https://docs.cribl.io/use-cases/llms.txt): Common use-case guides and implementation patterns across the Cribl product suite.
-- [Cribl.Cloud Government â€” full page index](https://docs.cribl.io/fedramp/llms.txt): Cribl.Cloud Government (FedRAMP) documentation for regulated and government cloud deployments.
-- [Cribl Billing & Licensing â€” full page index](https://docs.cribl.io/billing-licensing/llms.txt): Cribl Billing and Licensing covers plan management, credit tracking, usage monitoring, and on-premises license administration for Cribl products.
+- [Cribl Stream full page index](https://docs.cribl.io/stream/llms.txt): Cribl Stream is an observability pipeline that gives you the flexibility to collect, reduce, enrich, normalize, and route data from any source to any destination within your existing data infrastructure.
+- [Cribl Edge full page index](https://docs.cribl.io/edge/llms.txt): Cribl Edge is an agent-based observability solution that enables collection from edge locations. It provides distributed data collection with centralized configuration and management.
+- [Cribl Search full page index](https://docs.cribl.io/search/llms.txt): Cribl Search helps you explore data in place, right where it lives. You can query logs, metrics, or any sort of machine data immediately, without first moving it to specialized storage.
+- [Cribl Lake full page index](https://docs.cribl.io/lake/llms.txt): Cribl Lake is an open data lake platform built on Parquet format. It provides cost-effective data storage with instant searchability and integrates seamlessly with Cribl Stream and Cribl Search.
+- [Cribl Insights full page index](https://docs.cribl.io/insights/llms.txt): Cribl Insights provides analytics and visibility across your observability data in the Cribl suite.
+- [Cribl AI full page index](https://docs.cribl.io/copilot/llms.txt): Cribl AI tools and capabilities help you use natural language to streamline your work and maximize your productivity with Cribl products.
+- [Cribl Guard full page index](https://docs.cribl.io/guard/llms.txt): Cribl Guard helps you protect your data pipelines with security rules and policies.
+- [Cribl Identity and Access Management full page index](https://docs.cribl.io/iam/llms.txt): Identity and Access Management documentation for users, groups, roles, and authentication with Cribl products.
+- [Cribl as Code full page index](https://docs.cribl.io/cribl-as-code/llms.txt): The Cribl API provides programmatic access to manage and configure Cribl products.
+- [Cribl Reference Architectures full page index](https://docs.cribl.io/reference-architectures/llms.txt): Reference architectures, deployment patterns, and best-practice guides for Cribl solutions.
+- [Cribl LLM Observability full page index](https://docs.cribl.io/llm-observability/llms.txt): Guides for observing, securing, and governing large language model workloads and related telemetry.
+- [Cribl Common Use Cases full page index](https://docs.cribl.io/use-cases/llms.txt): Common use-case guides and implementation patterns across the Cribl product suite.
+- [Cribl.Cloud Government full page index](https://docs.cribl.io/fedramp/llms.txt): Cribl.Cloud Government (FedRAMP) documentation for regulated and government cloud deployments.
+- [Cribl Billing & Licensing full page index](https://docs.cribl.io/billing-licensing/llms.txt): Cribl Billing and Licensing covers plan management, credit tracking, usage monitoring, and on-premises license administration for Cribl products.
 
 ## API reference (Markdown entry points)
 
-- [Cribl as Code â€” full page index](https://docs.cribl.io/cribl-as-code/llms.txt): Includes Cribl as Code docs and navigation to API topics
+- [Cribl as Code full page index](https://docs.cribl.io/cribl-as-code/llms.txt): Includes Cribl as Code docs and navigation to API topics
 - [Cribl Core API Reference](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-core.md): Control Plane API for Cribl Core
 - [Cribl Stream API Reference](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-stream.md): Control Plane API for Cribl Stream
 - [Cribl Edge API Reference](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-edge.md): Control Plane API for Cribl Edge

@@ -25,8 +25,8 @@ MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and 
 **When working with external libraries:**
 
 - Inspect the actual installed package in `.venv/` rather than relying on memory
-- For `cribl-control-plane` SDK: check `docs/CRIBL-CONTROL-PLANE-README.md` for examples, documentation and best practices
-- For endpoints where the SDK does not have a dedicated function, consult the [Cribl API reference](https://docs.cribl.io/api/) or place a local OpenAPI spec at `docs/cribl-apidocs-4.17.1-b862732f.yml` (gitignored; download from Cribl)
+- For `cribl-control-plane` SDK: check `docs/CRIBL-SDK-README.md` for examples, documentation and best practices
+- For endpoints where the SDK does not have a dedicated function, consult the [Cribl API reference](https://docs.cribl.io/cribl-as-code/api/) or place a local OpenAPI spec at `docs/cribl-openapi-spec.yml` (gitignored; download from Cribl)
 - For FastMCP: Check `docs/fastmcp-llms.txt` for links to latest documentation from gofastmcp.com
 
 ## Commands
@@ -171,5 +171,5 @@ When you need to find something:
 - **Tool definitions**: `src/snc_cribl_mcp/tools/list_*.py`
 - **API logic**: `src/snc_cribl_mcp/operations/*.py`
 - **Pydantic models**: `src/snc_cribl_mcp/models/`
-- **SDK examples**: `docs/CRIBL-CONTROL-PLANE-README.md`
+- **SDK examples**: `docs/CRIBL-SDK-README.md`
 - **Tests**: `tests/unit/test_*.py`

@@ -20,4 +20,4 @@ TASK.md
 
 config.toml
 
-docs/cribl-apidocs*
+docs/cribl-openapi-spec.yml
