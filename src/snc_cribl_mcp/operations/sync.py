@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
+import httpx
 from cribl_control_plane.errors import CriblControlPlaneError
 from cribl_control_plane.models.productscore import ProductsCore
 
@@ -389,9 +390,14 @@ async def _maybe_get_item(
             timeout_ms=resolved.config.timeout_ms,
             product=product,
             group_id=group_id,
+            security=getattr(resolved, "security", None),
         )
     except CriblControlPlaneError as exc:
         if exc.status_code == HTTP_NOT_FOUND:
+            return None
+        raise
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == HTTP_NOT_FOUND:
             return None
         raise
 
@@ -486,6 +492,7 @@ async def validate_resource_sync(  # noqa: PLR0913
             timeout_ms=source.config.timeout_ms,
             product=product,
             group_id=resolved_source_group_id,
+            security=getattr(source, "security", None),
         )
         target_items = await list_resource(
             target.client,
@@ -493,6 +500,7 @@ async def validate_resource_sync(  # noqa: PLR0913
             timeout_ms=target.config.timeout_ms,
             product=product,
             group_id=resolved_target_group_id,
+            security=getattr(target, "security", None),
         )
         source_index = _index_items(source_items)
         target_index = _index_items(target_items)
@@ -580,6 +588,7 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 timeout_ms=source.config.timeout_ms,
                 product=product,
                 group_id=resolved_source_group_id,
+                security=getattr(source, "security", None),
             )
             source_items[item_id] = source_item
         else:
@@ -590,6 +599,7 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     timeout_ms=source.config.timeout_ms,
                     product=product,
                     group_id=resolved_source_group_id,
+                    security=getattr(source, "security", None),
                 )
             )
 
@@ -615,6 +625,7 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
                             timeout_ms=target.config.timeout_ms,
                             product=product,
                             group_id=resolved_target_group_id,
+                            security=getattr(target, "security", None),
                         )
                         action = "created"
                     elif kind == "routes" and spec.supports("update"):
@@ -665,6 +676,7 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
                         timeout_ms=target.config.timeout_ms,
                         product=product,
                         group_id=resolved_target_group_id,
+                        security=getattr(target, "security", None),
                     )
                     action = "updated"
             except Exception as exc:  # noqa: BLE001 - accumulate per-item failures in batch copy results

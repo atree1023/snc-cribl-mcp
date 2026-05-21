@@ -13,6 +13,7 @@ type ConfigObjectKind = Literal[
     "pipelines",
     "routes",
     "sources",
+    "variables",
 ]
 type ConfigObjectDetail = Literal["summary", "refs", "full"]
 
@@ -80,6 +81,13 @@ CONFIG_OBJECT_CATALOG: dict[ConfigObjectKind, ConfigObjectCatalogEntry] = {
         sdk_preferred=False,
         requires_security=True,
         description="Configured lookup files from direct API fallback.",
+    ),
+    "variables": ConfigObjectCatalogEntry(
+        kind="variables",
+        scope="group",
+        sdk_preferred=False,
+        requires_security=True,
+        description="Configured variables from direct API fallback.",
     ),
 }
 

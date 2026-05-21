@@ -209,16 +209,29 @@ def test_index_items_skips_entries_without_ids() -> None:
 async def test_maybe_get_item_returns_none_only_for_http_404(monkeypatch: pytest.MonkeyPatch) -> None:
     """Single-item lookup should translate HTTP 404 to None and re-raise other errors."""
     not_found = CriblControlPlaneError("missing", httpx.Response(404, text="missing"))
+    direct_not_found = httpx.HTTPStatusError(
+        "missing",
+        request=httpx.Request("GET", "https://cribl.example/api/v1/m/default/lib/vars/missing"),
+        response=httpx.Response(404, text="missing"),
+    )
     server_error = CriblControlPlaneError("boom", httpx.Response(500, text="boom"))
-    get_resource = AsyncMock(side_effect=[not_found, server_error])
+    direct_server_error = httpx.HTTPStatusError(
+        "boom",
+        request=httpx.Request("GET", "https://cribl.example/api/v1/m/default/lib/vars/broken"),
+        response=httpx.Response(500, text="boom"),
+    )
+    get_resource = AsyncMock(side_effect=[not_found, direct_not_found, server_error, direct_server_error])
     monkeypatch.setattr(sync_module, "get_resource", get_resource)
 
     resolved = cast("sync_module.ResolvedControlPlane", _resolved("target"))
 
     assert await sync_module._maybe_get_item(resolved, "groups", item_id="missing") is None
+    assert await sync_module._maybe_get_item(resolved, "variables", item_id="missing") is None
 
     with pytest.raises(CriblControlPlaneError, match="boom"):
         await sync_module._maybe_get_item(resolved, "groups", item_id="broken")
+    with pytest.raises(httpx.HTTPStatusError, match="boom"):
+        await sync_module._maybe_get_item(resolved, "variables", item_id="broken")
 
 
 def test_copy_error_helpers_include_status_codes_and_validate_target_group() -> None:

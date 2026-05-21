@@ -158,8 +158,11 @@ def _collect_server_tables(source: TomlTable, *, prefix: str = "") -> dict[str, 
         name = f"{prefix}.{key}" if prefix else key
         if _is_server_table(value):
             servers[name] = value
-        else:
-            servers.update(_collect_server_tables(value, prefix=name))
+        nested_values: TomlTable = {}
+        for nested_key, nested_value in value.items():
+            if isinstance(nested_value, dict):
+                nested_values[nested_key] = nested_value
+        servers.update(_collect_server_tables(nested_values, prefix=name))
     return servers
 
 

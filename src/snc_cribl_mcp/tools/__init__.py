@@ -8,6 +8,10 @@ Contains MCP tool registration modules:
 - ``list_routes``: Enumerate configured routes per group
 - ``list_breakers``: Enumerate configured event breakers per group
 - ``list_lookups``: Enumerate configured lookups per group
+- ``list_variables``: Enumerate configured variables per group
+- ``sync_user``: Create or replicate local users
+- ``group_sync``: Replicate and validate whole groups/fleets
+- ``system_settings``: Replicate and validate global system settings
 - ``packs``: Manage installed Packs
 - ``common``: Shared utilities for tool registration
 """

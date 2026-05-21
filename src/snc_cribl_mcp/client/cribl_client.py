@@ -24,6 +24,7 @@ class ResolvedControlPlane:
     server_name: str
     config: CriblConfig
     client: CriblControlPlane
+    security: Security
 
 
 @asynccontextmanager
@@ -71,6 +72,7 @@ async def connect_to_server(server: str | None) -> AsyncGenerator[ResolvedContro
             server_name=resolved_name,
             config=config,
             client=client,
+            security=security,
         )
 
 

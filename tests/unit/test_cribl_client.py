@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from cribl_control_plane.models.security import Security
 
 import snc_cribl_mcp.client.cribl_client as cribl_client_module
 from snc_cribl_mcp.config import CriblConfig
@@ -101,6 +102,7 @@ async def test_connect_server_pair_yields_source_and_target(monkeypatch: pytest.
             server_name=server or "default",
             config=config,
             client=MagicMock(),
+            security=Security(bearer_auth="token"),
         )
 
     monkeypatch.setattr(cribl_client_module, "connect_to_server", _connect_to_server)
