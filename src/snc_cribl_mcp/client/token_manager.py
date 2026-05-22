@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-import hmac
 import json
 import logging
 import secrets
@@ -306,18 +305,24 @@ class TokenManager:
         has_client_creds = bool(self._config.client_id and self._config.client_secret)
         return has_user_pass or has_client_creds
 
+    def cache_secrets_match(self, config: CriblConfig) -> bool:
+        """Return whether this manager was created for the same secret values."""
+        return _secret_values_match(self._config.password, config.password) and _secret_values_match(
+            self._config.client_secret,
+            config.client_secret,
+        )
 
-type TokenManagerCacheKey = tuple[str, str | None, str | None, str | None, str | None, str, str, bool, int]
 
-_SECRET_FINGERPRINT_KEY = secrets.token_bytes(32)
+type TokenManagerCacheKey = tuple[str, str | None, str | None, str, str, bool, int]
+
 _TOKEN_MANAGER_CACHE_MAXSIZE = 64
 
 
-def _secret_cache_fingerprint(value: str | None) -> str | None:
-    """Return a process-local HMAC fingerprint without storing secrets in cache keys."""
-    if value is None:
-        return None
-    return hmac.digest(_SECRET_FINGERPRINT_KEY, value.encode("utf-8"), "sha256").hex()
+def _secret_values_match(left: str | None, right: str | None) -> bool:
+    """Return whether optional secret values match without hashing them."""
+    if left is None or right is None:
+        return left is right
+    return secrets.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
 
 
 def _token_manager_cache_key(config: CriblConfig) -> TokenManagerCacheKey:
@@ -325,9 +330,7 @@ def _token_manager_cache_key(config: CriblConfig) -> TokenManagerCacheKey:
     return (
         config.base_url_str,
         config.username,
-        _secret_cache_fingerprint(config.password),
         config.client_id,
-        _secret_cache_fingerprint(config.client_secret),
         config.oauth_token_url or DEFAULT_OAUTH_TOKEN_URL,
         config.oauth_audience or DEFAULT_OAUTH_AUDIENCE,
         config.verify_ssl,
@@ -335,7 +338,23 @@ def _token_manager_cache_key(config: CriblConfig) -> TokenManagerCacheKey:
     )
 
 
-_TOKEN_MANAGERS: OrderedDict[TokenManagerCacheKey, TokenManager] = OrderedDict()
+_TOKEN_MANAGERS: OrderedDict[TokenManagerCacheKey, list[TokenManager]] = OrderedDict()
+
+
+def _cached_token_manager_count() -> int:
+    """Return the total number of cached token managers across all non-secret keys."""
+    return sum(len(managers) for managers in _TOKEN_MANAGERS.values())
+
+
+def _evict_stale_token_managers() -> None:
+    """Evict least-recently-used managers until the cache is within bounds."""
+    while _cached_token_manager_count() > _TOKEN_MANAGER_CACHE_MAXSIZE:
+        oldest_key = next(iter(_TOKEN_MANAGERS))
+        oldest_bucket = _TOKEN_MANAGERS[oldest_key]
+        stale_manager = oldest_bucket.pop(0)
+        stale_manager.close()
+        if not oldest_bucket:
+            del _TOKEN_MANAGERS[oldest_key]
 
 
 def get_token_manager(config: CriblConfig) -> TokenManager:
@@ -349,15 +368,21 @@ def get_token_manager(config: CriblConfig) -> TokenManager:
 
     """
     key = _token_manager_cache_key(config)
-    manager = _TOKEN_MANAGERS.get(key)
-    if manager is None:
-        manager = TokenManager(config)
-        _TOKEN_MANAGERS[key] = manager
-        while len(_TOKEN_MANAGERS) > _TOKEN_MANAGER_CACHE_MAXSIZE:
-            _, stale_manager = _TOKEN_MANAGERS.popitem(last=False)
-            stale_manager.close()
+    managers = _TOKEN_MANAGERS.get(key)
+    if managers is not None:
+        for index, manager in enumerate(managers):
+            if manager.cache_secrets_match(config):
+                managers.append(managers.pop(index))
+                _TOKEN_MANAGERS.move_to_end(key)
+                return manager
     else:
-        _TOKEN_MANAGERS.move_to_end(key)
+        managers = []
+        _TOKEN_MANAGERS[key] = managers
+
+    manager = TokenManager(config)
+    managers.append(manager)
+    _TOKEN_MANAGERS.move_to_end(key)
+    _evict_stale_token_managers()
     return manager
 
 

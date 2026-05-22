@@ -669,6 +669,31 @@ class TestCollectItemsViaSdk:
             }
         ]
 
+    async def test_counted_response_with_malformed_items_returns_empty_group(self) -> None:
+        """Malformed counted-response item containers should be treated as empty."""
+
+        class MalformedCountedResponse:
+            items = "not-a-list"
+            count = 1
+
+        coll_ctx, mock_client, _ = self._create_collection_context()
+        mock_group = MagicMock()
+        mock_group.model_dump.return_value = {"id": "group1"}
+        mock_client.groups.list_async = AsyncMock(return_value=MagicMock(items=[mock_group]))
+        mock_list_method = AsyncMock(return_value=MalformedCountedResponse())
+
+        result = await collect_items_via_sdk(coll_ctx, mock_list_method)
+
+        assert result["status"] == "ok"
+        assert result["groups"] == [
+            {
+                "group_id": "group1",
+                "count": 0,
+                "items": [],
+                "reported_count": 1,
+            }
+        ]
+
 
 class TestCollectItemsViaHttp:
     """Tests for collect_items_via_http async function."""

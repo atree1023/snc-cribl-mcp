@@ -26,6 +26,10 @@ def _isolated_token_manager_cache() -> Generator[None]:
         token_manager_module._TOKEN_MANAGERS.clear()
 
 
+def _cached_token_managers() -> list[TokenManager]:
+    return [manager for managers in token_manager_module._TOKEN_MANAGERS.values() for manager in managers]
+
+
 def _config_with_credentials() -> CriblConfig:
     return CriblConfig(
         url="https://cribl.example.com/api/v1",
@@ -313,8 +317,11 @@ def test_get_token_manager_returns_cached() -> None:
         config = _config_with_unique_base_url()
         first = get_token_manager(config)
         second = get_token_manager(config)
+        matching_config = _config_with_unique_base_url()
+        third = get_token_manager(matching_config)
 
     assert first is second
+    assert third is first
 
 
 def test_get_token_manager_separates_same_url_different_credentials() -> None:
@@ -339,14 +346,12 @@ def test_get_token_manager_separates_same_url_different_credentials() -> None:
     assert second._config is second_config
 
 
-def test_secret_cache_fingerprint_is_stable_and_opaque() -> None:
-    """Secret fingerprints should compare by value without exposing the original secret."""
-    fingerprint = token_manager_module._secret_cache_fingerprint("pass")  # pyright: ignore[reportPrivateUsage]
-
-    assert token_manager_module._secret_cache_fingerprint(None) is None  # pyright: ignore[reportPrivateUsage]
-    assert fingerprint == token_manager_module._secret_cache_fingerprint("pass")  # pyright: ignore[reportPrivateUsage]
-    assert fingerprint != token_manager_module._secret_cache_fingerprint("other")  # pyright: ignore[reportPrivateUsage]
-    assert fingerprint != "pass"
+def test_secret_values_match_without_hashing() -> None:
+    """Secret comparison should distinguish values without producing hash fingerprints."""
+    assert token_manager_module._secret_values_match(None, None) is True
+    assert token_manager_module._secret_values_match("pass", "pass") is True
+    assert token_manager_module._secret_values_match("pass", "other") is False
+    assert token_manager_module._secret_values_match("pass", None) is False
 
 
 def test_get_token_manager_evicts_old_entries_after_bound(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -357,10 +362,24 @@ def test_get_token_manager_evicts_old_entries_after_bound(monkeypatch: pytest.Mo
         second = get_token_manager(CriblConfig(url="https://cribl.example.com/api/v1", username="user", password="pass-2"))
         third = get_token_manager(CriblConfig(url="https://cribl.example.com/api/v1", username="user", password="pass-3"))
 
-        assert first not in token_manager_module._TOKEN_MANAGERS.values()  # pyright: ignore[reportPrivateUsage]
-        assert second in token_manager_module._TOKEN_MANAGERS.values()  # pyright: ignore[reportPrivateUsage]
-        assert third in token_manager_module._TOKEN_MANAGERS.values()  # pyright: ignore[reportPrivateUsage]
-        assert len(token_manager_module._TOKEN_MANAGERS) == 2  # pyright: ignore[reportPrivateUsage]
+        cached_managers = _cached_token_managers()
+        assert first not in cached_managers
+        assert second in cached_managers
+        assert third in cached_managers
+        assert token_manager_module._cached_token_manager_count() == 2
+
+
+def test_get_token_manager_evicts_empty_oldest_bucket_after_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Evicting the only manager in an oldest bucket should remove that bucket."""
+    monkeypatch.setattr(token_manager_module, "_TOKEN_MANAGER_CACHE_MAXSIZE", 1)
+    with _isolated_token_manager_cache():
+        first = get_token_manager(CriblConfig(url="https://first.example.com/api/v1", username="user", password="pass"))
+        with patch.object(first, "close") as close:
+            second = get_token_manager(CriblConfig(url="https://second.example.com/api/v1", username="user", password="pass"))
+
+        close.assert_called_once()
+        assert _cached_token_managers() == [second]
+        assert len(token_manager_module._TOKEN_MANAGERS) == 1
 
 
 @pytest.mark.asyncio
