@@ -8,8 +8,8 @@ MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and 
 
 **Key components:**
 
-- Seventeen tools: list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync
-- Eight resources mirroring read-oriented tools (cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups, cribl://packs)
+- Twenty-three tools: list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_variables, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync, sync_user, replicate_group_config, validate_group_config, replicate_system_settings, validate_system_settings
+- Nine resources mirroring read-oriented tools (cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups, cribl://variables, cribl://packs)
 - Four prompts for common Cribl workflows
 - Token-based authentication with automatic refresh
 
@@ -25,8 +25,8 @@ MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and 
 **When working with external libraries:**
 
 - Inspect the actual installed package in `.venv/` rather than relying on memory
-- For `cribl-control-plane` SDK: check `docs/CRIBL-CONTROL-PLANE-README.md` for examples, documentation and best practices
-- For endpoints where the SDK does not have a dedicated function, consult the [Cribl API reference](https://docs.cribl.io/api/) or place a local OpenAPI spec at `docs/cribl-apidocs-4.17.1-b862732f.yml` (gitignored; download from Cribl)
+- For `cribl-control-plane` SDK: check `docs/CRIBL-SDK-README.md` for examples, documentation and best practices
+- For endpoints where the SDK does not have a dedicated function, consult the [Cribl API reference](https://docs.cribl.io/cribl-as-code/api/) or place a local OpenAPI spec at `docs/cribl-openapi-spec.yml` (gitignored; download from Cribl)
 - For FastMCP: Check `docs/fastmcp-llms.txt` for links to latest documentation from gofastmcp.com
 
 ## Commands
@@ -77,8 +77,14 @@ uv run pyright                             # then type check
 
 - `get_config_objects` is the preferred read path for broad queries because it returns bounded summaries, cursors, and optional dependency references.
 - `validate_config_objects` wraps the existing sync validation path with semantic comparison so environment identity differences are visible but non-blocking.
-- Keep using SDK-backed collectors when available; use direct HTTP collectors for unsupported SDK endpoints such as breakers and lookups.
+- Keep using SDK-backed collectors when available; use direct HTTP collectors for unsupported SDK endpoints such as breakers, lookups, and variables.
 - Semantic validation should preserve target-local identity values such as hostnames, endpoint server lists, generated IDs, credential references, and volatile metadata.
+
+**Cross-leader mutation workflows:**
+
+- `sync_user` can create or replicate local users. Cribl user reads do not expose passwords, so creation requires an explicit `password`, a `password_env`, or one of the tool's `.env`/environment fallback names. Never return password values in tool responses.
+- `replicate_group_config` and `validate_group_config` are the high-level group/fleet workflows. They cover group/fleet settings plus variables, breakers, lookups, destinations, pipelines, sources, and routes.
+- `replicate_system_settings` and `validate_system_settings` operate on global Cribl system settings from the Global Settings page. They intentionally use direct `/system/settings/conf` HTTP because the installed SDK can reject valid live payloads where disabled SSL settings omit certificate fields.
 
 ## Adding a New Tool
 
@@ -171,5 +177,5 @@ When you need to find something:
 - **Tool definitions**: `src/snc_cribl_mcp/tools/list_*.py`
 - **API logic**: `src/snc_cribl_mcp/operations/*.py`
 - **Pydantic models**: `src/snc_cribl_mcp/models/`
-- **SDK examples**: `docs/CRIBL-CONTROL-PLANE-README.md`
+- **SDK examples**: `docs/CRIBL-SDK-README.md`
 - **Tests**: `tests/unit/test_*.py`

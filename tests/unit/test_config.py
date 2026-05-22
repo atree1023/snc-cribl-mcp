@@ -78,13 +78,22 @@ def test_is_server_table() -> None:
 def test_collect_server_tables() -> None:
     """Nested tables should flatten into dotted server names."""
     tables = {
-        "golden": {"oak": {"url": "https://cribl.example.com"}},
+        "golden": {
+            "oak": {
+                "url": "https://cribl.example.com",
+                "new": {"url": "https://cribl-new.example.com"},
+            }
+        },
         "alpha": {"url": "https://cribl.example.com"},
         "note": "skip",
     }
     servers = config_module._collect_server_tables(cast("config_module.TomlTable", tables))
     assert servers == {
-        "golden.oak": {"url": "https://cribl.example.com"},
+        "golden.oak": {
+            "url": "https://cribl.example.com",
+            "new": {"url": "https://cribl-new.example.com"},
+        },
+        "golden.oak.new": {"url": "https://cribl-new.example.com"},
         "alpha": {"url": "https://cribl.example.com"},
     }
 

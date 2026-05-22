@@ -30,6 +30,7 @@ _COLLECTOR_ATTRS: dict[ConfigObjectKind, str] = {
     "pipelines": "collect_product_pipelines",
     "routes": "collect_product_routes",
     "sources": "collect_product_sources",
+    "variables": "collect_product_variables",
 }
 
 
@@ -95,7 +96,7 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
         name="get_config_objects",
         description=(
             "Query Cribl config objects with bounded results. Supports groups, sources, destinations, "
-            "pipelines, routes, breakers, and lookups. Returns compact summaries by default; use filters "
+            "pipelines, routes, breakers, lookups, and variables. Returns compact summaries by default; use filters "
             "and detail='full' for selected payloads."
         ),
         annotations={

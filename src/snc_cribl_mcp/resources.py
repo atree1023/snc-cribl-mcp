@@ -112,10 +112,16 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
 
         """
         try:
-            if collect_fn in (
-                deps.collect_product_breakers,
-                deps.collect_product_lookups,
-            ):
+            direct_http_collectors = tuple(
+                collector
+                for collector in (
+                    getattr(deps, "collect_product_breakers", None),
+                    getattr(deps, "collect_product_lookups", None),
+                    getattr(deps, "collect_product_variables", None),
+                )
+                if collector is not None
+            )
+            if collect_fn in direct_http_collectors:
                 return await collect_fn(
                     client,
                     security=security,
@@ -266,6 +272,22 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
             resolved_deps=resolved_deps,
         )
         return _build_response("lookups", data, base_url=resolved_deps.config.base_url_str)
+
+    @app.resource(
+        uri="cribl://variables",
+        name="Cribl Variables",
+        description="Return a JSON list of all configured variables.",
+        mime_type="application/json",
+        tags={"variables", "config"},
+    )
+    async def get_variables(ctx: Context) -> dict[str, Any]:
+        resolved_deps = resolve_tool_deps(deps, server=None)
+        data = await _collect_resource_payload(
+            ctx,
+            collect_fn=deps.collect_product_variables,
+            resolved_deps=resolved_deps,
+        )
+        return _build_response("variables", data, base_url=resolved_deps.config.base_url_str)
 
     @app.resource(
         uri="cribl://packs",

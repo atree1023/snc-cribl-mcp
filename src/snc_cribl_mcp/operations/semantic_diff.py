@@ -218,11 +218,7 @@ def _semantic_in_sync(sync_result: dict[str, Any], items: list[dict[str, Any]]) 
 
 
 def _semantic_warnings(sync_result: dict[str, Any]) -> list[str]:
-    warnings = [
-        warning
-        for warning in sync_result.get("warnings", [])
-        if isinstance(warning, str)
-    ]
+    warnings = [warning for warning in sync_result.get("warnings", []) if isinstance(warning, str)]
     omitted_count = _omitted_item_count(sync_result)
     if _sync_response_was_truncated(sync_result) and sync_result.get("in_sync") is not True:
         warnings.append(

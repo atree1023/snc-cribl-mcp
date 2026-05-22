@@ -46,8 +46,8 @@ uv run pyright                             # type check
 
 Before writing code:
 
-1. **Cribl SDK:** Check `docs/CRIBL-CONTROL-PLANE-README.md` for examples, documentation and best practices
-2. **Cribl API:** Refer to the [Cribl API reference](https://docs.cribl.io/api/) for available endpoints (prefer SDK over direct calls); if you need a local OpenAPI spec, download it from Cribl and place it at `docs/cribl-apidocs-4.17.1-b862732f.yml` (gitignored)
+1. **Cribl SDK:** Check `docs/CRIBL-SDK-README.md` for examples, documentation and best practices
+2. **Cribl API:** Refer to the [Cribl API reference](https://docs.cribl.io/cribl-as-code/api/) for available endpoints (prefer SDK over direct calls); if you need a local OpenAPI spec, download it from Cribl and place it at `docs/cribl-openapi-spec.yml` (gitignored)
 3. **Cribl:** Check `docs/cribl-llms.txt` for product documentation links and use fetch/search to retrieve details
 4. **FastMCP:** Check `docs/fastmcp-llms.txt` for links to latest docs from gofastmcp.com
 5. **All:** Use the Context7 and Exa tools to search for the latest library documentation and examples
@@ -78,9 +78,9 @@ docs/                      # SDK docs, schemas, examples
 
 ## MCP Capabilities
 
-**Tools:** list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync
+**Tools:** list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_variables, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync, sync_user, replicate_group_config, validate_group_config, replicate_system_settings, validate_system_settings
 
-**Resources:** cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups, cribl://packs
+**Resources:** cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups, cribl://variables, cribl://packs
 
 **Prompts:** Summarize Cribl Configuration, Find Broken Sources, Analyze Pipeline, Troubleshoot Destination
 

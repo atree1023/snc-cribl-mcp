@@ -29,7 +29,7 @@ A Model Context Protocol (MCP) server that provides tools for querying Cribl dep
 
 ## What It Does
 
-This MCP server connects to Cribl Stream and Edge deployments to retrieve and compare metadata about worker groups, fleets, sources, destinations, pipelines, routes, and Packs. It also supports targeted cross-leader copy and validation workflows so AI assistants can help keep multiple leaders aligned without passing entire configs through context.
+This MCP server connects to Cribl Stream and Edge deployments to retrieve and compare metadata about worker groups, fleets, sources, destinations, pipelines, routes, variables, and Packs. It also supports targeted cross-leader copy and validation workflows for local users, group/fleet contents, and global system settings so AI assistants can help keep multiple leaders aligned without passing entire configs through context.
 
 The server handles authentication with bearer tokens, manages token refresh automatically, and provides a clean JSON interface for exploring your Cribl infrastructure.
 
@@ -43,6 +43,7 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Retrieve configured routes across all products and groups.
   - Retrieve configured event breakers across all products and groups.
   - Retrieve configured lookups across all products and groups.
+  - Retrieve configured variables across all products and groups.
 - **Pack Management**:
   - List and inspect installed Packs.
   - Install Packs from IDs, URLs, Git repositories, or previously uploaded Pack files.
@@ -51,6 +52,9 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Copy supported resources between configured leaders.
   - Validate whether supported resources are in sync between configured leaders.
   - Resolve different source and target group selectors during copy and validation workflows.
+  - Create or replicate local users, using explicit or environment-sourced passwords because Cribl does not return passwords from the API.
+  - Replicate and validate complete Stream worker groups or Edge fleets, including group/fleet settings, variables, event breakers, lookups, destinations, pipelines, sources, and routes.
+  - Replicate and validate global system settings from the Global Settings page.
 - **Typed Pipeline Models**: 41 Pydantic models for pipeline function configurations (eval, mask, sampling, regex_extract, etc.) with full type safety.
 - **Typed Collector Models**: 9 Pydantic models for collector source configurations (S3, REST, database, Splunk, Azure Blob, GCS, filesystem, script, health check) with full type safety.
 - **Graceful Error Handling**: SDK validation errors return structured, user-friendly responses with actionable guidance instead of crashing.
@@ -164,7 +168,7 @@ uv run python -m snc_cribl_mcp.server
 
 ### Available MCP Tools
 
-The server exposes seventeen MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://packs`):
+The server exposes twenty-three MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://variables`, `cribl://packs`):
 
 #### `list_groups`
 
@@ -207,6 +211,12 @@ Lists all configured event breakers across all groups and products.
 Lists all configured lookups across all groups and products.
 
 - **Returns:** JSON containing lookups organized by product and group, including lookup IDs, file info, and configurations.
+
+#### `list_variables`
+
+Lists all configured variables across all groups and products.
+
+- **Returns:** JSON containing variables organized by product and group, including variable IDs and configurations.
 
 #### `list_packs`
 
@@ -252,27 +262,60 @@ Uninstalls an installed Pack by Pack ID.
 
 #### `get_config_objects`
 
-Queries supported config objects through one bounded read tool: groups, sources, destinations, pipelines, routes, breakers, and lookups.
+Queries supported config objects through one bounded read tool: groups, sources, destinations, pipelines, routes, breakers, lookups, and variables.
 
 - **Returns:** Compact summaries by default, including product, group, ID, type, enabled state, optional dependency references, truncation state, and a cursor for follow-up calls. Use `detail="full"` with filters such as `selector`, `product`, and `group_id` to retrieve selected payloads without flooding the MCP response.
 
 #### `validate_config_objects`
 
-Semantically compares groups, sources, destinations, pipelines, or routes between two configured leaders.
+Semantically compares groups, sources, destinations, pipelines, routes, breakers, lookups, or variables between two configured leaders.
 
 - **Returns:** Functional validation results that classify differences as blocking functional drift, non-blocking environment identity differences, or volatile metadata differences. Hostnames, endpoint server lists, generated IDs, credential references, and timestamps are reported but do not count as functional drift.
 
 #### `copy_resource_config`
 
-Copies groups, sources, destinations, pipelines, or routes from one configured leader to another.
+Copies groups, sources, destinations, pipelines, routes, breakers, lookups, or variables from one configured leader to another.
 
 - **Returns:** JSON describing the copy actions taken, including created, updated, appended, skipped, and unsupported items. For group-scoped resources, the response includes both the requested source and target group selectors and the resolved group IDs used on each leader.
 
 #### `validate_resource_sync`
 
-Compares groups, sources, destinations, pipelines, or routes between two configured leaders.
+Compares groups, sources, destinations, pipelines, routes, breakers, lookups, or variables between two configured leaders.
 
 - **Returns:** JSON describing whether the selected item or scope is in sync, along with per-item status and differing paths. For group-scoped resources, the response includes both the requested source and target group selectors and the resolved group IDs used on each leader.
+
+#### `sync_user`
+
+Creates or replicates a local Cribl user on a target leader. When `source_server` is provided, profile fields and roles are copied from the source leader.
+
+- **Password handling:** Cribl does not return user passwords from the API, so pass `password`, pass `password_env`, or provide one of the automatic `.env`/environment fallbacks such as `SNC_CRIBL_MCP_<TARGET_SERVER>_<USERNAME>_PASSWORD`, `CRIBL_USER_<USERNAME>_PASSWORD`, or `<USERNAME>_PASSWORD`.
+- **Transport note:** For on-prem leaders configured with `http://` URLs, password create/update requests are sent over cleartext HTTP. Use HTTPS for production user sync.
+- **Returns:** JSON describing whether the target user was created, updated, skipped, or validated. Password values are never returned.
+
+#### `replicate_group_config`
+
+Replicates a complete Stream worker group or Edge fleet between configured leaders.
+
+- **Includes:** Group/fleet settings plus variables, event breakers, lookups, destinations, pipelines, sources, and routes by default.
+- **Returns:** JSON describing each replicated section and optional post-copy validation.
+
+#### `validate_group_config`
+
+Validates a complete Stream worker group or Edge fleet between configured leaders.
+
+- **Returns:** JSON with group/fleet setting status and per-section sync status for variables, event breakers, lookups, destinations, pipelines, sources, and routes.
+
+#### `replicate_system_settings`
+
+Replicates global Cribl system settings from one configured leader to another.
+
+- **Returns:** JSON describing whether settings were updated, skipped, and optionally validated.
+
+#### `validate_system_settings`
+
+Validates global Cribl system settings between two configured leaders.
+
+- **Returns:** JSON with an in-sync flag and differing setting paths. Use `include_payloads=true` when the raw source and target setting payloads are needed.
 
 ### Example Integration with Claude
 
@@ -317,6 +360,10 @@ snc_cribl_mcp/
 │   │   ├── routes.py         # Route collection helpers
 │   │   ├── breakers.py       # Event breaker collection helpers
 │   │   ├── lookups.py        # Lookup collection helpers
+│   │   ├── variables.py      # Variable collection helpers
+│   │   ├── users.py          # Local user create/replicate helpers
+│   │   ├── group_sync.py     # Whole group/fleet copy and validation helpers
+│   │   ├── system_settings.py # Global system setting sync helpers
 │   │   ├── packs.py          # Top-level Pack management helpers
 │   │   ├── config_objects.py # Consolidated config object response shaping
 │   │   ├── resource_actions.py  # Context-free CRUD helpers over the SDK
@@ -333,6 +380,10 @@ snc_cribl_mcp/
 │   │   ├── list_routes.py
 │   │   ├── list_breakers.py
 │   │   ├── list_lookups.py
+│   │   ├── list_variables.py
+│   │   ├── users.py
+│   │   ├── group_sync.py
+│   │   ├── system_settings.py
 │   │   ├── packs.py
 │   │   ├── get_config_objects.py
 │   │   ├── validate_config_objects.py

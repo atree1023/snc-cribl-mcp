@@ -21,8 +21,8 @@ def register(app: FastMCP, *, impl: CopyResourceConfigFunc) -> None:
     @app.tool(
         name="copy_resource_config",
         description=(
-            "Copy groups, sources, destinations, pipelines, or routes from one configured Cribl leader "
-            "to another. Group-scoped resources support different source and target group selectors."
+            "Copy groups, sources, destinations, pipelines, routes, breakers, lookups, or variables from one "
+            "configured Cribl leader to another. Group-scoped resources support different source and target group selectors."
         ),
         annotations={
             "title": "Copy config between leaders",
@@ -48,10 +48,13 @@ def register(app: FastMCP, *, impl: CopyResourceConfigFunc) -> None:
 
         if resource_kind == "groups":
             if source_group is not None or target_group is not None:
-                msg = "source_group and target_group only apply to sources, destinations, pipelines, and routes."
+                msg = (
+                    "source_group and target_group only apply to sources, destinations, pipelines, and routes, "
+                    "plus breakers, lookups, and variables."
+                )
                 raise ValueError(msg)
         elif source_group is None:
-            msg = "source_group is required for sources, destinations, pipelines, and routes."
+            msg = "source_group is required for sources, destinations, pipelines, routes, breakers, lookups, and variables."
             raise ValueError(msg)
 
         return await impl(

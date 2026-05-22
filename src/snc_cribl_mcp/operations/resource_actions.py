@@ -7,22 +7,36 @@ validation.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import re
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import cache
 from typing import Any, Literal, cast
+from urllib.parse import quote
 
+import httpx
 from cribl_control_plane import CriblControlPlane
 from cribl_control_plane.models.productscore import ProductsCore
+from cribl_control_plane.models.security import Security
 
-from .common import get_group_url, serialize_model
+from .common import get_auth_headers, get_group_url, serialize_model
 
 type CrudAction = Literal["append", "create", "delete", "deploy", "get", "list", "update"]
 type JsonValue = dict[str, "JsonValue"] | list["JsonValue"] | str | int | float | bool | None
-type ResourceKind = Literal["groups", "sources", "destinations", "pipelines", "routes"]
+type ResourceKind = Literal[
+    "breakers",
+    "destinations",
+    "groups",
+    "lookups",
+    "pipelines",
+    "routes",
+    "sources",
+    "variables",
+]
 type ResourceScope = Literal["group", "product"]
+type ResourceTransport = Literal["http", "sdk"]
 
 _DUMMY_CLIENT = CriblControlPlane(server_url="https://example.invalid")
 _METHOD_NAME_BY_ACTION: dict[CrudAction, str] = {
@@ -50,9 +64,11 @@ class ResourceSpec:
     """Describe the SDK surface for a managed Cribl resource."""
 
     kind: ResourceKind
-    client_attr: str
+    client_attr: str | None
     scope: ResourceScope
     supported_actions: frozenset[CrudAction]
+    transport: ResourceTransport = "sdk"
+    endpoint_path: str | None = None
 
     def supports(self, action: CrudAction) -> bool:
         """Return whether the SDK exposes the given action for this resource."""
@@ -90,6 +106,30 @@ RESOURCE_SPECS: dict[ResourceKind, ResourceSpec] = {
         scope="group",
         supported_actions=frozenset({"append", "get", "list", "update"}),
     ),
+    "breakers": ResourceSpec(
+        kind="breakers",
+        client_attr=None,
+        scope="group",
+        supported_actions=frozenset({"create", "delete", "get", "list", "update"}),
+        transport="http",
+        endpoint_path="lib/breakers",
+    ),
+    "lookups": ResourceSpec(
+        kind="lookups",
+        client_attr=None,
+        scope="group",
+        supported_actions=frozenset({"create", "delete", "get", "list", "update"}),
+        transport="http",
+        endpoint_path="system/lookups",
+    ),
+    "variables": ResourceSpec(
+        kind="variables",
+        client_attr=None,
+        scope="group",
+        supported_actions=frozenset({"create", "delete", "get", "list", "update"}),
+        transport="http",
+        endpoint_path="lib/vars",
+    ),
 }
 
 
@@ -102,7 +142,11 @@ def get_resource_spec(kind: ResourceKind) -> ResourceSpec:
 def _allowed_method_params(kind: ResourceKind, action: CrudAction) -> frozenset[str]:
     """Return the accepted SDK parameter names for a resource action."""
     method_name = _METHOD_NAME_BY_ACTION[action]
-    component = getattr(_DUMMY_CLIENT, RESOURCE_SPECS[kind].client_attr)
+    client_attr = RESOURCE_SPECS[kind].client_attr
+    if client_attr is None:
+        msg = f"Resource kind '{kind}' is not backed by an SDK component."
+        raise ValueError(msg)
+    component = getattr(_DUMMY_CLIENT, client_attr)
     method = getattr(component, method_name)
     params = set(inspect.signature(method).parameters)
     return frozenset(params - _METHOD_INFRASTRUCTURE_PARAMS)
@@ -112,16 +156,17 @@ def build_sdk_capability_matrix() -> dict[ResourceKind, dict[str, bool | str]]:
     """Describe the currently installed SDK capability surface."""
     matrix: dict[ResourceKind, dict[str, bool | str]] = {}
     for kind, spec in RESOURCE_SPECS.items():
-        component = getattr(_DUMMY_CLIENT, spec.client_attr)
+        component = getattr(_DUMMY_CLIENT, spec.client_attr) if spec.client_attr is not None else None
         matrix[kind] = {
             "scope": spec.scope,
-            "list": hasattr(component, "list_async"),
-            "get": hasattr(component, "get_async"),
-            "create": hasattr(component, "create_async"),
-            "update": hasattr(component, "update_async"),
-            "append": hasattr(component, "append_async"),
-            "delete": hasattr(component, "delete_async"),
-            "deploy": hasattr(component, "deploy_async"),
+            "transport": spec.transport,
+            "list": spec.supports("list") if component is None else hasattr(component, "list_async"),
+            "get": spec.supports("get") if component is None else hasattr(component, "get_async"),
+            "create": spec.supports("create") if component is None else hasattr(component, "create_async"),
+            "update": spec.supports("update") if component is None else hasattr(component, "update_async"),
+            "append": spec.supports("append") if component is None else hasattr(component, "append_async"),
+            "delete": spec.supports("delete") if component is None else hasattr(component, "delete_async"),
+            "deploy": spec.supports("deploy") if component is None else hasattr(component, "deploy_async"),
         }
     return matrix
 
@@ -212,9 +257,14 @@ def _build_append_kwargs(item_id: str, item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def canonicalize_resource_item(kind: ResourceKind, item: dict[str, Any]) -> dict[str, Any]:
+def canonicalize_resource_item(kind: ResourceKind, item: dict[str, Any]) -> dict[str, Any]:  # noqa: PLR0911
     """Project a resource into a stable, comparable config payload."""
     clean_item = cast("dict[str, Any]", _strip_none_and_copy(item))
+    if kind in {"breakers", "variables"}:
+        return clean_item
+    if kind == "lookups":
+        volatile_lookup_keys = {"_content", "_content_type", "pendingTask", "rows"}
+        return {key: value for key, value in clean_item.items() if key not in volatile_lookup_keys}
     if kind == "routes":
         compare_payload = _build_update_kwargs(kind, str(clean_item["id"]), clean_item)
         compare_payload.pop("id_param", None)
@@ -233,7 +283,11 @@ def canonicalize_resource_item(kind: ResourceKind, item: dict[str, Any]) -> dict
 
 def _component(client: CriblControlPlane, kind: ResourceKind) -> object:
     """Return the SDK component object for the given resource kind."""
-    return getattr(client, RESOURCE_SPECS[kind].client_attr)
+    client_attr = RESOURCE_SPECS[kind].client_attr
+    if client_attr is None:
+        msg = f"Resource kind '{kind}' is not backed by an SDK component."
+        raise ValueError(msg)
+    return getattr(client, client_attr)
 
 
 def _base_call_kwargs(
@@ -266,16 +320,286 @@ def _serialize_items(response: object) -> list[dict[str, Any]]:
     return [serialize_model(item) for item in raw_items]
 
 
-async def list_resource(
+def _require_security(kind: ResourceKind, security: Security | None) -> Security:
+    """Return bearer security for direct HTTP resources or raise a clear error."""
+    if security is None:
+        msg = f"Resource kind '{kind}' requires direct HTTP security."
+        raise ValueError(msg)
+    return security
+
+
+def _require_http_spec(kind: ResourceKind) -> ResourceSpec:
+    """Return a direct-HTTP resource spec."""
+    spec = get_resource_spec(kind)
+    if spec.transport != "http" or spec.endpoint_path is None:
+        msg = f"Resource kind '{kind}' is not a direct HTTP resource."
+        raise ValueError(msg)
+    return spec
+
+
+def _http_client(client: CriblControlPlane) -> httpx.AsyncClient:
+    """Return the SDK's underlying httpx client for direct HTTP requests."""
+    http_client = client.sdk_configuration.async_client
+    if not isinstance(http_client, httpx.AsyncClient):
+        msg = "Cribl SDK client does not expose an httpx.AsyncClient."
+        raise TypeError(msg)
+    return http_client
+
+
+def _direct_collection_url(client: CriblControlPlane, spec: ResourceSpec, group_id: str | None) -> str:
+    """Return the collection URL for a group-scoped direct resource."""
+    if group_id is None:
+        msg = f"Resource kind '{spec.kind}' requires a group_id."
+        raise ValueError(msg)
+    return f"{get_group_url(client, group_id).rstrip('/')}/{spec.endpoint_path}"
+
+
+def _direct_item_url(client: CriblControlPlane, spec: ResourceSpec, group_id: str | None, item_id: str) -> str:
+    """Return the item URL for a group-scoped direct resource."""
+    encoded_id = quote(item_id, safe="")
+    return f"{_direct_collection_url(client, spec, group_id)}/{encoded_id}"
+
+
+def _response_items(payload: object) -> list[dict[str, Any]]:
+    """Extract a standard Cribl `items` array from a JSON payload."""
+    if isinstance(payload, dict):
+        payload_dict = cast("dict[str, object]", payload)
+        items = payload_dict.get("items", [])
+        if isinstance(items, list):
+            typed_items = cast("list[object]", items)
+            return [cast("dict[str, Any]", item) for item in typed_items if isinstance(item, dict)]
+    return []
+
+
+async def _direct_request_json(  # noqa: PLR0913
+    client: CriblControlPlane,
+    *,
+    method: str,
+    url: str,
+    security: Security,
+    timeout_ms: int,
+    json_body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Perform a direct JSON request through the SDK-owned HTTP client."""
+    response = await _http_client(client).request(
+        method,
+        url,
+        headers={**get_auth_headers(security), "Content-Type": "application/json"},
+        json=json_body,
+        timeout=timeout_ms / 1000,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return cast("dict[str, Any]", payload) if isinstance(payload, dict) else {}
+
+
+async def _hydrate_lookup_content(
+    client: CriblControlPlane,
+    *,
+    group_id: str | None,
+    item: dict[str, Any],
+    security: Security,
+    timeout_ms: int,
+) -> dict[str, Any]:
+    """Attach raw lookup content so lookups can be copied and compared."""
+    item_id = item.get("id")
+    if not isinstance(item_id, str) or not item_id:
+        return item
+
+    spec = _require_http_spec("lookups")
+    url = f"{_direct_item_url(client, spec, group_id, item_id)}/content?raw=1"
+    response = await _http_client(client).get(
+        url,
+        headers=get_auth_headers(security),
+        timeout=timeout_ms / 1000,
+    )
+    response.raise_for_status()
+    hydrated = dict(item)
+    hydrated["_content"] = response.content.decode(response.encoding or "utf-8")
+    hydrated["_content_type"] = response.headers.get("content-type", "text/csv").split(";", maxsplit=1)[0]
+    return hydrated
+
+
+async def _direct_list_resource(  # noqa: PLR0913
+    client: CriblControlPlane,
+    kind: ResourceKind,
+    *,
+    timeout_ms: int,
+    security: Security,
+    group_id: str | None,
+    hydrate_lookup_content: bool,
+) -> list[dict[str, Any]]:
+    """List a direct-HTTP resource in a group scope."""
+    spec = _require_http_spec(kind)
+    payload = await _direct_request_json(
+        client,
+        method="GET",
+        url=_direct_collection_url(client, spec, group_id),
+        security=security,
+        timeout_ms=timeout_ms,
+    )
+    items = _response_items(payload)
+    if kind == "lookups" and hydrate_lookup_content:
+        return list(
+            await asyncio.gather(
+                *(
+                    _hydrate_lookup_content(
+                        client,
+                        group_id=group_id,
+                        item=item,
+                        security=security,
+                        timeout_ms=timeout_ms,
+                    )
+                    for item in items
+                )
+            )
+        )
+    return items
+
+
+async def _direct_get_resource(  # noqa: PLR0913
+    client: CriblControlPlane,
+    kind: ResourceKind,
+    *,
+    item_id: str,
+    timeout_ms: int,
+    security: Security,
+    group_id: str | None,
+    hydrate_lookup_content: bool,
+) -> dict[str, Any]:
+    """Fetch one direct-HTTP resource item."""
+    spec = _require_http_spec(kind)
+    payload = await _direct_request_json(
+        client,
+        method="GET",
+        url=_direct_item_url(client, spec, group_id, item_id),
+        security=security,
+        timeout_ms=timeout_ms,
+    )
+    items = _response_items(payload)
+    if not items:
+        msg = f"Resource '{kind}' with id '{item_id}' returned no items."
+        raise RuntimeError(msg)
+    item = items[0]
+    if kind == "lookups" and hydrate_lookup_content:
+        return await _hydrate_lookup_content(
+            client,
+            group_id=group_id,
+            item=item,
+            security=security,
+            timeout_ms=timeout_ms,
+        )
+    return item
+
+
+async def _upload_lookup_content(
+    client: CriblControlPlane,
+    *,
+    item: dict[str, Any],
+    timeout_ms: int,
+    security: Security,
+    group_id: str | None,
+) -> str:
+    """Upload lookup content and return the temporary filename from Cribl."""
+    item_id = str(item["id"])
+    content = item.get("_content")
+    if not isinstance(content, str):
+        msg = f"Lookup '{item_id}' does not include downloadable content."
+        raise TypeError(msg)
+
+    spec = _require_http_spec("lookups")
+    response = await _http_client(client).put(
+        _direct_collection_url(client, spec, group_id),
+        params={"filename": item_id},
+        headers={**get_auth_headers(security), "Content-Type": str(item.get("_content_type") or "text/csv")},
+        content=content.encode("utf-8"),
+        timeout=timeout_ms / 1000,
+    )
+    response.raise_for_status()
+    payload = cast("dict[str, object]", response.json())
+    filename = payload.get("filename")
+    if not isinstance(filename, str) or not filename:
+        msg = f"Lookup upload for '{item_id}' did not return a temporary filename."
+        raise RuntimeError(msg)
+    return filename
+
+
+def _lookup_write_payload(item: dict[str, Any], uploaded_filename: str) -> dict[str, Any]:
+    """Build a create/update body for a lookup from hydrated metadata."""
+    ignored = {"_content", "_content_type", "fileInfo", "pendingTask", "rows", "size", "version"}
+    payload = {key: value for key, value in item.items() if key not in ignored and value is not None}
+    payload["id"] = str(item["id"])
+    # Cribl requires the temporary upload name here, not the source lookup's original fileInfo metadata.
+    payload["fileInfo"] = {"filename": uploaded_filename}
+    return payload
+
+
+async def _direct_write_resource(  # noqa: PLR0913
+    client: CriblControlPlane,
+    kind: ResourceKind,
+    *,
+    action: Literal["create", "update"],
+    item: dict[str, Any],
+    timeout_ms: int,
+    security: Security,
+    group_id: str | None,
+    item_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Create or update one direct-HTTP resource."""
+    spec = _require_http_spec(kind)
+    if kind == "lookups":
+        uploaded_filename = await _upload_lookup_content(
+            client,
+            item=item,
+            timeout_ms=timeout_ms,
+            security=security,
+            group_id=group_id,
+        )
+        body = _lookup_write_payload(item, uploaded_filename)
+    else:
+        body = cast("dict[str, Any]", _strip_none_and_copy(item))
+
+    if action == "create":
+        url = _direct_collection_url(client, spec, group_id)
+        method = "POST"
+    else:
+        resolved_item_id = item_id or str(item["id"])
+        url = _direct_item_url(client, spec, group_id, resolved_item_id)
+        method = "PATCH"
+
+    payload = await _direct_request_json(
+        client,
+        method=method,
+        url=url,
+        security=security,
+        timeout_ms=timeout_ms,
+        json_body=body,
+    )
+    return _response_items(payload)
+
+
+async def list_resource(  # noqa: PLR0913
     client: CriblControlPlane,
     kind: ResourceKind,
     *,
     timeout_ms: int,
     product: ProductsCore | None = None,
     group_id: str | None = None,
+    security: Security | None = None,
+    hydrate_lookup_content: bool = False,
 ) -> list[dict[str, Any]]:
     """List resource items within the requested scope."""
     spec = get_resource_spec(kind)
+    if spec.transport == "http":
+        return await _direct_list_resource(
+            client,
+            kind,
+            timeout_ms=timeout_ms,
+            security=_require_security(kind, security),
+            group_id=group_id,
+            hydrate_lookup_content=hydrate_lookup_content,
+        )
+
     component = _component(client, kind)
     method = getattr(component, _METHOD_NAME_BY_ACTION["list"])
     response = await method(**_base_call_kwargs(client, spec, timeout_ms=timeout_ms, product=product, group_id=group_id))
@@ -290,9 +614,22 @@ async def get_resource(  # noqa: PLR0913
     timeout_ms: int,
     product: ProductsCore | None = None,
     group_id: str | None = None,
+    security: Security | None = None,
+    hydrate_lookup_content: bool = False,
 ) -> dict[str, Any]:
     """Fetch one resource item by id."""
     spec = get_resource_spec(kind)
+    if spec.transport == "http":
+        return await _direct_get_resource(
+            client,
+            kind,
+            item_id=item_id,
+            timeout_ms=timeout_ms,
+            security=_require_security(kind, security),
+            group_id=group_id,
+            hydrate_lookup_content=hydrate_lookup_content,
+        )
+
     component = _component(client, kind)
     method = getattr(component, _METHOD_NAME_BY_ACTION["get"])
     response = await method(
@@ -314,12 +651,23 @@ async def create_resource(  # noqa: PLR0913
     timeout_ms: int,
     product: ProductsCore | None = None,
     group_id: str | None = None,
+    security: Security | None = None,
 ) -> list[dict[str, Any]]:
     """Create a resource from serialized item data."""
     spec = get_resource_spec(kind)
     if not spec.supports("create"):
         msg = f"Create is not supported for resource kind '{kind}'."
         raise ValueError(msg)
+    if spec.transport == "http":
+        return await _direct_write_resource(
+            client,
+            kind,
+            action="create",
+            item=item,
+            timeout_ms=timeout_ms,
+            security=_require_security(kind, security),
+            group_id=group_id,
+        )
 
     component = _component(client, kind)
     method = getattr(component, _METHOD_NAME_BY_ACTION["create"])
@@ -339,12 +687,24 @@ async def update_resource(  # noqa: PLR0913
     timeout_ms: int,
     product: ProductsCore | None = None,
     group_id: str | None = None,
+    security: Security | None = None,
 ) -> list[dict[str, Any]]:
     """Replace a resource with serialized item data."""
     spec = get_resource_spec(kind)
     if not spec.supports("update"):
         msg = f"Update is not supported for resource kind '{kind}'."
         raise ValueError(msg)
+    if spec.transport == "http":
+        return await _direct_write_resource(
+            client,
+            kind,
+            action="update",
+            item_id=item_id,
+            item=item,
+            timeout_ms=timeout_ms,
+            security=_require_security(kind, security),
+            group_id=group_id,
+        )
 
     component = _component(client, kind)
     method = getattr(component, _METHOD_NAME_BY_ACTION["update"])
@@ -387,12 +747,22 @@ async def delete_resource(  # noqa: PLR0913
     timeout_ms: int,
     product: ProductsCore | None = None,
     group_id: str | None = None,
+    security: Security | None = None,
 ) -> list[dict[str, Any]]:
     """Delete a resource by id."""
     spec = get_resource_spec(kind)
     if not spec.supports("delete"):
         msg = f"Delete is not supported for resource kind '{kind}'."
         raise ValueError(msg)
+    if spec.transport == "http":
+        payload = await _direct_request_json(
+            client,
+            method="DELETE",
+            url=_direct_item_url(client, spec, group_id, item_id),
+            security=_require_security(kind, security),
+            timeout_ms=timeout_ms,
+        )
+        return _response_items(payload)
 
     component = _component(client, kind)
     method = getattr(component, _METHOD_NAME_BY_ACTION["delete"])

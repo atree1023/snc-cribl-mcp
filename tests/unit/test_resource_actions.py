@@ -6,8 +6,10 @@ from __future__ import annotations
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from cribl_control_plane.models.productscore import ProductsCore
+from cribl_control_plane.models.security import Security
 
 import snc_cribl_mcp.operations.resource_actions as resource_actions_module
 from snc_cribl_mcp.operations.resource_actions import (
@@ -169,6 +171,8 @@ def test_build_sdk_capability_matrix_reflects_route_and_group_special_cases() ->
     assert matrix["routes"]["append"] is True
     assert matrix["routes"]["create"] is False
     assert matrix["routes"]["delete"] is False
+    assert matrix["variables"]["transport"] == "http"
+    assert matrix["variables"]["create"] is True
 
 
 @pytest.mark.asyncio
@@ -396,9 +400,16 @@ def test_canonicalize_resource_item_covers_all_supported_payload_shapes() -> Non
         "conf": {"functions": []},
     }
     assert canonicalize_resource_item("groups", group)["description"] == "Default"
-
-    with pytest.raises(ValueError, match="Unsupported resource kind"):
-        canonicalize_resource_item(cast("Any", "lookups"), {"id": "lookup.csv"})
+    assert canonicalize_resource_item(
+        "lookups",
+        {
+            "id": "lookup.csv",
+            "size": 10,
+            "version": "volatile",
+            "_content": "a,b\n1,2\n",
+        },
+    ) == {"id": "lookup.csv", "size": 10, "version": "volatile"}
+    assert canonicalize_resource_item("variables", {"id": "var1", "value": "1"}) == {"id": "var1", "value": "1"}
 
 
 def test_payload_builders_reject_unsupported_shapes() -> None:
@@ -408,3 +419,167 @@ def test_payload_builders_reject_unsupported_shapes() -> None:
 
     with pytest.raises(ValueError, match="Update is not supported"):
         resource_actions_module._build_update_kwargs(cast("Any", "lookups"), "lookup.csv", {"id": "lookup.csv"})
+
+
+@pytest.mark.asyncio
+async def test_direct_http_resource_crud_for_variables() -> None:
+    """Direct HTTP resources should use the SDK-owned httpx client and bearer token."""
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"items": [{"id": "var1", "value": "one"}], "count": 1})
+        if request.method == "POST":
+            return httpx.Response(200, json={"items": [{"id": "var1", "value": "one"}], "count": 1})
+        if request.method == "PATCH":
+            return httpx.Response(200, json={"items": [{"id": "var1", "value": "two"}], "count": 1})
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"items": [{"id": "var1"}], "count": 1})
+        return httpx.Response(405)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+        client = MagicMock()
+        client.sdk_configuration = MagicMock(
+            server_url="https://cribl.example.com/api/v1",
+            async_client=http_client,
+        )
+        security = Security(bearer_auth="token")
+
+        assert await list_resource(client, "variables", timeout_ms=1000, group_id="default", security=security) == [
+            {"id": "var1", "value": "one"}
+        ]
+        assert await get_resource(
+            client, "variables", item_id="var1", timeout_ms=1000, group_id="default", security=security
+        ) == {
+            "id": "var1",
+            "value": "one",
+        }
+        assert await create_resource(
+            client,
+            "variables",
+            item={"id": "var1", "value": "one"},
+            timeout_ms=1000,
+            group_id="default",
+            security=security,
+        ) == [{"id": "var1", "value": "one"}]
+        assert await update_resource(
+            client,
+            "variables",
+            item_id="var1",
+            item={"id": "var1", "value": "two"},
+            timeout_ms=1000,
+            group_id="default",
+            security=security,
+        ) == [{"id": "var1", "value": "two"}]
+        assert await delete_resource(
+            client, "variables", item_id="var1", timeout_ms=1000, group_id="default", security=security
+        ) == [{"id": "var1"}]
+
+    assert [request.method for request in requests] == ["GET", "GET", "POST", "PATCH", "DELETE"]
+    assert str(requests[0].url) == "https://cribl.example.com/api/v1/m/default/lib/vars"
+    assert str(requests[1].url) == "https://cribl.example.com/api/v1/m/default/lib/vars/var1"
+    assert requests[0].headers["authorization"] == "Bearer token"
+
+
+@pytest.mark.asyncio
+async def test_direct_http_resource_requires_sdk_owned_httpx_client() -> None:
+    """Direct HTTP resources should fail clearly when the SDK client is not httpx-backed."""
+    client = MagicMock()
+    client.sdk_configuration = MagicMock(
+        server_url="https://cribl.example.com/api/v1",
+        async_client=None,
+    )
+
+    with pytest.raises(TypeError, match=r"does not expose an httpx\.AsyncClient"):
+        await list_resource(
+            client,
+            "variables",
+            timeout_ms=1000,
+            group_id="default",
+            security=Security(bearer_auth="token"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_direct_http_lookup_list_skips_content_by_default() -> None:
+    """Lookup listing should avoid raw content hydration unless a copy path requests it."""
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"items": [{"id": "sample.csv", "size": 12, "version": "abc"}], "count": 1})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+        client = MagicMock()
+        client.sdk_configuration = MagicMock(
+            server_url="https://cribl.example.com/api/v1",
+            async_client=http_client,
+        )
+
+        items = await list_resource(
+            client,
+            "lookups",
+            timeout_ms=1000,
+            group_id="default",
+            security=Security(bearer_auth="token"),
+        )
+
+    assert items == [{"id": "sample.csv", "size": 12, "version": "abc"}]
+    assert [request.method for request in requests] == ["GET"]
+
+
+@pytest.mark.asyncio
+async def test_direct_http_lookup_writes_upload_content_first() -> None:
+    """Lookup replication should download raw content and use the upload+create API workflow."""
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if request.method == "GET" and url.endswith("/system/lookups"):
+            return httpx.Response(200, json={"items": [{"id": "sample.csv", "size": 12}], "count": 1})
+        if request.method == "GET" and url.endswith("/system/lookups/sample.csv/content?raw=1"):
+            return httpx.Response(200, text="a,b\n1,2\n", headers={"content-type": "text/csv"})
+        if request.method == "PUT":
+            assert request.content == b"a,b\n1,2\n"
+            return httpx.Response(200, json={"filename": "sample.csv.tmp", "rows": 1, "size": 8})
+        if request.method == "POST":
+            return httpx.Response(200, json={"items": [{"id": "sample.csv", "version": "new"}], "count": 1})
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+        client = MagicMock()
+        client.sdk_configuration = MagicMock(
+            server_url="https://cribl.example.com/api/v1",
+            async_client=http_client,
+        )
+        security = Security(bearer_auth="token")
+
+        items = await list_resource(
+            client,
+            "lookups",
+            timeout_ms=1000,
+            group_id="default",
+            security=security,
+            hydrate_lookup_content=True,
+        )
+        assert items == [
+            {
+                "id": "sample.csv",
+                "size": 12,
+                "_content": "a,b\n1,2\n",
+                "_content_type": "text/csv",
+            }
+        ]
+        created = await create_resource(
+            client,
+            "lookups",
+            item=items[0],
+            timeout_ms=1000,
+            group_id="default",
+            security=security,
+        )
+
+    assert created == [{"id": "sample.csv", "version": "new"}]
+    assert [request.method for request in requests] == ["GET", "GET", "PUT", "POST"]

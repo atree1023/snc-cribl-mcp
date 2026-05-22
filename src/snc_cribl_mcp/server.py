@@ -12,6 +12,7 @@ Registered tools:
 - ``list_routes``: list configured routes per group across products
 - ``list_breakers``: list configured event breakers per group across products
 - ``list_lookups``: list configured lookups per group across products
+- ``list_variables``: list configured variables per group across products
 - ``list_packs``: list installed Packs
 - ``get_pack``: get an installed Pack
 - ``install_pack``: install a Pack
@@ -22,6 +23,11 @@ Registered tools:
 - ``validate_config_objects``: semantically compare supported configs between leaders
 - ``copy_resource_config``: copy supported configs between configured leaders
 - ``validate_resource_sync``: compare supported configs between configured leaders
+- ``sync_user``: create or replicate local users between configured leaders
+- ``replicate_group_config``: replicate a whole worker group or Edge fleet
+- ``validate_group_config``: validate a whole worker group or Edge fleet
+- ``replicate_system_settings``: replicate global system settings
+- ``validate_system_settings``: validate global system settings
 """
 
 import logging
@@ -41,6 +47,7 @@ from .client.token_manager import TokenManager, get_token_manager
 from .config import CriblConfig
 from .operations.breakers import collect_product_breakers
 from .operations.destinations import collect_product_destinations
+from .operations.group_sync import replicate_group_config, validate_group_config_sync
 from .operations.groups import collect_product_groups, serialize_config_group
 from .operations.lookups import collect_product_lookups
 from .operations.packs import collect_packs
@@ -48,8 +55,12 @@ from .operations.pipelines import collect_product_pipelines
 from .operations.routes import collect_product_routes
 from .operations.sources import collect_product_sources
 from .operations.sync import copy_resource_config, validate_resource_sync
+from .operations.system_settings import replicate_system_settings, validate_system_settings_sync
+from .operations.users import sync_user
+from .operations.variables import collect_product_variables
 from .tools.copy_resource_config import register as register_copy_resource_config
 from .tools.get_config_objects import register as register_get_config_objects
+from .tools.group_sync import register as register_group_sync_tools
 from .tools.list_breakers import register as register_list_breakers
 from .tools.list_destinations import register as register_list_destinations
 from .tools.list_groups import register as register_list_groups
@@ -57,7 +68,10 @@ from .tools.list_lookups import register as register_list_lookups
 from .tools.list_pipelines import register as register_list_pipelines
 from .tools.list_routes import register as register_list_routes
 from .tools.list_sources import register as register_list_sources
+from .tools.list_variables import register as register_list_variables
 from .tools.packs import register as register_pack_tools
+from .tools.system_settings import register as register_system_settings_tools
+from .tools.users import register as register_user_tools
 from .tools.validate_config_objects import register as register_validate_config_objects
 from .tools.validate_resource_sync import register as register_validate_resource_sync
 
@@ -135,6 +149,7 @@ def _register_capabilities() -> None:
         collect_product_routes=collect_product_routes,
         collect_product_breakers=collect_product_breakers,
         collect_product_lookups=collect_product_lookups,
+        collect_product_variables=collect_product_variables,
         collect_packs=collect_packs,
     )
     register_list_sources(app, deps=deps)
@@ -143,11 +158,23 @@ def _register_capabilities() -> None:
     register_list_routes(app, deps=deps)
     register_list_breakers(app, deps=deps)
     register_list_lookups(app, deps=deps)
+    register_list_variables(app, deps=deps)
     register_pack_tools(app, deps=deps)
     register_get_config_objects(app, deps=deps)
     register_copy_resource_config(app, impl=copy_resource_config)
     register_validate_resource_sync(app, impl=validate_resource_sync)
     register_validate_config_objects(app, impl=validate_resource_sync)
+    register_user_tools(app, impl=sync_user)
+    register_group_sync_tools(
+        app,
+        replicate_impl=replicate_group_config,
+        validate_impl=validate_group_config_sync,
+    )
+    register_system_settings_tools(
+        app,
+        replicate_impl=replicate_system_settings,
+        validate_impl=validate_system_settings_sync,
+    )
     resources.register(app, deps=deps)
     prompts.register(app)
 
