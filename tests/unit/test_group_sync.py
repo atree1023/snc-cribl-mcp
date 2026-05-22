@@ -100,6 +100,23 @@ async def test_replicate_group_config_allows_target_selector_that_resolves_to_sa
 
 
 @pytest.mark.asyncio
+async def test_resolve_target_group_id_uses_target_selector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Target group selectors should be resolved on the target leader when provided."""
+    resolve_group = AsyncMock(return_value="target-id")
+    monkeypatch.setattr(group_sync_module, "_resolve_group_id", resolve_group)
+
+    result = await group_sync_module._resolve_target_group_id(
+        "target",
+        target_group="Target Workers",
+        source_group_id="source-id",
+        product=ProductsCore.STREAM,
+    )
+
+    assert result == "target-id"
+    resolve_group.assert_awaited_once_with("target", "Target Workers", ProductsCore.STREAM)
+
+
+@pytest.mark.asyncio
 async def test_replicate_group_config_can_skip_group_settings_and_append_only_routes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -192,3 +209,27 @@ async def test_validate_group_config_reports_group_level_target_mismatch(monkeyp
     assert result["in_sync"] is False
     assert result["group_result"]["error"] == "Group-level validation to a different target group id is not supported yet."
     assert result["content_results"]["sources"]["in_sync"] is True
+
+
+@pytest.mark.asyncio
+async def test_validate_group_config_can_skip_group_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Group validation should support content-only comparisons."""
+    validate_resource = AsyncMock(return_value={"resource_kind": "sources", "in_sync": True})
+
+    monkeypatch.setattr(group_sync_module, "_resolve_group_id", AsyncMock(return_value="source-id"))
+    monkeypatch.setattr(group_sync_module, "validate_resource_sync", validate_resource)
+
+    result = await group_sync_module.validate_group_config_sync(
+        "source",
+        "target",
+        product=ProductsCore.STREAM,
+        source_group="source-id",
+        target_group="target-id",
+        content_kinds=["sources"],
+        include_group_settings=False,
+    )
+
+    assert result["in_sync"] is True
+    assert result["group_result"] is None
+    assert result["target_group_id"] == "target-id"
+    validate_resource.assert_awaited_once()

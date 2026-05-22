@@ -112,3 +112,35 @@ async def test_connect_server_pair_yields_source_and_target(monkeypatch: pytest.
         assert target.server_name == "target"
 
     assert entered == ["source", "target"]
+
+
+@pytest.mark.asyncio
+async def test_resolved_control_plane_get_security_returns_static_security() -> None:
+    """Resolved metadata should reuse the initial security when no provider is present."""
+    security = Security(bearer_auth="initial-token")
+    resolved = cribl_client_module.ResolvedControlPlane(
+        server_name="target",
+        config=_config(),
+        client=MagicMock(),
+        security=security,
+    )
+
+    assert await resolved.get_security() is security
+
+
+@pytest.mark.asyncio
+async def test_resolved_control_plane_get_security_uses_provider() -> None:
+    """Resolved metadata should ask the provider for fresh security when available."""
+    initial_security = Security(bearer_auth="initial-token")
+    fresh_security = Security(bearer_auth="fresh-token")
+    provider = AsyncMock(return_value=fresh_security)
+    resolved = cribl_client_module.ResolvedControlPlane(
+        server_name="target",
+        config=_config(),
+        client=MagicMock(),
+        security=initial_security,
+        security_provider=provider,
+    )
+
+    assert await resolved.get_security() is fresh_security
+    provider.assert_awaited_once()

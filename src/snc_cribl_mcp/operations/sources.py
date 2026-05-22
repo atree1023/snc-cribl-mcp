@@ -157,9 +157,7 @@ def _merge_source_results(
     """
     # Handle edge cases where one result failed
     if regular_result.get("status") != "ok":
-        # If regular sources failed, return collector result with error context
-        if collector_result.get("status") == "ok":
-            return collector_result
+        # Regular source failures must remain visible; collectors are only supplementary.
         return regular_result
 
     if collector_result.get("status") != "ok":

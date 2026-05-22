@@ -5,13 +5,29 @@ Covers caching behavior and error handling independent of server subclassing.
 
 # pyright: reportPrivateUsage=false
 
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from snc_cribl_mcp.client.token_manager import TokenManager, get_token_manager
+import snc_cribl_mcp.client.token_manager as token_manager_module
+from snc_cribl_mcp.client.token_manager import ExpiredTokenError, TokenManager, get_token_manager
 from snc_cribl_mcp.config import CriblConfig
+
+
+@contextmanager
+def _isolated_token_manager_cache() -> Generator[None]:
+    token_manager_module._TOKEN_MANAGERS.clear()
+    try:
+        yield
+    finally:
+        token_manager_module._TOKEN_MANAGERS.clear()
+
+
+def _cached_token_managers() -> list[TokenManager]:
+    return [manager for managers in token_manager_module._TOKEN_MANAGERS.values() for manager in managers]
 
 
 def _config_with_credentials() -> CriblConfig:
@@ -296,9 +312,84 @@ async def test_request_oauth_token_with_logging_logs_exception() -> None:
 
 
 def test_get_token_manager_returns_cached() -> None:
-    """Token manager factory should reuse instances per base URL."""
-    config = _config_with_unique_base_url()
-    first = get_token_manager(config)
-    second = get_token_manager(config)
+    """Token manager factory should reuse instances per token request settings."""
+    with _isolated_token_manager_cache():
+        config = _config_with_unique_base_url()
+        first = get_token_manager(config)
+        second = get_token_manager(config)
+        matching_config = _config_with_unique_base_url()
+        third = get_token_manager(matching_config)
 
     assert first is second
+    assert third is first
+
+
+def test_get_token_manager_separates_same_url_different_credentials() -> None:
+    """Configs sharing a base URL but not credentials must not share token managers."""
+    with _isolated_token_manager_cache():
+        first_config = CriblConfig(
+            url="https://cribl.example.com/api/v1",
+            username="user-one",
+            password="pass-one",
+        )
+        second_config = CriblConfig(
+            url="https://cribl.example.com/api/v1",
+            username="user-two",
+            password="pass-two",
+        )
+
+        first = get_token_manager(first_config)
+        second = get_token_manager(second_config)
+
+    assert first is not second
+    assert first._config is first_config
+    assert second._config is second_config
+
+
+def test_secret_values_match_without_hashing() -> None:
+    """Secret comparison should distinguish values without producing hash fingerprints."""
+    assert token_manager_module._secret_values_match(None, None) is True
+    assert token_manager_module._secret_values_match("pass", "pass") is True
+    assert token_manager_module._secret_values_match("pass", "other") is False
+    assert token_manager_module._secret_values_match("pass", None) is False
+
+
+def test_get_token_manager_evicts_old_entries_after_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rotating credentials should not grow the token-manager cache without bound."""
+    monkeypatch.setattr(token_manager_module, "_TOKEN_MANAGER_CACHE_MAXSIZE", 2)
+    with _isolated_token_manager_cache():
+        first = get_token_manager(CriblConfig(url="https://cribl.example.com/api/v1", username="user", password="pass-1"))
+        second = get_token_manager(CriblConfig(url="https://cribl.example.com/api/v1", username="user", password="pass-2"))
+        third = get_token_manager(CriblConfig(url="https://cribl.example.com/api/v1", username="user", password="pass-3"))
+
+        cached_managers = _cached_token_managers()
+        assert first not in cached_managers
+        assert second in cached_managers
+        assert third in cached_managers
+        assert token_manager_module._cached_token_manager_count() == 2
+
+
+def test_get_token_manager_evicts_empty_oldest_bucket_after_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Evicting the only manager in an oldest bucket should remove that bucket."""
+    monkeypatch.setattr(token_manager_module, "_TOKEN_MANAGER_CACHE_MAXSIZE", 1)
+    with _isolated_token_manager_cache():
+        first = get_token_manager(CriblConfig(url="https://first.example.com/api/v1", username="user", password="pass"))
+        with patch.object(first, "close") as close:
+            second = get_token_manager(CriblConfig(url="https://second.example.com/api/v1", username="user", password="pass"))
+
+        close.assert_called_once()
+        assert _cached_token_managers() == [second]
+        assert len(token_manager_module._TOKEN_MANAGERS) == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_cached_token_without_refresh_credentials_raises_specific_error() -> None:
+    """Expired cached tokens without refresh credentials should use a catchable error type."""
+    manager = TokenManager(_config_with_credentials())
+    manager._cached_token = "preexisting-token"  # type: ignore[reportPrivateUsage]
+    manager._config.username = None  # type: ignore[reportPrivateUsage]
+    manager._config.password = None  # type: ignore[reportPrivateUsage]
+    manager._token_expires_at = datetime.now(UTC) - timedelta(hours=1)  # type: ignore[reportPrivateUsage]
+
+    with pytest.raises(ExpiredTokenError, match=r"Expired or near-expiration cached token.*refresh credentials"):
+        await manager.get_security()

@@ -640,6 +640,60 @@ class TestCollectItemsViaSdk:
         # When cause is not ValidationError, errors list should be empty
         assert result["errors"] == []
 
+    async def test_single_response_serializes_model_with_items_attribute_without_count(self) -> None:
+        """Single-model responses should not be mistaken for counted responses by an items field alone."""
+
+        class SingleModelWithItems:
+            def __init__(self) -> None:
+                self.items: list[dict[str, str]] = [{"related": "object"}]
+
+            def model_dump(self, *, mode: str, exclude_none: bool) -> dict[str, object]:
+                assert mode == "json"
+                assert exclude_none is True
+                return {"id": "single-model", "items": self.items}
+
+        coll_ctx, mock_client, _ = self._create_collection_context()
+        mock_group = MagicMock()
+        mock_group.model_dump.return_value = {"id": "group1"}
+        mock_client.groups.list_async = AsyncMock(return_value=MagicMock(items=[mock_group]))
+        mock_list_method = AsyncMock(return_value=SingleModelWithItems())
+
+        result = await collect_items_via_sdk(coll_ctx, mock_list_method, single_response=True)
+
+        assert result["status"] == "ok"
+        assert result["groups"] == [
+            {
+                "group_id": "group1",
+                "count": 1,
+                "items": [{"id": "single-model", "items": [{"related": "object"}]}],
+            }
+        ]
+
+    async def test_counted_response_with_malformed_items_returns_empty_group(self) -> None:
+        """Malformed counted-response item containers should be treated as empty."""
+
+        class MalformedCountedResponse:
+            items = "not-a-list"
+            count = 1
+
+        coll_ctx, mock_client, _ = self._create_collection_context()
+        mock_group = MagicMock()
+        mock_group.model_dump.return_value = {"id": "group1"}
+        mock_client.groups.list_async = AsyncMock(return_value=MagicMock(items=[mock_group]))
+        mock_list_method = AsyncMock(return_value=MalformedCountedResponse())
+
+        result = await collect_items_via_sdk(coll_ctx, mock_list_method)
+
+        assert result["status"] == "ok"
+        assert result["groups"] == [
+            {
+                "group_id": "group1",
+                "count": 0,
+                "items": [],
+                "reported_count": 1,
+            }
+        ]
+
 
 class TestCollectItemsViaHttp:
     """Tests for collect_items_via_http async function."""

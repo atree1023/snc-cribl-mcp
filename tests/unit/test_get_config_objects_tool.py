@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from cribl_control_plane.models.productscore import ProductsCore
+from cribl_control_plane.models.security import Security
 from fastmcp import Context
 
 from snc_cribl_mcp.config import CriblConfig
@@ -146,26 +147,40 @@ async def test_get_config_objects_tool_rejects_unregistered_kind(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "collector_attr"),
+    [
+        ("breakers", "collect_product_breakers"),
+        ("lookups", "collect_product_lookups"),
+    ],
+)
 async def test_get_config_objects_tool_passes_security_to_direct_http_collectors(
+    kind: str,
+    collector_attr: str,
     deps: SimpleNamespace,
     mock_ctx: Context,
 ) -> None:
     """Breakers and lookups should receive the security object for HTTP fallback collectors."""
+    security = Security(bearer_auth="fake-token")
+    token_manager = deps.get_token_manager.return_value
+    token_manager.get_security.return_value = security
     collector = AsyncMock(return_value={"status": "ok", "total_count": 0, "groups": []})
-    deps.collect_product_breakers = collector
+    setattr(deps, collector_attr, collector)
 
     app = _FakeApp()
     register_get_config_objects(app, deps=deps)  # type: ignore[arg-type]
 
     data = await app.tools["get_config_objects"](
         mock_ctx,
-        kind="breakers",
+        kind=kind,
         product="edge",
     )
 
-    assert data["kind"] == "breakers"
+    assert data["kind"] == kind
     assert data["returned_count"] == 0
+    token_manager.get_security.assert_awaited_once()
     collector.assert_awaited_once()
     assert collector.await_args is not None
     assert len(collector.await_args.args) == 2
+    assert collector.await_args.args[1] is security
     assert collector.await_args.kwargs["product"] == ProductsCore.EDGE

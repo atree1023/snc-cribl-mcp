@@ -41,6 +41,7 @@ def mock_deps() -> SimpleNamespace:
     deps.collect_product_routes = AsyncMock(return_value={"status": "ok"})
     deps.collect_product_breakers = AsyncMock(return_value={"status": "ok"})
     deps.collect_product_lookups = AsyncMock(return_value={"status": "ok"})
+    deps.collect_product_variables = AsyncMock(return_value={"status": "ok"})
     deps.collect_packs = AsyncMock(return_value={"status": "ok"})
 
     return deps
@@ -61,6 +62,7 @@ async def test_register_resources(mock_deps: SimpleNamespace) -> None:
     assert "cribl://routes" in registered_resources
     assert "cribl://breakers" in registered_resources
     assert "cribl://lookups" in registered_resources
+    assert "cribl://variables" in registered_resources
     assert "cribl://packs" in registered_resources
 
     resource = await app.get_resource("cribl://groups")
@@ -184,6 +186,25 @@ async def test_get_lookups_resource(mock_deps: SimpleNamespace) -> None:
     assert "lookups" in data
     mock_deps.collect_product_lookups.assert_called_once()
     call_args = mock_deps.collect_product_lookups.call_args
+    assert call_args.kwargs["security"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_get_variables_resource(mock_deps: SimpleNamespace) -> None:
+    """Test the variables resource."""
+    app = FastMCP("test")
+    resources.register(app, deps=mock_deps)
+
+    resource = await app.get_resource("cribl://variables")
+    assert resource is not None
+    async with Context(app):
+        result = await resource.fn()  # type: ignore[reportUnknownMemberType]
+    assert isinstance(result, dict)
+
+    data = cast("dict[str, Any]", result)
+    assert "variables" in data
+    mock_deps.collect_product_variables.assert_called_once()
+    call_args = mock_deps.collect_product_variables.call_args
     assert call_args.kwargs["security"] == "token"
 
 

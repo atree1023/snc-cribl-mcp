@@ -647,16 +647,19 @@ class TestMergeSourceResults:
         assert len(result["groups"][0]["items"]) == 2
 
     def test_merge_regular_failed_collector_ok(self) -> None:
-        """When regular fails but collector succeeds, return collector result."""
-        regular = {"status": "error", "error": "boom"}
+        """When regular validation fails but collector succeeds, preserve the regular error."""
+        regular = {
+            "status": "validation_error",
+            "message": "SDK could not validate sources",
+            "group_id": "g1",
+        }
         collector = {
             "status": "ok",
             "total_count": 1,
             "groups": [{"group_id": "g1", "count": 1, "items": [{"name": "coll1"}]}],
         }
         result = _merge_source_results(regular, collector)
-        assert result["status"] == "ok"
-        assert result["total_count"] == 1
+        assert result == regular
 
     def test_merge_regular_failed_collector_failed(self) -> None:
         """When both fail, return regular result (primary)."""

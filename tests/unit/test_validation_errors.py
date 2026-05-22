@@ -4,6 +4,7 @@ Covers utilities for parsing Pydantic validation errors and formatting
 user-friendly error responses.
 """
 
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -19,6 +20,7 @@ from snc_cribl_mcp.operations.validation_errors import (
     _extract_object_info,  # pyright: ignore[reportPrivateUsage]
     _format_json_value,  # pyright: ignore[reportPrivateUsage]
     _parse_error_location,  # pyright: ignore[reportPrivateUsage]
+    _redact_sensitive_values,  # pyright: ignore[reportPrivateUsage]
     format_validation_error_response,
     parse_validation_error,
 )
@@ -188,6 +190,27 @@ class TestExtractObjectInfo:
         assert obj_id is None
         assert obj_type is None
 
+    def test_returns_none_when_items_is_not_a_list(self) -> None:
+        """Returns (None, None) when items is present but malformed."""
+        obj_id, obj_type = _extract_object_info('{"items": "not-a-list"}', 0)
+
+        assert obj_id is None
+        assert obj_type is None
+
+    def test_returns_none_for_non_object_json_body(self) -> None:
+        """Returns (None, None) when body JSON is not an object."""
+        obj_id, obj_type = _extract_object_info("[]", 0)
+
+        assert obj_id is None
+        assert obj_type is None
+
+    def test_returns_none_for_non_object_item(self) -> None:
+        """Returns (None, None) when selected item is not an object."""
+        obj_id, obj_type = _extract_object_info('{"items": [1]}', 0)
+
+        assert obj_id is None
+        assert obj_type is None
+
     def test_handles_missing_type(self) -> None:
         """Returns None for type when not present."""
         body = '{"items": [{"id": "src1"}]}'
@@ -246,6 +269,18 @@ class TestExtractFieldValue:
 
         assert value is None
 
+    def test_returns_none_for_non_object_json_body(self) -> None:
+        """Returns None when body JSON is not an object."""
+        value = _extract_field_value("[]", 0, "tcpjson", ["host"])
+
+        assert value is None
+
+    def test_returns_none_for_non_object_item(self) -> None:
+        """Returns None when selected item is not an object."""
+        value = _extract_field_value('{"items": [1]}', 0, "tcpjson", ["host"])
+
+        assert value is None
+
     def test_returns_none_for_missing_type_field(self) -> None:
         """Returns None when type field doesn't exist in item."""
         body = '{"items": [{"syslog": {"host": "localhost"}}]}'
@@ -284,6 +319,14 @@ class TestExtractFieldValue:
         body = '{"items": [{"tcpjson": {"connections": [{"a": 1}]}}]}'
 
         value = _extract_field_value(body, 0, "tcpjson", ["connections", "5", "a"])
+
+        assert value is None
+
+    def test_returns_none_for_invalid_list_index(self) -> None:
+        """Returns None when a list path segment cannot be parsed as an integer."""
+        body = '{"items": [{"tcpjson": {"connections": [{"a": 1}]}}]}'
+
+        value = _extract_field_value(body, 0, "tcpjson", ["connections", "nope", "a"])
 
         assert value is None
 
@@ -698,6 +741,84 @@ class TestFormatValidationErrorResponse:
         assert "actual_value" in error_entry
         assert "help" in error_entry
         assert "Cribl UI" in error_entry["help"]
+
+    def test_redacts_sensitive_values_in_actual_value(self) -> None:
+        """Redacts sensitive sibling fields before returning actual_value."""
+        validation_errors = [
+            ValidationErrorDetails(
+                object_index=0,
+                object_type="tcpjson",
+                field_path="tcpjson.connections.0.output",
+                error_type="missing",
+                error_message="Field required",
+                input_value=None,
+                raw_location=("body", "items", 0, "tcpjson", "connections", "0", "output"),
+            )
+        ]
+        body = json.dumps(
+            {
+                "items": [
+                    {
+                        "id": "src1",
+                        "type": "tcpjson",
+                        "tcpjson": {
+                            "connections": [
+                                {
+                                    "host": "localhost",
+                                    "password": "super-secret-password",
+                                    "apiKey": "api-key-secret",
+                                    "privateKey": "private-key-secret",
+                                    "nested": {"token": "token-secret", "safe": "kept"},
+                                    "headers": [{"name": "Authorization", "secret": "header-secret"}],
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        )
+
+        result = format_validation_error_response(
+            resource_type="sources",
+            product="stream",
+            group_id="default",
+            body=body,
+            validation_errors=validation_errors,
+        )
+
+        actual_value = result["errors"][0]["actual_value"]
+        redacted = json.loads(actual_value)
+        assert redacted["host"] == "localhost"
+        assert redacted["password"] == "[REDACTED]"
+        assert redacted["apiKey"] == "[REDACTED]"
+        assert redacted["privateKey"] == "[REDACTED]"
+        assert redacted["nested"] == {"token": "[REDACTED]", "safe": "kept"}
+        assert redacted["headers"] == [{"name": "Authorization", "secret": "[REDACTED]"}]
+        assert "super-secret-password" not in actual_value
+        assert "api-key-secret" not in actual_value
+        assert "private-key-secret" not in actual_value
+        assert "token-secret" not in actual_value
+        assert "header-secret" not in actual_value
+
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "api_keys",
+            "auth",
+            "bearer",
+            "clientCredentials",
+            "cookies",
+            "passwords",
+            "private_keys",
+            "sessionId",
+            "tokens",
+        ],
+    )
+    def test_redacts_sensitive_field_name_variants(self, field_name: str) -> None:
+        """Redacts common singular, plural, and normalized secret field names."""
+        redacted = _redact_sensitive_values({field_name: "sensitive-value", "safe": "kept"})
+
+        assert redacted == {field_name: "[REDACTED]", "safe": "kept"}
 
     def test_uses_default_message_when_no_errors(self) -> None:
         """Uses default message when validation_errors list is empty."""

@@ -4,6 +4,8 @@ import asyncio
 import base64
 import json
 import logging
+import secrets
+from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Self
@@ -18,6 +20,10 @@ logger = logging.getLogger("snc_cribl_mcp.token_manager")
 
 DEFAULT_OAUTH_TOKEN_URL = "https://login.cribl.cloud/oauth/token"  # noqa: S105
 DEFAULT_OAUTH_AUDIENCE = "https://api.cribl.cloud"
+
+
+class ExpiredTokenError(RuntimeError):
+    """Raised when a cached token is expired or too close to expiration and cannot be refreshed."""
 
 
 class TokenManager:
@@ -93,9 +99,11 @@ class TokenManager:
                 return Security(bearer_auth=self._cached_token)
 
             if self._cached_token and not self._can_refresh():
-                # Token exists but may be expired and we cannot refresh - log warning and return anyway
-                logger.warning("Cached token may be expired but no credentials available to refresh")
-                return Security(bearer_auth=self._cached_token)
+                msg = (
+                    "Expired or near-expiration cached token cannot be used because refresh credentials are missing. "
+                    "Configure username/password or client_id/client_secret credentials to refresh it."
+                )
+                raise ExpiredTokenError(msg)
 
             token = await self._fetch_and_cache_token()
             return Security(bearer_auth=token)
@@ -297,8 +305,56 @@ class TokenManager:
         has_client_creds = bool(self._config.client_id and self._config.client_secret)
         return has_user_pass or has_client_creds
 
+    def cache_secrets_match(self, config: CriblConfig) -> bool:
+        """Return whether this manager was created for the same secret values."""
+        return _secret_values_match(self._config.password, config.password) and _secret_values_match(
+            self._config.client_secret,
+            config.client_secret,
+        )
 
-_TOKEN_MANAGERS: dict[str, TokenManager] = {}
+
+type TokenManagerCacheKey = tuple[str, str | None, str | None, str, str, bool, int]
+
+_TOKEN_MANAGER_CACHE_MAXSIZE = 64
+
+
+def _secret_values_match(left: str | None, right: str | None) -> bool:
+    """Return whether optional secret values match without hashing them."""
+    if left is None or right is None:
+        return left is right
+    return secrets.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
+
+
+def _token_manager_cache_key(config: CriblConfig) -> TokenManagerCacheKey:
+    """Return the token-manager cache key for token request-affecting config."""
+    return (
+        config.base_url_str,
+        config.username,
+        config.client_id,
+        config.oauth_token_url or DEFAULT_OAUTH_TOKEN_URL,
+        config.oauth_audience or DEFAULT_OAUTH_AUDIENCE,
+        config.verify_ssl,
+        config.timeout_ms,
+    )
+
+
+_TOKEN_MANAGERS: OrderedDict[TokenManagerCacheKey, list[TokenManager]] = OrderedDict()
+
+
+def _cached_token_manager_count() -> int:
+    """Return the total number of cached token managers across all non-secret keys."""
+    return sum(len(managers) for managers in _TOKEN_MANAGERS.values())
+
+
+def _evict_stale_token_managers() -> None:
+    """Evict least-recently-used managers until the cache is within bounds."""
+    while _cached_token_manager_count() > _TOKEN_MANAGER_CACHE_MAXSIZE:
+        oldest_key = next(iter(_TOKEN_MANAGERS))
+        oldest_bucket = _TOKEN_MANAGERS[oldest_key]
+        stale_manager = oldest_bucket.pop(0)
+        stale_manager.close()
+        if not oldest_bucket:
+            del _TOKEN_MANAGERS[oldest_key]
 
 
 def get_token_manager(config: CriblConfig) -> TokenManager:
@@ -308,15 +364,26 @@ def get_token_manager(config: CriblConfig) -> TokenManager:
         config: Resolved Cribl configuration.
 
     Returns:
-        TokenManager instance scoped to the configuration's base URL.
+        TokenManager instance scoped to the configuration's token request settings.
 
     """
-    key = str(config.base_url)
-    manager = _TOKEN_MANAGERS.get(key)
-    if manager is None:
-        manager = TokenManager(config)
-        _TOKEN_MANAGERS[key] = manager
+    key = _token_manager_cache_key(config)
+    managers = _TOKEN_MANAGERS.get(key)
+    if managers is not None:
+        for index, manager in enumerate(managers):
+            if manager.cache_secrets_match(config):
+                managers.append(managers.pop(index))
+                _TOKEN_MANAGERS.move_to_end(key)
+                return manager
+    else:
+        managers = []
+        _TOKEN_MANAGERS[key] = managers
+
+    manager = TokenManager(config)
+    managers.append(manager)
+    _TOKEN_MANAGERS.move_to_end(key)
+    _evict_stale_token_managers()
     return manager
 
 
-__all__ = ["TokenManager", "get_token_manager"]
+__all__ = ["ExpiredTokenError", "TokenManager", "get_token_manager"]

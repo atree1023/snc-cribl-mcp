@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 # pyright: reportPrivateUsage=false
+import json
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -34,6 +35,11 @@ def _make_response(*items: dict[str, Any]) -> MagicMock:
         model.model_dump.return_value = item
         response.items.append(model)
     return response
+
+
+def _request_json(request: httpx.Request) -> dict[str, Any]:
+    """Return a decoded JSON request body for mock transport assertions."""
+    return cast("dict[str, Any]", json.loads(request.content))
 
 
 @pytest.mark.asyncio
@@ -421,6 +427,37 @@ def test_payload_builders_reject_unsupported_shapes() -> None:
         resource_actions_module._build_update_kwargs(cast("Any", "lookups"), "lookup.csv", {"id": "lookup.csv"})
 
 
+def test_private_resource_helpers_reject_unsupported_shapes() -> None:
+    """Private resource helpers should keep SDK and direct-HTTP resource contracts distinct."""
+    client = MagicMock()
+    client.sdk_configuration = MagicMock(server_url="https://cribl.example.com/api/v1")
+
+    with pytest.raises(ValueError, match="not backed by an SDK component"):
+        resource_actions_module._allowed_method_params("variables", "create")
+
+    with pytest.raises(ValueError, match="Unsupported resource kind"):
+        canonicalize_resource_item(cast("Any", "widgets"), {"id": "widget"})
+
+    with pytest.raises(ValueError, match="not backed by an SDK component"):
+        resource_actions_module._component(client, "variables")
+
+    with pytest.raises(ValueError, match="requires direct HTTP security"):
+        resource_actions_module._require_security("variables", None)
+
+    with pytest.raises(ValueError, match="not a direct HTTP resource"):
+        resource_actions_module._require_http_spec("sources")
+
+    spec = resource_actions_module.get_resource_spec("variables")
+    with pytest.raises(ValueError, match="requires a group_id"):
+        resource_actions_module._direct_collection_url(client, spec, None)
+
+
+def test_response_items_ignores_malformed_payload_shapes() -> None:
+    """Direct HTTP item extraction should tolerate non-standard response bodies."""
+    assert resource_actions_module._response_items([{"id": "not-a-dict-payload"}]) == []
+    assert resource_actions_module._response_items({"items": "not-a-list"}) == []
+
+
 @pytest.mark.asyncio
 async def test_direct_http_resource_crud_for_variables() -> None:
     """Direct HTTP resources should use the SDK-owned httpx client and bearer token."""
@@ -428,13 +465,25 @@ async def test_direct_http_resource_crud_for_variables() -> None:
 
     def _handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if request.method == "GET":
+        url = str(request.url)
+        if request.method == "GET" and url.endswith("/lib/vars"):
+            return httpx.Response(200, json={"items": [{"id": "var1", "value": "one"}], "count": 1})
+        if request.method == "GET" and url.endswith("/lib/vars/var1"):
             return httpx.Response(200, json={"items": [{"id": "var1", "value": "one"}], "count": 1})
         if request.method == "POST":
+            assert url == "https://cribl.example.com/api/v1/m/default/lib/vars"
+            assert request.headers["content-type"] == "application/json"
+            assert _request_json(request) == {"id": "var1", "value": "one"}
             return httpx.Response(200, json={"items": [{"id": "var1", "value": "one"}], "count": 1})
         if request.method == "PATCH":
+            assert url == "https://cribl.example.com/api/v1/m/default/lib/vars/var1"
+            assert request.headers["content-type"] == "application/json"
+            assert _request_json(request) == {"id": "var1", "value": "two"}
             return httpx.Response(200, json={"items": [{"id": "var1", "value": "two"}], "count": 1})
         if request.method == "DELETE":
+            assert url == "https://cribl.example.com/api/v1/m/default/lib/vars/var1"
+            assert request.headers["content-type"] == "application/json"
+            assert request.content == b""
             return httpx.Response(200, json={"items": [{"id": "var1"}], "count": 1})
         return httpx.Response(405)
 
@@ -538,13 +587,25 @@ async def test_direct_http_lookup_writes_upload_content_first() -> None:
         requests.append(request)
         url = str(request.url)
         if request.method == "GET" and url.endswith("/system/lookups"):
-            return httpx.Response(200, json={"items": [{"id": "sample.csv", "size": 12}], "count": 1})
+            return httpx.Response(
+                200,
+                json={"items": [{"id": "sample.csv", "size": 12, "description": "sample lookup"}], "count": 1},
+            )
         if request.method == "GET" and url.endswith("/system/lookups/sample.csv/content?raw=1"):
             return httpx.Response(200, text="a,b\n1,2\n", headers={"content-type": "text/csv"})
         if request.method == "PUT":
+            assert url == "https://cribl.example.com/api/v1/m/default/system/lookups?filename=sample.csv"
+            assert request.headers["content-type"] == "text/csv"
             assert request.content == b"a,b\n1,2\n"
             return httpx.Response(200, json={"filename": "sample.csv.tmp", "rows": 1, "size": 8})
         if request.method == "POST":
+            assert url == "https://cribl.example.com/api/v1/m/default/system/lookups"
+            assert request.headers["content-type"] == "application/json"
+            assert _request_json(request) == {
+                "id": "sample.csv",
+                "description": "sample lookup",
+                "fileInfo": {"filename": "sample.csv.tmp"},
+            }
             return httpx.Response(200, json={"items": [{"id": "sample.csv", "version": "new"}], "count": 1})
         return httpx.Response(404)
 
@@ -568,6 +629,7 @@ async def test_direct_http_lookup_writes_upload_content_first() -> None:
             {
                 "id": "sample.csv",
                 "size": 12,
+                "description": "sample lookup",
                 "_content": "a,b\n1,2\n",
                 "_content_type": "text/csv",
             }
@@ -583,3 +645,113 @@ async def test_direct_http_lookup_writes_upload_content_first() -> None:
 
     assert created == [{"id": "sample.csv", "version": "new"}]
     assert [request.method for request in requests] == ["GET", "GET", "PUT", "POST"]
+
+
+@pytest.mark.asyncio
+async def test_direct_http_lookup_get_can_hydrate_content() -> None:
+    """Single lookup reads should hydrate raw content when requested."""
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if request.method == "GET" and url.endswith("/system/lookups/sample.csv"):
+            return httpx.Response(200, json={"items": [{"id": "sample.csv", "size": 12}], "count": 1})
+        if request.method == "GET" and url.endswith("/system/lookups/sample.csv/content?raw=1"):
+            return httpx.Response(200, text="a,b\n1,2\n", headers={"content-type": "text/csv"})
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+        client = MagicMock()
+        client.sdk_configuration = MagicMock(
+            server_url="https://cribl.example.com/api/v1",
+            async_client=http_client,
+        )
+
+        item = await get_resource(
+            client,
+            "lookups",
+            item_id="sample.csv",
+            timeout_ms=1000,
+            group_id="default",
+            security=Security(bearer_auth="token"),
+            hydrate_lookup_content=True,
+        )
+
+    assert item["_content"] == "a,b\n1,2\n"
+    assert item["_content_type"] == "text/csv"
+    assert [request.method for request in requests] == ["GET", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_direct_http_get_resource_raises_when_payload_has_no_items() -> None:
+    """Direct single-item reads should reject empty counted responses."""
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"items": []}))
+    ) as http_client:
+        client = MagicMock()
+        client.sdk_configuration = MagicMock(
+            server_url="https://cribl.example.com/api/v1",
+            async_client=http_client,
+        )
+
+        with pytest.raises(RuntimeError, match="returned no items"):
+            await get_resource(
+                client,
+                "variables",
+                item_id="missing",
+                timeout_ms=1000,
+                group_id="default",
+                security=Security(bearer_auth="token"),
+            )
+
+
+@pytest.mark.asyncio
+async def test_hydrate_lookup_content_returns_items_without_ids() -> None:
+    """Lookup hydration should leave malformed entries untouched instead of calling HTTP."""
+    client = MagicMock()
+
+    item = {"name": "missing-id"}
+    result = await resource_actions_module._hydrate_lookup_content(
+        client,
+        group_id="default",
+        item=item,
+        security=Security(bearer_auth="token"),
+        timeout_ms=1000,
+    )
+
+    assert result is item
+
+
+@pytest.mark.asyncio
+async def test_lookup_upload_requires_content_and_filename_response() -> None:
+    """Lookup writes should require hydrated content and Cribl upload filenames."""
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"rows": 1}))
+    ) as http_client:
+        client = MagicMock()
+        client.sdk_configuration = MagicMock(
+            server_url="https://cribl.example.com/api/v1",
+            async_client=http_client,
+        )
+        security = Security(bearer_auth="token")
+
+        with pytest.raises(TypeError, match="does not include downloadable content"):
+            await create_resource(
+                client,
+                "lookups",
+                item={"id": "sample.csv"},
+                timeout_ms=1000,
+                group_id="default",
+                security=security,
+            )
+
+        with pytest.raises(RuntimeError, match="did not return a temporary filename"):
+            await create_resource(
+                client,
+                "lookups",
+                item={"id": "sample.csv", "_content": "a,b\n1,2\n"},
+                timeout_ms=1000,
+                group_id="default",
+                security=security,
+            )

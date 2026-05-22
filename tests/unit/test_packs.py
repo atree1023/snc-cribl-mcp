@@ -1,12 +1,15 @@
 """Unit tests for top-level Pack operations."""
 
+# pyright: reportPrivateUsage=false
+
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from cribl_control_plane.errors import CriblControlPlaneError
+from cribl_control_plane.errors import CriblControlPlaneError, ResponseValidationError
 from cribl_control_plane.models.productscore import ProductsCore
 from cribl_control_plane.models.security import Security
 
@@ -50,6 +53,110 @@ def _text_response(url: str, text: str, status_code: int = 200) -> httpx.Respons
         text=text,
         request=httpx.Request("GET", url),
     )
+
+
+def test_pack_serializers_and_summary_helpers_cover_edge_shapes() -> None:
+    """Small Pack helpers should normalize odd but valid SDK and HTTP response shapes."""
+    model = MagicMock()
+    model.model_dump.return_value = {"id": "tuple-item"}
+
+    assert packs._serialize_counted_response(SimpleNamespace(items=(model,), count=None)) == {
+        "status": "ok",
+        "count": 1,
+        "items": [{"id": "tuple-item"}],
+    }
+    assert packs._serialize_http_counted_payload([{"id": "one"}, "skip"]) == {
+        "status": "ok",
+        "count": 2,
+        "items": [{"id": "one"}],
+    }
+    assert packs._serialize_http_counted_payload("not-json-object") == {
+        "status": "error",
+        "error": "Unexpected non-JSON-object Pack response.",
+        "error_type": "str",
+    }
+    assert packs._pack_scope_label(None) == "top-level"
+    assert packs._coerce_cursor("not-an-int") == 0
+    assert packs._pack_item_id({"display": "none"}) is None
+    assert packs._enabled_state({"enabled": True}) is True
+    assert packs._enabled_state({"disabled": True}) is False
+
+    summary = packs._summarize_pack_item("pipelines", {"id": "pipe", "conf": {"functions": "bad"}}, detail="summary")
+    assert summary == {"id": "pipe", "refs": {}}
+
+
+def test_group_pack_categories_reports_error_and_partial_unavailable_states() -> None:
+    """Grouped Pack category status should preserve partial errors and unavailable categories."""
+    assert (
+        packs._group_pack_categories(
+            {
+                "ok-without-count": {"status": "ok", "total_count": "unknown"},
+                "broken": {"status": "error"},
+            },
+            detail="summary",
+        )["status"]
+        == "partial_error"
+    )
+
+    partial = packs._group_pack_categories(
+        {
+            "ok": {"status": "ok", "total_count": 2},
+            "missing": {"status": "unavailable"},
+        },
+        detail="refs",
+    )
+    assert partial["status"] == "partial_unavailable"
+    assert partial["total_count"] == 2
+    assert partial["unavailable_count"] == 1
+
+
+def test_pack_api_error_payload_formats_validation_and_server_errors() -> None:
+    """Pack SDK errors should become structured MCP payloads."""
+    validation_error = ResponseValidationError(
+        "invalid response",
+        httpx.Response(200, text="{}"),
+        cause=RuntimeError("schema mismatch"),
+        body="{}",
+    )
+    validation_payload = packs._pack_api_error_payload(
+        validation_error,
+        resource_type="packs.sources",
+        server_url="https://cribl.example.com/api/v1/m/default",
+    )
+    assert validation_payload["status"] == "validation_error"
+    assert validation_payload["group_id"] == "group-scoped"
+
+    server_error = CriblControlPlaneError("boom", httpx.Response(500, text="boom"))
+    error_payload = packs._pack_api_error_payload(server_error, resource_type="packs", server_url=None)
+    assert error_payload["status"] == "error"
+    assert error_payload["status_code"] == 500
+
+
+@pytest.mark.asyncio
+async def test_run_pack_api_call_reports_network_errors() -> None:
+    """Pack SDK network failures should be returned as structured errors."""
+
+    async def _call() -> object:
+        msg = "offline"
+        raise httpx.ConnectError(msg)
+
+    result = await packs._run_pack_api_call(
+        _call,
+        serializer=lambda _response: {"status": "ok"},
+        resource_type="packs",
+        server_url=None,
+    )
+
+    assert result["status"] == "error"
+    assert result["error_type"] == "ConnectError"
+
+
+def test_pack_base_url_requires_configured_server_url(mock_client: MagicMock) -> None:
+    """Direct Pack URLs should fail clearly when neither explicit nor client URL exists."""
+    mock_client.sdk_configuration.server_url = ""
+
+    with pytest.raises(ValueError, match="server_url is not configured"):
+        packs._pack_base_url(mock_client, None)
 
 
 @pytest.fixture
@@ -453,6 +560,47 @@ async def test_get_pack_marks_all_unavailable_categories(mock_client: MagicMock)
 
 
 @pytest.mark.asyncio
+async def test_get_pack_preserves_missing_metadata_for_aggregate_kind(mock_client: MagicMock) -> None:
+    """Aggregate Pack lookups should include object metadata when metadata lookup fails."""
+    mock_client.packs.get_async = AsyncMock(
+        side_effect=CriblControlPlaneError(
+            "Not found",
+            httpx.Response(404, text="missing"),
+        )
+    )
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="missing-pack",
+        kind="knowledge",
+        security=Security(bearer_auth="test-token"),
+    )
+
+    assert result["status"] == "unavailable"
+    assert result["kind"] == "knowledge"
+    assert result["objects"] == packs._group_pack_categories({}, detail="summary")
+
+
+@pytest.mark.asyncio
+async def test_get_pack_reports_network_error_for_direct_endpoint(mock_client: MagicMock) -> None:
+    """Direct Pack reads should translate transport errors into MCP error payloads."""
+    mock_client.sdk_configuration.async_client.get = AsyncMock(side_effect=httpx.ConnectError("offline"))
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-okta",
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+        security=Security(bearer_auth="test-token"),
+        kind="knowledge.lookups",
+    )
+
+    assert result["status"] == "error"
+    assert result["objects"]["error_type"] == "ConnectError"
+
+
+@pytest.mark.asyncio
 async def test_get_pack_paginates_concrete_sdk_section(mock_client: MagicMock) -> None:
     """Concrete sections should return cursor metadata when the result is truncated."""
     mock_client.packs.sources.list_async = AsyncMock(return_value=_counted_response({"id": "a"}, {"id": "b"}, {"id": "c"}))
@@ -469,6 +617,45 @@ async def test_get_pack_paginates_concrete_sdk_section(mock_client: MagicMock) -
     assert result["objects"]["items"] == [{"id": "b", "refs": {}}]
     assert result["objects"]["truncated"] is True
     assert result["objects"]["next_cursor"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_get_pack_reads_concrete_settings_category(mock_client: MagicMock) -> None:
+    """Settings categories should use direct Pack HTTP endpoints."""
+    url = "https://cribl.example.com/api/v1/m/worker-main/p/cribl-okta/system/settings/conf"
+    mock_client.sdk_configuration.async_client.get = AsyncMock(
+        return_value=_json_response(url, {"count": 1, "items": [{"id": "conf", "api": {"retryCount": 120}}]})
+    )
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-okta",
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+        security=Security(bearer_auth="test-token"),
+        kind="settings.conf",
+    )
+
+    assert result["status"] == "ok"
+    assert result["objects"]["items"] == [{"id": "conf", "refs": {}, "keys": ["api", "id"]}]
+
+
+@pytest.mark.asyncio
+async def test_get_pack_reads_settings_aggregate(mock_client: MagicMock) -> None:
+    """The settings aggregate should group all direct settings categories."""
+    _install_pack_http_responder(mock_client)
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-okta",
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+        security=Security(bearer_auth="test-token"),
+        kind="settings",
+    )
+
+    assert result["status"] == "ok"
+    assert result["objects"]["categories"]["conf"]["items"][0]["id"] == "conf"
 
 
 @pytest.mark.asyncio
@@ -650,3 +837,20 @@ async def test_resolve_pack_group_scope_rejects_ambiguous_group_selector(mock_cl
             group="Main Workers",
             timeout_ms=1234,
         )
+
+
+@pytest.mark.asyncio
+async def test_resolve_pack_group_scope_rejects_blank_missing_and_idless_matches(mock_client: MagicMock) -> None:
+    """Pack group resolution should fail clearly for invalid selectors and malformed group payloads."""
+    with pytest.raises(ValueError, match="must not be blank"):
+        await packs.resolve_pack_group_scope(mock_client, product=ProductsCore.STREAM, group="  ", timeout_ms=1234)
+
+    mock_client.groups.list_async = AsyncMock(return_value=MagicMock(items=[]))
+    with pytest.raises(ValueError, match="Could not resolve group selector"):
+        await packs.resolve_pack_group_scope(mock_client, product=ProductsCore.STREAM, group="missing", timeout_ms=1234)
+
+    group_model = MagicMock()
+    group_model.model_dump.return_value = {"name": "Nameless"}
+    mock_client.groups.list_async = AsyncMock(return_value=MagicMock(items=[group_model]))
+    with pytest.raises(ValueError, match="did not include an id"):
+        await packs.resolve_pack_group_scope(mock_client, product=ProductsCore.STREAM, group="Nameless", timeout_ms=1234)

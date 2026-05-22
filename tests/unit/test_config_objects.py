@@ -213,6 +213,32 @@ def test_shape_config_object_response_handles_bounds_product_items_and_status_er
     assert negative_cursor_response["objects"] == []
 
 
+def test_shape_config_object_response_product_filter_omits_other_product_errors() -> None:
+    """Product-scoped responses should not report skipped product failures."""
+    product_results = {
+        "stream": {
+            "status": "ok",
+            "groups": [
+                {
+                    "group_id": "default",
+                    "items": [{"id": "syslog:keep"}],
+                }
+            ],
+        },
+        "edge": {"status": "error", "message": "edge unavailable"},
+    }
+
+    response = shape_config_object_response(
+        kind="sources",
+        product_results=product_results,
+        product="stream",
+    )
+
+    assert response["total_count"] == 1
+    assert response["objects"][0]["product"] == "stream"
+    assert response["errors"] == []
+
+
 def test_shape_config_object_response_filters_product_group_and_selector() -> None:
     """Product, group, and selector filters should skip non-matching records."""
     product_results = {

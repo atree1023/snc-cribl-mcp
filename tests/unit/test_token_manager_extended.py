@@ -102,8 +102,8 @@ class TestTokenManagerCaching:
         assert security.bearer_auth == "preexisting-token"
 
     @pytest.mark.asyncio
-    async def test_expired_token_logs_warning_no_credentials(self) -> None:
-        """Expired token without credentials should log warning and return cached token."""
+    async def test_expired_cached_token_without_refresh_credentials_raises(self) -> None:
+        """Expired token without credentials should raise instead of returning stale auth."""
         manager = TokenManager(_config_with_credentials())
         manager._cached_token = "preexisting-token"  # type: ignore[reportPrivateUsage]
         manager._config.username = None  # type: ignore[reportPrivateUsage]
@@ -111,11 +111,8 @@ class TestTokenManagerCaching:
         # Set expiration to past
         manager._token_expires_at = datetime.now(UTC) - timedelta(hours=1)
 
-        with patch("snc_cribl_mcp.client.token_manager.logger") as mock_logger:
-            security = await manager.get_security()
-            mock_logger.warning.assert_called()
-
-        assert security.bearer_auth == "preexisting-token"
+        with pytest.raises(RuntimeError, match=r"Expired or near-expiration cached token.*refresh credentials"):
+            await manager.get_security()
 
 
 class TestTokenManagerLocking:

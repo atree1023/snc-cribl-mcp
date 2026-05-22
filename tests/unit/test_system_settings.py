@@ -49,6 +49,60 @@ def _direct_resolved(name: str, base_url: str, http_client: httpx.AsyncClient) -
     )
 
 
+def test_system_settings_http_client_requires_httpx_client() -> None:
+    """Direct settings calls should reject non-httpx SDK clients."""
+    resolved = SimpleNamespace(client=SimpleNamespace(sdk_configuration=SimpleNamespace(async_client=object())))
+
+    with pytest.raises(TypeError, match=r"does not expose an httpx\.AsyncClient"):
+        system_settings_module._http_client(cast("system_settings_module.ResolvedControlPlane", resolved))
+
+
+@pytest.mark.asyncio
+async def test_system_settings_resolved_security_prefers_provider() -> None:
+    """Direct settings calls should use fresh security when a provider exists."""
+    fresh_security = Security(bearer_auth="fresh-token")
+    resolved = SimpleNamespace(get_security=AsyncMock(return_value=fresh_security), security=Security(bearer_auth="old"))
+
+    assert (
+        await system_settings_module._resolved_security(cast("system_settings_module.ResolvedControlPlane", resolved))
+        is fresh_security
+    )
+    resolved.get_security.assert_awaited_once()
+
+
+def test_first_settings_item_rejects_missing_and_malformed_payloads() -> None:
+    """System settings responses should contain one JSON object item."""
+    with pytest.raises(RuntimeError, match="did not include an item"):
+        system_settings_module._first_settings_item({"items": []})
+
+    with pytest.raises(RuntimeError, match="did not include an item"):
+        system_settings_module._first_settings_item({"items": "not-a-list"})
+
+    with pytest.raises(TypeError, match="was not a JSON object"):
+        system_settings_module._first_settings_item({"items": ["not-an-object"]})
+
+
+@pytest.mark.asyncio
+async def test_patch_system_settings_uses_direct_patch_api() -> None:
+    """System settings patching should send the raw settings payload to the direct endpoint."""
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"items": [{"id": "conf"}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+        resolved = cast(
+            "system_settings_module.ResolvedControlPlane",
+            _direct_resolved("target", "https://cribl.example.com/api/v1", http_client),
+        )
+
+        await system_settings_module._patch_system_settings(resolved, {"api": {"retryCount": 120}})
+
+    assert requests[0].method == "PATCH"
+    assert requests[0].headers["Authorization"] == "Bearer token"
+
+
 @pytest.mark.asyncio
 async def test_get_system_settings_uses_direct_api_and_preserves_sparse_payload() -> None:
     """Direct reads should keep valid live payloads that the SDK model rejects."""

@@ -46,7 +46,7 @@ async def collect_product_pipelines(
     )
     if pipeline_id:
         list_method = partial(client.pipelines.get_async, id=pipeline_id)
-        return await collect_items_via_sdk(coll_ctx, list_method)
+        return await collect_items_via_sdk(coll_ctx, list_method, single_response=True)
     return await collect_items_via_sdk(coll_ctx, client.pipelines.list_async)
 
 
