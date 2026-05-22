@@ -346,6 +346,12 @@ def shape_config_object_response(  # noqa: PLR0913
     next_offset = offset + len(page)
     truncated = next_offset < len(records)
 
+    error_results = {
+        product_name: product_result
+        for product_name, product_result in product_results.items()
+        if product_filter is None or product_name.casefold() == product_filter
+    }
+
     return {
         "kind": kind,
         "detail": detail,
@@ -362,7 +368,7 @@ def shape_config_object_response(  # noqa: PLR0913
             )
             for record in page
         ],
-        "errors": _status_errors(product_results),
+        "errors": _status_errors(error_results),
     }
 
 
