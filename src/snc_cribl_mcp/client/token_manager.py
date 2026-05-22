@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -298,7 +299,32 @@ class TokenManager:
         return has_user_pass or has_client_creds
 
 
-_TOKEN_MANAGERS: dict[str, TokenManager] = {}
+type TokenManagerCacheKey = tuple[str, str | None, str | None, str | None, str | None, str, str, bool, int]
+
+
+def _secret_cache_fingerprint(value: str | None) -> str | None:
+    """Return a stable cache fingerprint without storing secrets in cache keys."""
+    if value is None:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _token_manager_cache_key(config: CriblConfig) -> TokenManagerCacheKey:
+    """Return the token-manager cache key for token request-affecting config."""
+    return (
+        config.base_url_str,
+        config.username,
+        _secret_cache_fingerprint(config.password),
+        config.client_id,
+        _secret_cache_fingerprint(config.client_secret),
+        config.oauth_token_url or DEFAULT_OAUTH_TOKEN_URL,
+        config.oauth_audience or DEFAULT_OAUTH_AUDIENCE,
+        config.verify_ssl,
+        config.timeout_ms,
+    )
+
+
+_TOKEN_MANAGERS: dict[TokenManagerCacheKey, TokenManager] = {}
 
 
 def get_token_manager(config: CriblConfig) -> TokenManager:
@@ -308,10 +334,10 @@ def get_token_manager(config: CriblConfig) -> TokenManager:
         config: Resolved Cribl configuration.
 
     Returns:
-        TokenManager instance scoped to the configuration's base URL.
+        TokenManager instance scoped to the configuration's token request settings.
 
     """
-    key = str(config.base_url)
+    key = _token_manager_cache_key(config)
     manager = _TOKEN_MANAGERS.get(key)
     if manager is None:
         manager = TokenManager(config)

@@ -5,13 +5,25 @@ Covers caching behavior and error handling independent of server subclassing.
 
 # pyright: reportPrivateUsage=false
 
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import snc_cribl_mcp.client.token_manager as token_manager_module
 from snc_cribl_mcp.client.token_manager import TokenManager, get_token_manager
 from snc_cribl_mcp.config import CriblConfig
+
+
+@contextmanager
+def _isolated_token_manager_cache() -> Generator[None]:
+    token_manager_module._TOKEN_MANAGERS.clear()
+    try:
+        yield
+    finally:
+        token_manager_module._TOKEN_MANAGERS.clear()
 
 
 def _config_with_credentials() -> CriblConfig:
@@ -296,9 +308,32 @@ async def test_request_oauth_token_with_logging_logs_exception() -> None:
 
 
 def test_get_token_manager_returns_cached() -> None:
-    """Token manager factory should reuse instances per base URL."""
-    config = _config_with_unique_base_url()
-    first = get_token_manager(config)
-    second = get_token_manager(config)
+    """Token manager factory should reuse instances per token request settings."""
+    with _isolated_token_manager_cache():
+        config = _config_with_unique_base_url()
+        first = get_token_manager(config)
+        second = get_token_manager(config)
 
     assert first is second
+
+
+def test_get_token_manager_separates_same_url_different_credentials() -> None:
+    """Configs sharing a base URL but not credentials must not share token managers."""
+    with _isolated_token_manager_cache():
+        first_config = CriblConfig(
+            url="https://cribl.example.com/api/v1",
+            username="user-one",
+            password="pass-one",
+        )
+        second_config = CriblConfig(
+            url="https://cribl.example.com/api/v1",
+            username="user-two",
+            password="pass-two",
+        )
+
+        first = get_token_manager(first_config)
+        second = get_token_manager(second_config)
+
+    assert first is not second
+    assert first._config is first_config
+    assert second._config is second_config
