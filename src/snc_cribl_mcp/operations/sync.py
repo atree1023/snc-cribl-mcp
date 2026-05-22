@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import httpx
 from cribl_control_plane.errors import CriblControlPlaneError
 from cribl_control_plane.models.productscore import ProductsCore
+from cribl_control_plane.models.security import Security
 
 from ..client.cribl_client import ResolvedControlPlane, connect_server_pair
 from .common import HTTP_NOT_FOUND
@@ -28,6 +29,7 @@ _MAX_DIFF_PATHS = 25
 _MAX_VALIDATE_RESPONSE_BYTES = 900_000
 type GroupMatchField = Literal["description", "id", "name", "passthrough"]
 type JsonValue = dict[str, "JsonValue"] | list["JsonValue"] | str | int | float | bool | None
+type CompareKind = ResourceKind | Literal["raw"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,8 +212,23 @@ async def _resolve_group_selector(
     )
 
 
+async def _resolved_security(resolved: ResolvedControlPlane) -> Security | None:
+    """Return fresh security for direct HTTP calls when the resolved client supports it."""
+    get_security = cast("Callable[[], Awaitable[Security]] | None", getattr(resolved, "get_security", None))
+    if get_security is not None:
+        return await get_security()
+    return getattr(resolved, "security", None)
+
+
+def _canonical_compare_payload(kind: CompareKind, item: dict[str, Any]) -> dict[str, Any]:
+    """Return the payload shape used for sync comparisons."""
+    if kind == "raw":
+        return item
+    return canonicalize_resource_item(kind, item)
+
+
 def _compare_items(
-    kind: ResourceKind,
+    kind: CompareKind,
     item_id: str,
     source_item: dict[str, Any] | None,
     target_item: dict[str, Any] | None,
@@ -238,8 +255,8 @@ def _compare_items(
             "differing_paths": [],
         }
 
-    source_payload = canonicalize_resource_item(kind, source_item)
-    target_payload = canonicalize_resource_item(kind, target_item)
+    source_payload = _canonical_compare_payload(kind, source_item)
+    target_payload = _canonical_compare_payload(kind, target_item)
     differing_paths = _diff_paths(source_payload, target_payload)
     result: dict[str, Any] = {
         "item_id": item_id,
@@ -390,7 +407,7 @@ async def _maybe_get_item(
             timeout_ms=resolved.config.timeout_ms,
             product=product,
             group_id=group_id,
-            security=getattr(resolved, "security", None),
+            security=await _resolved_security(resolved),
         )
     except CriblControlPlaneError as exc:
         if exc.status_code == HTTP_NOT_FOUND:
@@ -492,7 +509,7 @@ async def validate_resource_sync(  # noqa: PLR0913
             timeout_ms=source.config.timeout_ms,
             product=product,
             group_id=resolved_source_group_id,
-            security=getattr(source, "security", None),
+            security=await _resolved_security(source),
         )
         target_items = await list_resource(
             target.client,
@@ -500,7 +517,7 @@ async def validate_resource_sync(  # noqa: PLR0913
             timeout_ms=target.config.timeout_ms,
             product=product,
             group_id=resolved_target_group_id,
-            security=getattr(target, "security", None),
+            security=await _resolved_security(target),
         )
         source_index = _index_items(source_items)
         target_index = _index_items(target_items)
@@ -588,7 +605,8 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 timeout_ms=source.config.timeout_ms,
                 product=product,
                 group_id=resolved_source_group_id,
-                security=getattr(source, "security", None),
+                security=await _resolved_security(source),
+                hydrate_lookup_content=kind == "lookups",
             )
             source_items[item_id] = source_item
         else:
@@ -599,7 +617,8 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     timeout_ms=source.config.timeout_ms,
                     product=product,
                     group_id=resolved_source_group_id,
-                    security=getattr(source, "security", None),
+                    security=await _resolved_security(source),
+                    hydrate_lookup_content=kind == "lookups",
                 )
             )
 
@@ -625,7 +644,7 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
                             timeout_ms=target.config.timeout_ms,
                             product=product,
                             group_id=resolved_target_group_id,
-                            security=getattr(target, "security", None),
+                            security=await _resolved_security(target),
                         )
                         action = "created"
                     elif kind == "routes" and spec.supports("update"):
@@ -676,7 +695,7 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
                         timeout_ms=target.config.timeout_ms,
                         product=product,
                         group_id=resolved_target_group_id,
-                        security=getattr(target, "security", None),
+                        security=await _resolved_security(target),
                     )
                     action = "updated"
             except Exception as exc:  # noqa: BLE001 - accumulate per-item failures in batch copy results

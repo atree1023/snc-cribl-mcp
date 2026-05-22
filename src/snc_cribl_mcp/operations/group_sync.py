@@ -49,16 +49,29 @@ def _coerce_content_kinds(kinds: Iterable[str] | None) -> tuple[GroupContentKind
     return tuple(dict.fromkeys(coerced))
 
 
-async def _resolve_source_group_id(source_server: str, selector: str, product: ProductsCore) -> str:
-    """Resolve a source group selector before running a group workflow."""
-    async with connect_to_server(source_server) as source:
-        resolved = await _resolve_group_selector(source, selector=selector, product=product)
+async def _resolve_group_id(server: str, selector: str, product: ProductsCore) -> str:
+    """Resolve a group selector on one configured leader."""
+    async with connect_to_server(server) as resolved_server:
+        resolved = await _resolve_group_selector(resolved_server, selector=selector, product=product)
         return resolved.group_id
 
 
-def _group_level_target_supported(source_group_id: str, target_group: str | None) -> bool:
+async def _resolve_target_group_id(
+    target_server: str,
+    *,
+    target_group: str | None,
+    source_group_id: str,
+    product: ProductsCore,
+) -> str:
+    """Resolve the target group id used for group-level compatibility checks."""
+    if target_group is None:
+        return source_group_id
+    return await _resolve_group_id(target_server, target_group, product)
+
+
+def _group_level_target_supported(source_group_id: str, target_group_id: str) -> bool:
     """Return whether group-level copy can use the existing resource helper."""
-    return target_group is None or target_group.strip() == source_group_id
+    return target_group_id == source_group_id
 
 
 async def replicate_group_config(  # noqa: PLR0913
@@ -75,13 +88,23 @@ async def replicate_group_config(  # noqa: PLR0913
     append_routes: bool = False,
 ) -> dict[str, Any]:
     """Replicate a worker group or Edge fleet plus its group-scoped content."""
-    source_group_id = await _resolve_source_group_id(source_server, source_group, product)
+    source_group_id = await _resolve_group_id(source_server, source_group, product)
     effective_target_group = target_group or source_group_id
+    resolved_target_group_id = (
+        await _resolve_target_group_id(
+            target_server,
+            target_group=target_group,
+            source_group_id=source_group_id,
+            product=product,
+        )
+        if include_group_settings
+        else effective_target_group
+    )
     kinds = _coerce_content_kinds(content_kinds)
 
     group_result: dict[str, Any] | None = None
     if include_group_settings:
-        if not _group_level_target_supported(source_group_id, target_group):
+        if not _group_level_target_supported(source_group_id, resolved_target_group_id):
             msg = (
                 "Copying group-level settings to a different target group id is not supported yet. "
                 "Use the same group id or set include_group_settings=false."
@@ -119,7 +142,7 @@ async def replicate_group_config(  # noqa: PLR0913
         "source_group_selector": source_group,
         "target_group_selector": effective_target_group,
         "group_id": source_group_id,
-        "target_group_id": effective_target_group,
+        "target_group_id": resolved_target_group_id,
         "include_group_settings": include_group_settings,
         "content_kinds": list(kinds),
         "group_result": group_result,
@@ -147,13 +170,23 @@ async def validate_group_config_sync(  # noqa: PLR0913
     include_payloads: bool = False,
 ) -> dict[str, Any]:
     """Validate a whole worker group or Edge fleet across leaders."""
-    source_group_id = await _resolve_source_group_id(source_server, source_group, product)
+    source_group_id = await _resolve_group_id(source_server, source_group, product)
     effective_target_group = target_group or source_group_id
+    resolved_target_group_id = (
+        await _resolve_target_group_id(
+            target_server,
+            target_group=target_group,
+            source_group_id=source_group_id,
+            product=product,
+        )
+        if include_group_settings
+        else effective_target_group
+    )
     kinds = _coerce_content_kinds(content_kinds)
 
     group_result: dict[str, Any] | None = None
     if include_group_settings:
-        if not _group_level_target_supported(source_group_id, target_group):
+        if not _group_level_target_supported(source_group_id, resolved_target_group_id):
             group_result = {
                 "in_sync": False,
                 "error": "Group-level validation to a different target group id is not supported yet.",
@@ -205,7 +238,7 @@ async def validate_group_config_sync(  # noqa: PLR0913
         "source_group_selector": source_group,
         "target_group_selector": effective_target_group,
         "group_id": source_group_id,
-        "target_group_id": effective_target_group,
+        "target_group_id": resolved_target_group_id,
         "include_group_settings": include_group_settings,
         "content_kinds": list(kinds),
         "in_sync": all(result.get("in_sync") is True for result in sections),

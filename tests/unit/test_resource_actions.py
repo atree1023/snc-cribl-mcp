@@ -408,7 +408,7 @@ def test_canonicalize_resource_item_covers_all_supported_payload_shapes() -> Non
             "version": "volatile",
             "_content": "a,b\n1,2\n",
         },
-    ) == {"id": "lookup.csv", "_content": "a,b\n1,2\n"}
+    ) == {"id": "lookup.csv", "size": 10, "version": "volatile"}
     assert canonicalize_resource_item("variables", {"id": "var1", "value": "1"}) == {"id": "var1", "value": "1"}
 
 
@@ -483,6 +483,53 @@ async def test_direct_http_resource_crud_for_variables() -> None:
 
 
 @pytest.mark.asyncio
+async def test_direct_http_resource_requires_sdk_owned_httpx_client() -> None:
+    """Direct HTTP resources should fail clearly when the SDK client is not httpx-backed."""
+    client = MagicMock()
+    client.sdk_configuration = MagicMock(
+        server_url="https://cribl.example.com/api/v1",
+        async_client=None,
+    )
+
+    with pytest.raises(TypeError, match=r"does not expose an httpx\.AsyncClient"):
+        await list_resource(
+            client,
+            "variables",
+            timeout_ms=1000,
+            group_id="default",
+            security=Security(bearer_auth="token"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_direct_http_lookup_list_skips_content_by_default() -> None:
+    """Lookup listing should avoid raw content hydration unless a copy path requests it."""
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"items": [{"id": "sample.csv", "size": 12, "version": "abc"}], "count": 1})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+        client = MagicMock()
+        client.sdk_configuration = MagicMock(
+            server_url="https://cribl.example.com/api/v1",
+            async_client=http_client,
+        )
+
+        items = await list_resource(
+            client,
+            "lookups",
+            timeout_ms=1000,
+            group_id="default",
+            security=Security(bearer_auth="token"),
+        )
+
+    assert items == [{"id": "sample.csv", "size": 12, "version": "abc"}]
+    assert [request.method for request in requests] == ["GET"]
+
+
+@pytest.mark.asyncio
 async def test_direct_http_lookup_writes_upload_content_first() -> None:
     """Lookup replication should download raw content and use the upload+create API workflow."""
     requests: list[httpx.Request] = []
@@ -509,7 +556,14 @@ async def test_direct_http_lookup_writes_upload_content_first() -> None:
         )
         security = Security(bearer_auth="token")
 
-        items = await list_resource(client, "lookups", timeout_ms=1000, group_id="default", security=security)
+        items = await list_resource(
+            client,
+            "lookups",
+            timeout_ms=1000,
+            group_id="default",
+            security=security,
+            hydrate_lookup_content=True,
+        )
         assert items == [
             {
                 "id": "sample.csv",

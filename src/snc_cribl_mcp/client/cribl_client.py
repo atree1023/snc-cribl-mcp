@@ -4,7 +4,7 @@ Provides the async context manager to create a configured ``CriblControlPlane``
 client instance with shared HTTP settings.
 """
 
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -16,6 +16,8 @@ from cribl_control_plane.utils import BackoffStrategy, RetryConfig
 from ..config import CriblConfig
 from .token_manager import get_token_manager
 
+type SecurityProvider = Callable[[], Awaitable[Security]]
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedControlPlane:
@@ -25,6 +27,13 @@ class ResolvedControlPlane:
     config: CriblConfig
     client: CriblControlPlane
     security: Security
+    security_provider: SecurityProvider | None = None
+
+    async def get_security(self) -> Security:
+        """Return fresh bearer security when a provider is available."""
+        if self.security_provider is None:
+            return self.security
+        return await self.security_provider()
 
 
 @asynccontextmanager
@@ -73,6 +82,7 @@ async def connect_to_server(server: str | None) -> AsyncGenerator[ResolvedContro
             config=config,
             client=client,
             security=security,
+            security_provider=token_manager.get_security,
         )
 
 

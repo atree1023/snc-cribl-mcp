@@ -26,7 +26,8 @@ def register(
         name="replicate_group_config",
         description=(
             "Replicate a complete Stream worker group or Edge fleet between configured leaders, including "
-            "group/fleet settings plus variables, breakers, lookups, destinations, pipelines, sources, and routes."
+            "group/fleet settings plus variables, breakers, lookups, destinations, pipelines, sources, and routes. "
+            "content_kinds may include variables, breakers, lookups, destinations, pipelines, sources, and routes."
         ),
         annotations={
             "title": "Replicate group or fleet",
@@ -66,7 +67,8 @@ def register(
         name="validate_group_config",
         description=(
             "Validate a complete Stream worker group or Edge fleet across configured leaders, including "
-            "group/fleet settings plus variables, breakers, lookups, destinations, pipelines, sources, and routes."
+            "group/fleet settings plus variables, breakers, lookups, destinations, pipelines, sources, and routes. "
+            "content_kinds may include variables, breakers, lookups, destinations, pipelines, sources, and routes."
         ),
         annotations={
             "title": "Validate group or fleet sync",

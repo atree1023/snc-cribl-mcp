@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+# pyright: reportPrivateUsage=false
+import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -39,6 +41,19 @@ def test_resolve_user_password_prefers_explicit_then_env(monkeypatch: pytest.Mon
     assert resolved == "env-secret"
     assert source == "TEST_USER_PASSWORD"
     assert "SNC_CRIBL_MCP_GOLDEN_OAK_NEW_TEST_USER_PASSWORD" in checked
+
+
+def test_public_user_payload_strips_common_secret_field_names() -> None:
+    """User responses should avoid known credential-bearing fields."""
+    assert users_module._public_user_payload(
+        {
+            "username": "test-user",
+            "password": "hidden",
+            "apiKey": "hidden",
+            "sshPrivateKey": "hidden",
+            "roles": ["admin"],
+        }
+    ) == {"username": "test-user", "roles": ["admin"]}
 
 
 @pytest.mark.asyncio
@@ -146,6 +161,128 @@ async def test_sync_user_requires_password_when_creating_missing_target(monkeypa
             await users_module.sync_user(
                 target_server="target",
                 username="test-user",
+            )
+
+
+@pytest.mark.asyncio
+async def test_sync_user_preserves_existing_target_fields_when_patching_without_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Password rotation should patch from the existing target profile plus overrides."""
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        existing_user = {
+            "username": "test-user",
+            "id": "test-user",
+            "first": "Existing",
+            "last": "User",
+            "email": "existing@example.invalid",
+            "roles": ["admin"],
+            "disabled": False,
+        }
+        updated_user = {**existing_user, "disabled": True}
+        if request.method == "GET" and url == "https://target.example/api/v1/system/users/test-user":
+            if sum(req.method == "GET" and str(req.url) == url for req in requests) == 1:
+                return httpx.Response(200, json={"items": [existing_user], "count": 1})
+            return httpx.Response(200, json={"items": [updated_user], "count": 1})
+        if request.method == "PATCH" and url == "https://target.example/api/v1/system/users/test-user":
+            payload = json.loads(request.content)
+            assert payload["password"] == "new-secret"
+            assert payload["roles"] == ["admin"]
+            assert payload["first"] == "Existing"
+            assert payload["disabled"] is True
+            return httpx.Response(200, json={"items": [updated_user], "count": 1})
+        return httpx.Response(500, text=f"unexpected {request.method} {url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+
+        @asynccontextmanager
+        async def _target(_target: str) -> AsyncGenerator[SimpleNamespace]:
+            yield _resolved("target", "https://target.example/api/v1", http_client)
+
+        monkeypatch.setattr(users_module, "connect_to_server", _target)
+        result = await users_module.sync_user(
+            target_server="target",
+            username="test-user",
+            password="new-secret",
+            disabled=True,
+        )
+
+    assert result["action"] == "updated"
+    assert result["validation"]["status"] == "in_sync"
+    assert result["user"]["roles"] == ["admin"]
+    assert result["user"]["disabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_sync_user_overwrite_false_skips_existing_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existing users should be left untouched when overwrite is disabled."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"items": [{"username": "test-user", "id": "test-user"}], "count": 1})
+        return httpx.Response(500, text="unexpected mutation")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+
+        @asynccontextmanager
+        async def _target(_target: str) -> AsyncGenerator[SimpleNamespace]:
+            yield _resolved("target", "https://target.example/api/v1", http_client)
+
+        monkeypatch.setattr(users_module, "connect_to_server", _target)
+        result = await users_module.sync_user(
+            target_server="target",
+            username="test-user",
+            overwrite=False,
+        )
+
+    assert result["action"] == "skipped"
+    assert result["target_user"] == {"username": "test-user", "id": "test-user"}
+
+
+@pytest.mark.asyncio
+async def test_sync_user_source_missing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replication should fail clearly when the source user is absent."""
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(404))) as http_client:
+
+        @asynccontextmanager
+        async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+            yield (
+                _resolved("source", "https://source.example/api/v1", http_client),
+                _resolved("target", "https://target.example/api/v1", http_client),
+            )
+
+        monkeypatch.setattr(users_module, "connect_server_pair", _pair)
+        with pytest.raises(ValueError, match="was not found on source server"):
+            await users_module.sync_user(
+                source_server="source",
+                target_server="target",
+                username="missing-user",
+                password="secret",
+            )
+
+
+@pytest.mark.asyncio
+async def test_sync_user_missing_explicit_password_env_lists_checked_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing explicit password env var should be surfaced in the create error."""
+    monkeypatch.delenv("MISSING_USER_PASSWORD", raising=False)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(404, text="missing"))
+    ) as http_client:
+
+        @asynccontextmanager
+        async def _target(_target: str) -> AsyncGenerator[SimpleNamespace]:
+            yield _resolved("target", "https://target.example/api/v1", http_client)
+
+        monkeypatch.setattr(users_module, "connect_to_server", _target)
+        with pytest.raises(ValueError, match="MISSING_USER_PASSWORD"):
+            await users_module.sync_user(
+                target_server="target",
+                username="test-user",
+                password_env="MISSING_USER_PASSWORD",
             )
 
 

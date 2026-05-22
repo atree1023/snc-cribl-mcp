@@ -143,6 +143,10 @@ def _is_server_table(value: TomlTable) -> bool:
 def _collect_server_tables(source: TomlTable, *, prefix: str = "") -> dict[str, TomlTable]:
     """Collect server tables, flattening dotted table names.
 
+    TOML dotted-table nesting can represent both a parent server and a child
+    server, such as ``[golden.oak]`` and ``[golden.oak.new]``. When both tables
+    include server settings, both names are registered intentionally.
+
     Args:
         source: TOML table to scan.
         prefix: Current dotted prefix.

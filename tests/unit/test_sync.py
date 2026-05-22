@@ -205,6 +205,19 @@ def test_index_items_skips_entries_without_ids() -> None:
     }
 
 
+def test_compare_items_raw_bypasses_resource_canonicalization() -> None:
+    """Raw comparisons should not depend on one resource kind's canonicalizer."""
+    result = sync_module._compare_items(
+        "raw",
+        "user1",
+        {"id": "user1", "size": 1},
+        {"id": "user1", "size": 2},
+    )
+
+    assert result["status"] == "different"
+    assert result["differing_paths"] == ["size"]
+
+
 @pytest.mark.asyncio
 async def test_maybe_get_item_returns_none_only_for_http_404(monkeypatch: pytest.MonkeyPatch) -> None:
     """Single-item lookup should translate HTTP 404 to None and re-raise other errors."""

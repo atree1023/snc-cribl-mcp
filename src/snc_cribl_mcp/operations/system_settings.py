@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import httpx
+from cribl_control_plane.models.security import Security
 
 from ..client.cribl_client import ResolvedControlPlane, connect_server_pair
 from .common import get_auth_headers
@@ -27,6 +29,14 @@ def _http_client(resolved: ResolvedControlPlane) -> httpx.AsyncClient:
     return http_client
 
 
+async def _resolved_security(resolved: ResolvedControlPlane) -> Security:
+    """Return fresh security for direct system-settings API calls when available."""
+    get_security = cast("Callable[[], Awaitable[Security]] | None", getattr(resolved, "get_security", None))
+    if get_security is not None:
+        return await get_security()
+    return resolved.security
+
+
 async def _request_settings_json(
     resolved: ResolvedControlPlane,
     *,
@@ -34,10 +44,11 @@ async def _request_settings_json(
     body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Call the direct system-settings endpoint and return JSON."""
+    security = await _resolved_security(resolved)
     response = await _http_client(resolved).request(
         method,
         _settings_url(resolved),
-        headers={**get_auth_headers(resolved.security), "Content-Type": "application/json"},
+        headers={**get_auth_headers(security), "Content-Type": "application/json"},
         json=body,
         timeout=resolved.config.timeout_ms / 1000,
     )
@@ -83,7 +94,7 @@ def _compare_system_settings(
 ) -> dict[str, Any]:
     """Compare raw system settings using the generic JSON diff path."""
     return _compare_items(
-        "variables",
+        "raw",
         item_id,
         source_settings,
         target_settings,

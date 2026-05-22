@@ -289,6 +289,7 @@ Compares groups, sources, destinations, pipelines, routes, breakers, lookups, or
 Creates or replicates a local Cribl user on a target leader. When `source_server` is provided, profile fields and roles are copied from the source leader.
 
 - **Password handling:** Cribl does not return user passwords from the API, so pass `password`, pass `password_env`, or provide one of the automatic `.env`/environment fallbacks such as `SNC_CRIBL_MCP_<TARGET_SERVER>_<USERNAME>_PASSWORD`, `CRIBL_USER_<USERNAME>_PASSWORD`, or `<USERNAME>_PASSWORD`.
+- **Transport note:** For on-prem leaders configured with `http://` URLs, password create/update requests are sent over cleartext HTTP. Use HTTPS for production user sync.
 - **Returns:** JSON describing whether the target user was created, updated, skipped, or validated. Password values are never returned.
 
 #### `replicate_group_config`

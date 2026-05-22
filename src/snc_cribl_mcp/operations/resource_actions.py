@@ -7,6 +7,7 @@ validation.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import re
 from copy import deepcopy
@@ -24,7 +25,16 @@ from .common import get_auth_headers, get_group_url, serialize_model
 
 type CrudAction = Literal["append", "create", "delete", "deploy", "get", "list", "update"]
 type JsonValue = dict[str, "JsonValue"] | list["JsonValue"] | str | int | float | bool | None
-type ResourceKind = Literal["breakers", "destinations", "groups", "lookups", "pipelines", "routes", "sources", "variables"]
+type ResourceKind = Literal[
+    "breakers",
+    "destinations",
+    "groups",
+    "lookups",
+    "pipelines",
+    "routes",
+    "sources",
+    "variables",
+]
 type ResourceScope = Literal["group", "product"]
 type ResourceTransport = Literal["http", "sdk"]
 
@@ -253,7 +263,7 @@ def canonicalize_resource_item(kind: ResourceKind, item: dict[str, Any]) -> dict
     if kind in {"breakers", "variables"}:
         return clean_item
     if kind == "lookups":
-        volatile_lookup_keys = {"pendingTask", "rows", "size", "version"}
+        volatile_lookup_keys = {"_content", "_content_type", "pendingTask", "rows"}
         return {key: value for key, value in clean_item.items() if key not in volatile_lookup_keys}
     if kind == "routes":
         compare_payload = _build_update_kwargs(kind, str(clean_item["id"]), clean_item)
@@ -329,7 +339,11 @@ def _require_http_spec(kind: ResourceKind) -> ResourceSpec:
 
 def _http_client(client: CriblControlPlane) -> httpx.AsyncClient:
     """Return the SDK's underlying httpx client for direct HTTP requests."""
-    return cast("httpx.AsyncClient", client.sdk_configuration.async_client)
+    http_client = client.sdk_configuration.async_client
+    if not isinstance(http_client, httpx.AsyncClient):
+        msg = "Cribl SDK client does not expose an httpx.AsyncClient."
+        raise TypeError(msg)
+    return http_client
 
 
 def _direct_collection_url(client: CriblControlPlane, spec: ResourceSpec, group_id: str | None) -> str:
@@ -406,13 +420,14 @@ async def _hydrate_lookup_content(
     return hydrated
 
 
-async def _direct_list_resource(
+async def _direct_list_resource(  # noqa: PLR0913
     client: CriblControlPlane,
     kind: ResourceKind,
     *,
     timeout_ms: int,
     security: Security,
     group_id: str | None,
+    hydrate_lookup_content: bool,
 ) -> list[dict[str, Any]]:
     """List a direct-HTTP resource in a group scope."""
     spec = _require_http_spec(kind)
@@ -424,17 +439,21 @@ async def _direct_list_resource(
         timeout_ms=timeout_ms,
     )
     items = _response_items(payload)
-    if kind == "lookups":
-        return [
-            await _hydrate_lookup_content(
-                client,
-                group_id=group_id,
-                item=item,
-                security=security,
-                timeout_ms=timeout_ms,
+    if kind == "lookups" and hydrate_lookup_content:
+        return list(
+            await asyncio.gather(
+                *(
+                    _hydrate_lookup_content(
+                        client,
+                        group_id=group_id,
+                        item=item,
+                        security=security,
+                        timeout_ms=timeout_ms,
+                    )
+                    for item in items
+                )
             )
-            for item in items
-        ]
+        )
     return items
 
 
@@ -446,6 +465,7 @@ async def _direct_get_resource(  # noqa: PLR0913
     timeout_ms: int,
     security: Security,
     group_id: str | None,
+    hydrate_lookup_content: bool,
 ) -> dict[str, Any]:
     """Fetch one direct-HTTP resource item."""
     spec = _require_http_spec(kind)
@@ -461,7 +481,7 @@ async def _direct_get_resource(  # noqa: PLR0913
         msg = f"Resource '{kind}' with id '{item_id}' returned no items."
         raise RuntimeError(msg)
     item = items[0]
-    if kind == "lookups":
+    if kind == "lookups" and hydrate_lookup_content:
         return await _hydrate_lookup_content(
             client,
             group_id=group_id,
@@ -509,6 +529,7 @@ def _lookup_write_payload(item: dict[str, Any], uploaded_filename: str) -> dict[
     ignored = {"_content", "_content_type", "fileInfo", "pendingTask", "rows", "size", "version"}
     payload = {key: value for key, value in item.items() if key not in ignored and value is not None}
     payload["id"] = str(item["id"])
+    # Cribl requires the temporary upload name here, not the source lookup's original fileInfo metadata.
     payload["fileInfo"] = {"filename": uploaded_filename}
     return payload
 
@@ -565,6 +586,7 @@ async def list_resource(  # noqa: PLR0913
     product: ProductsCore | None = None,
     group_id: str | None = None,
     security: Security | None = None,
+    hydrate_lookup_content: bool = False,
 ) -> list[dict[str, Any]]:
     """List resource items within the requested scope."""
     spec = get_resource_spec(kind)
@@ -575,6 +597,7 @@ async def list_resource(  # noqa: PLR0913
             timeout_ms=timeout_ms,
             security=_require_security(kind, security),
             group_id=group_id,
+            hydrate_lookup_content=hydrate_lookup_content,
         )
 
     component = _component(client, kind)
@@ -592,6 +615,7 @@ async def get_resource(  # noqa: PLR0913
     product: ProductsCore | None = None,
     group_id: str | None = None,
     security: Security | None = None,
+    hydrate_lookup_content: bool = False,
 ) -> dict[str, Any]:
     """Fetch one resource item by id."""
     spec = get_resource_spec(kind)
@@ -603,6 +627,7 @@ async def get_resource(  # noqa: PLR0913
             timeout_ms=timeout_ms,
             security=_require_security(kind, security),
             group_id=group_id,
+            hydrate_lookup_content=hydrate_lookup_content,
         )
 
     component = _component(client, kind)

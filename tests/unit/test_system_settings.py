@@ -118,6 +118,74 @@ async def test_replicate_system_settings_updates_target_and_validates(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_replicate_system_settings_skips_when_already_in_sync(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Already matching settings should not be patched."""
+    source = _resolved("source")
+    target = _resolved("target")
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield source, target
+
+    get_system_settings = AsyncMock(side_effect=[_settings(1), _settings(1), _settings(1)])
+    patch_system_settings = AsyncMock()
+    monkeypatch.setattr(system_settings_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(system_settings_module, "_get_system_settings", get_system_settings)
+    monkeypatch.setattr(system_settings_module, "_patch_system_settings", patch_system_settings)
+
+    result = await system_settings_module.replicate_system_settings("source", "target")
+
+    assert result["action"] == "skipped"
+    assert result["reason"] == "Target system settings are already in sync."
+    patch_system_settings.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_replicate_system_settings_can_skip_post_write_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """validate_after=false should not fetch target settings after the write."""
+    source = _resolved("source")
+    target = _resolved("target")
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield source, target
+
+    get_system_settings = AsyncMock(side_effect=[_settings(1), _settings(2)])
+    patch_system_settings = AsyncMock()
+    monkeypatch.setattr(system_settings_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(system_settings_module, "_get_system_settings", get_system_settings)
+    monkeypatch.setattr(system_settings_module, "_patch_system_settings", patch_system_settings)
+
+    result = await system_settings_module.replicate_system_settings("source", "target", validate_after=False)
+
+    assert result["action"] == "updated"
+    assert "validation" not in result
+    assert get_system_settings.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_replicate_system_settings_reports_post_write_validation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed post-write validation should not hide the successful patch."""
+    source = _resolved("source")
+    target = _resolved("target")
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield source, target
+
+    get_system_settings = AsyncMock(side_effect=[_settings(1), _settings(2), RuntimeError("settings unavailable")])
+    patch_system_settings = AsyncMock()
+    monkeypatch.setattr(system_settings_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(system_settings_module, "_get_system_settings", get_system_settings)
+    monkeypatch.setattr(system_settings_module, "_patch_system_settings", patch_system_settings)
+
+    result = await system_settings_module.replicate_system_settings("source", "target")
+
+    assert result["action"] == "updated"
+    assert result["validation_error"] == {"type": "RuntimeError", "message": "settings unavailable"}
+
+
+@pytest.mark.asyncio
 async def test_replicate_system_settings_respects_overwrite_false(monkeypatch: pytest.MonkeyPatch) -> None:
     """Overwrite=false should skip mutation when settings differ."""
     source = _resolved("source")

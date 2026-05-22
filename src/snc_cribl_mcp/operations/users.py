@@ -6,16 +6,30 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
+from cribl_control_plane.models.security import Security
 
 from ..client.cribl_client import ResolvedControlPlane, connect_server_pair, connect_to_server
 from .common import HTTP_NOT_FOUND, get_auth_headers
 from .sync import _compare_items, _serialize_copy_error
 
-_PASSWORD_FIELD_NAMES = {"newPassword", "passwd", "password", "secret", "token"}
+_SENSITIVE_USER_FIELD_NAMES = {
+    "api_key",
+    "apikey",
+    "newpassword",
+    "passwd",
+    "password",
+    "private_key",
+    "privatekey",
+    "secret",
+    "ssh_private_key",
+    "sshprivatekey",
+    "token",
+}
 
 
 def _server_env_fragment(value: str) -> str:
@@ -84,6 +98,14 @@ def _users_url(resolved: ResolvedControlPlane, username: str | None = None) -> s
     return f"{base_url}/system/users/{quote(username, safe='')}"
 
 
+async def _resolved_security(resolved: ResolvedControlPlane) -> Security:
+    """Return fresh security for direct user API calls when available."""
+    get_security = cast("Callable[[], Awaitable[Security]] | None", getattr(resolved, "get_security", None))
+    if get_security is not None:
+        return await get_security()
+    return resolved.security
+
+
 async def _request_user_json(
     resolved: ResolvedControlPlane,
     *,
@@ -97,10 +119,11 @@ async def _request_user_json(
         msg = "Cribl SDK client does not expose an httpx.AsyncClient."
         raise TypeError(msg)
 
+    security = await _resolved_security(resolved)
     response = await http_client.request(
         method,
         url,
-        headers={**get_auth_headers(resolved.security), "Content-Type": "application/json"},
+        headers={**get_auth_headers(security), "Content-Type": "application/json"},
         json=body,
         timeout=resolved.config.timeout_ms / 1000,
     )
@@ -137,7 +160,11 @@ async def _get_user(resolved: ResolvedControlPlane, username: str) -> dict[str, 
 
 def _strip_sensitive_user_fields(user: dict[str, Any]) -> dict[str, Any]:
     """Remove password/token material from a user payload."""
-    return {key: value for key, value in user.items() if key not in _PASSWORD_FIELD_NAMES}
+    return {
+        key: value
+        for key, value in user.items()
+        if re.sub(r"[^a-z0-9]+", "", key.casefold()) not in _SENSITIVE_USER_FIELD_NAMES
+    }
 
 
 def _build_user_payload(  # noqa: PLR0913
@@ -268,9 +295,10 @@ async def _sync_user_to_target(  # noqa: PLR0913
         )
         raise ValueError(msg)
 
+    base_user = source_user if source_user is not None else target_user
     payload = _build_user_payload(
         username=username,
-        source_user=source_user,
+        source_user=base_user,
         password=password,
         first=first,
         last=last,
@@ -324,11 +352,12 @@ async def _sync_user_to_target(  # noqa: PLR0913
     if validate_after:
         try:
             target_after = await _get_user(target, username)
+            target_payload = _public_user_payload(target_after) if target_after is not None else None
             result["validation"] = _compare_items(
-                "variables",
+                "raw",
                 username,
                 expected,
-                _public_user_payload(target_after or {}),
+                target_payload,
             )
         except Exception as exc:  # noqa: BLE001 - preserve successful writes even when validation fails
             result["validation_error"] = _serialize_copy_error(exc)
