@@ -255,6 +255,49 @@ async def test_pack_mutation_tools_forward_arguments(
 
 
 @pytest.mark.asyncio
+async def test_pack_mutation_tools_support_distributed_group_scope(
+    deps: SimpleNamespace,
+    mock_ctx: Context,
+) -> None:
+    """Mutating Pack tools should forward resolved group-scoped server URLs."""
+    app = _FakeApp()
+    register_pack_tools(app, deps=deps)  # type: ignore[arg-type]
+
+    update_result = await app.tools["update_pack"](
+        mock_ctx,
+        pack_id="cribl-duo",
+        source="https://example.com/cribl-duo.crbl",
+        product="stream",
+        group="Main Workers",
+        allow_custom_functions=True,
+    )
+    delete_result = await app.tools["delete_pack"](
+        mock_ctx,
+        pack_id="cribl-duo",
+        product="stream",
+        group="Main Workers",
+    )
+
+    assert deps.client.groups.list_async.await_count == 2
+    for await_args in deps.client.groups.list_async.await_args_list:
+        assert await_args.kwargs == {"product": ProductsCore.STREAM, "timeout_ms": 10000}
+    deps.client.packs.update_async.assert_awaited_once_with(
+        id="cribl-duo",
+        source="https://example.com/cribl-duo.crbl",
+        allow_custom_functions=True,
+        timeout_ms=10000,
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+    )
+    deps.client.packs.delete_async.assert_awaited_once_with(
+        id="cribl-duo",
+        timeout_ms=10000,
+        server_url="https://cribl.example.com/api/v1/m/worker-main",
+    )
+    assert update_result["scope"]["group_id"] == "worker-main"
+    assert delete_result["scope"]["group_id"] == "worker-main"
+
+
+@pytest.mark.asyncio
 async def test_get_pack_tool_returns_singular_section(deps: SimpleNamespace, mock_ctx: Context) -> None:
     """get_pack should wrap the new Pack content summary under a singular section."""
     app = _FakeApp()
