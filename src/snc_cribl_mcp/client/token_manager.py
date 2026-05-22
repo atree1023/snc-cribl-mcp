@@ -94,9 +94,8 @@ class TokenManager:
                 return Security(bearer_auth=self._cached_token)
 
             if self._cached_token and not self._can_refresh():
-                # Token exists but may be expired and we cannot refresh - log warning and return anyway
-                logger.warning("Cached token may be expired but no credentials available to refresh")
-                return Security(bearer_auth=self._cached_token)
+                msg = "expired cached token cannot be used because refresh credentials are missing."
+                raise RuntimeError(msg)
 
             token = await self._fetch_and_cache_token()
             return Security(bearer_auth=token)
