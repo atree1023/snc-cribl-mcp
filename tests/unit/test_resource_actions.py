@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 # pyright: reportPrivateUsage=false
+import json
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -34,6 +35,11 @@ def _make_response(*items: dict[str, Any]) -> MagicMock:
         model.model_dump.return_value = item
         response.items.append(model)
     return response
+
+
+def _request_json(request: httpx.Request) -> dict[str, Any]:
+    """Return a decoded JSON request body for mock transport assertions."""
+    return cast("dict[str, Any]", json.loads(request.content))
 
 
 @pytest.mark.asyncio
@@ -428,13 +434,25 @@ async def test_direct_http_resource_crud_for_variables() -> None:
 
     def _handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if request.method == "GET":
+        url = str(request.url)
+        if request.method == "GET" and url.endswith("/lib/vars"):
+            return httpx.Response(200, json={"items": [{"id": "var1", "value": "one"}], "count": 1})
+        if request.method == "GET" and url.endswith("/lib/vars/var1"):
             return httpx.Response(200, json={"items": [{"id": "var1", "value": "one"}], "count": 1})
         if request.method == "POST":
+            assert url == "https://cribl.example.com/api/v1/m/default/lib/vars"
+            assert request.headers["content-type"] == "application/json"
+            assert _request_json(request) == {"id": "var1", "value": "one"}
             return httpx.Response(200, json={"items": [{"id": "var1", "value": "one"}], "count": 1})
         if request.method == "PATCH":
+            assert url == "https://cribl.example.com/api/v1/m/default/lib/vars/var1"
+            assert request.headers["content-type"] == "application/json"
+            assert _request_json(request) == {"id": "var1", "value": "two"}
             return httpx.Response(200, json={"items": [{"id": "var1", "value": "two"}], "count": 1})
         if request.method == "DELETE":
+            assert url == "https://cribl.example.com/api/v1/m/default/lib/vars/var1"
+            assert request.headers["content-type"] == "application/json"
+            assert request.content == b""
             return httpx.Response(200, json={"items": [{"id": "var1"}], "count": 1})
         return httpx.Response(405)
 
@@ -538,13 +556,25 @@ async def test_direct_http_lookup_writes_upload_content_first() -> None:
         requests.append(request)
         url = str(request.url)
         if request.method == "GET" and url.endswith("/system/lookups"):
-            return httpx.Response(200, json={"items": [{"id": "sample.csv", "size": 12}], "count": 1})
+            return httpx.Response(
+                200,
+                json={"items": [{"id": "sample.csv", "size": 12, "description": "sample lookup"}], "count": 1},
+            )
         if request.method == "GET" and url.endswith("/system/lookups/sample.csv/content?raw=1"):
             return httpx.Response(200, text="a,b\n1,2\n", headers={"content-type": "text/csv"})
         if request.method == "PUT":
+            assert url == "https://cribl.example.com/api/v1/m/default/system/lookups?filename=sample.csv"
+            assert request.headers["content-type"] == "text/csv"
             assert request.content == b"a,b\n1,2\n"
             return httpx.Response(200, json={"filename": "sample.csv.tmp", "rows": 1, "size": 8})
         if request.method == "POST":
+            assert url == "https://cribl.example.com/api/v1/m/default/system/lookups"
+            assert request.headers["content-type"] == "application/json"
+            assert _request_json(request) == {
+                "id": "sample.csv",
+                "description": "sample lookup",
+                "fileInfo": {"filename": "sample.csv.tmp"},
+            }
             return httpx.Response(200, json={"items": [{"id": "sample.csv", "version": "new"}], "count": 1})
         return httpx.Response(404)
 
@@ -568,6 +598,7 @@ async def test_direct_http_lookup_writes_upload_content_first() -> None:
             {
                 "id": "sample.csv",
                 "size": 12,
+                "description": "sample lookup",
                 "_content": "a,b\n1,2\n",
                 "_content_type": "text/csv",
             }
