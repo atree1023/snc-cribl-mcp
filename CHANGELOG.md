@@ -4,7 +4,37 @@ All notable changes to snc-cribl-mcp will be documented in this file.
 
 ## In Progress
 
-- Refactor pipeline collection to use SDK methods rather than API calls.
+- No unreleased changes.
+
+## [0.3.0] - 2026-05-22
+
+### Added
+
+- Added cross-leader resource copy and validation tools for groups, sources, destinations, pipelines, routes, breakers, lookups, and variables.
+- Added consolidated config-object tooling with bounded summaries, cursor-based follow-up reads, optional full payloads, dependency references, and semantic cross-leader validation.
+- Added on-prem credential resolution through the local macOS user, macOS Keychain, and per-server environment-variable fallbacks, including configurable `keychain_name` support.
+- Added Cribl Pack management tools for listing, inspecting, installing, uploading, updating, and deleting Packs, including distributed group/fleet scoping.
+- Expanded `get_pack` into a bounded Pack inspection surface with drill-down support for sources, destinations, pipelines, routes, knowledge categories, and settings categories.
+- Added variable discovery, local-user synchronization, full worker-group/fleet replication and validation, and global system-settings replication and validation tools.
+- Added local Cribl SDK, API authentication, Cribl product, and FastMCP documentation references for future implementation work.
+
+### Changed
+
+- Refactored pipeline collection to use SDK methods and updated the related test surface.
+- Updated the FastMCP integration for 3.x compatibility and constrained the dependency below FastMCP 4.
+- Updated the Cribl Control Plane SDK dependency and improved collector/source handling, counted-list response handling, and product-error filtering.
+- Improved cross-leader sync behavior for target group resolution, lookup content hydration, no-op update skipping, and environment-identity-aware semantic comparison.
+- Reworked repository documentation and examples around local API specs, SDK usage, and agent development guidance.
+
+### Security
+
+- Hardened token caching with secure credential fingerprinting and clearer expired-cache-token failures.
+- Improved validation-error redaction for sensitive field names and values.
+- Documented the cleartext transport risk for local-user password sync against `http://` on-prem leaders.
+
+### Tests
+
+- Expanded unit coverage across config loading, token management, client security setup, variables, Packs, resource actions, semantic diffing, user sync, group sync, system settings, validation errors, and workflow tool wrappers.
 
 ## [0.2.0] - 2026-01-01
 
