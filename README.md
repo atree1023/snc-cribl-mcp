@@ -70,16 +70,28 @@ The server handles authentication with bearer tokens, manages token refresh auto
 - [uv](https://github.com/astral-sh/uv) package manager (required)
 - Access to a Cribl deployment with valid credentials
 
-**Steps:**
+The server is designed to run from a source checkout. It reads `config.toml` and optional `.env` values from the checkout root, so keep the checkout in place and point your MCP client at that directory.
+
+**Install from source:**
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd snc_cribl_mcp
+git clone https://github.com/atree1023/snc-cribl-mcp.git
+cd snc-cribl-mcp
 
-# Install dependencies using uv
+# Optional once the release tag exists:
+# git checkout v0.3.0
+
 uv sync
+cp config.example.toml config.toml
 ```
+
+Edit `config.toml` with your Cribl leaders, then verify the server starts:
+
+```bash
+uv run snc-cribl-mcp
+```
+
+For MCP clients, use the checkout path directly with `uv run --directory`; see [Example Integration with Claude](#example-integration-with-claude).
 
 ## Configuration
 
@@ -319,7 +331,7 @@ Validates global Cribl system settings between two configured leaders.
 
 ### Example Integration with Claude
 
-Add this server to your Claude desktop app configuration:
+Add this server to your Claude desktop app configuration. Use an absolute path to the source checkout that contains `config.toml`:
 
 ```json
 {
@@ -329,7 +341,7 @@ Add this server to your Claude desktop app configuration:
       "args": [
         "run",
         "--directory",
-        "path-to-project-directory",
+        "/absolute/path/to/snc-cribl-mcp",
         "snc-cribl-mcp"
       ],
       "env": {
