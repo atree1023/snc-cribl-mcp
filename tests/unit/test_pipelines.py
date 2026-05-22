@@ -146,6 +146,44 @@ async def test_collect_product_pipelines_with_pipeline_id(mock_ctx: Context) -> 
 
 
 @pytest.mark.asyncio
+async def test_collect_product_pipelines_with_pipeline_id_serializes_single_model_response(mock_ctx: Context) -> None:
+    """It should serialize get_async responses that return one SDK model."""
+
+    class SinglePipelineModel:
+        def model_dump(self, *, mode: str, exclude_none: bool) -> dict[str, object]:
+            assert mode == "json"
+            assert exclude_none is True
+            return {"id": "p1", "conf": {"functions": []}}
+
+    mock_client = MagicMock()
+    groups_response = MagicMock(items=[MagicMock()])
+    groups_response.items[0].model_dump.return_value = {"id": "g1"}
+    mock_client.groups.list_async = AsyncMock(return_value=groups_response)
+    mock_client.sdk_configuration = MagicMock(server_url="https://example/api/v1")
+    mock_client.pipelines = MagicMock()
+    mock_client.pipelines.get_async = AsyncMock(return_value=SinglePipelineModel())
+    mock_client.pipelines.list_async = AsyncMock(side_effect=AssertionError("list_async should not be called"))
+
+    result = await collect_product_pipelines(
+        mock_client,
+        product=ProductsCore.STREAM,
+        timeout_ms=10000,
+        ctx=mock_ctx,
+        pipeline_id="p1",
+    )
+
+    assert result["status"] == "ok"
+    assert result["total_count"] == 1
+    assert result["groups"] == [
+        {
+            "group_id": "g1",
+            "count": 1,
+            "items": [{"id": "p1", "conf": {"functions": []}}],
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_collect_product_pipelines_serializes_function_conf(mock_ctx: Context) -> None:
     """Function configuration data should be preserved in serialized output."""
     mock_client = MagicMock()

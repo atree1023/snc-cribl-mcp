@@ -287,6 +287,8 @@ def get_auth_headers(security: Security) -> dict[str, str]:
 async def collect_items_via_sdk(
     coll_ctx: CollectionContext,
     list_method: Callable[..., Awaitable[Any]],
+    *,
+    single_response: bool = False,
 ) -> ProductResult:
     """Generic collector for resources accessible via SDK methods.
 
@@ -299,6 +301,7 @@ async def collect_items_via_sdk(
         coll_ctx: Collection context with client, product, timeout, ctx, and resource_type.
         list_method: SDK method to call for each group (e.g., client.sources.list_async).
             The method should return an object with optional `items` and `count` attributes.
+        single_response: Whether the method may return one serializable model instead of a counted response.
 
     Returns:
         Standard result dictionary with grouped items.
@@ -348,6 +351,7 @@ async def collect_items_via_sdk(
             coll_ctx=coll_ctx,
             group_id=group_id,
             list_method=list_method,
+            single_response=single_response,
         )
         for _, group_id in valid_groups
     ]
@@ -404,6 +408,7 @@ async def _collect_group_items_sdk(
     coll_ctx: CollectionContext,
     group_id: str,
     list_method: Callable[..., Awaitable[Any]],
+    single_response: bool = False,
 ) -> GroupEntry:
     """Collect items for a single group via SDK method.
 
@@ -411,6 +416,7 @@ async def _collect_group_items_sdk(
         coll_ctx: Collection context with client, product, timeout, ctx, and resource_type.
         group_id: The group identifier to collect items for.
         list_method: SDK method to call (e.g., client.sources.list_async).
+        single_response: Whether the SDK method may return one serializable model.
 
     Returns:
         Group entry dictionary with group_id, count, and items.
@@ -449,6 +455,10 @@ async def _collect_group_items_sdk(
     except httpx.HTTPError as exc:
         msg = f"Network error while listing {coll_ctx.resource_type} for {coll_ctx.product.value} group '{group_id}': {exc}"
         raise RuntimeError(msg) from exc
+
+    if single_response and not hasattr(resp, "items"):
+        item = serialize_model(resp)
+        return build_group_entry(group_id, [item] if item else [])
 
     raw_items: list[object] = getattr(resp, "items", None) or []
     items = [serialize_model(item) for item in raw_items]
