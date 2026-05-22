@@ -4,6 +4,7 @@ Covers utilities for parsing Pydantic validation errors and formatting
 user-friendly error responses.
 """
 
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -698,6 +699,64 @@ class TestFormatValidationErrorResponse:
         assert "actual_value" in error_entry
         assert "help" in error_entry
         assert "Cribl UI" in error_entry["help"]
+
+    def test_redacts_sensitive_values_in_actual_value(self) -> None:
+        """Redacts sensitive sibling fields before returning actual_value."""
+        validation_errors = [
+            ValidationErrorDetails(
+                object_index=0,
+                object_type="tcpjson",
+                field_path="tcpjson.connections.0.output",
+                error_type="missing",
+                error_message="Field required",
+                input_value=None,
+                raw_location=("body", "items", 0, "tcpjson", "connections", "0", "output"),
+            )
+        ]
+        body = json.dumps(
+            {
+                "items": [
+                    {
+                        "id": "src1",
+                        "type": "tcpjson",
+                        "tcpjson": {
+                            "connections": [
+                                {
+                                    "host": "localhost",
+                                    "password": "super-secret-password",
+                                    "apiKey": "api-key-secret",
+                                    "privateKey": "private-key-secret",
+                                    "nested": {"token": "token-secret", "safe": "kept"},
+                                    "headers": [{"name": "Authorization", "secret": "header-secret"}],
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        )
+
+        result = format_validation_error_response(
+            resource_type="sources",
+            product="stream",
+            group_id="default",
+            body=body,
+            validation_errors=validation_errors,
+        )
+
+        actual_value = result["errors"][0]["actual_value"]
+        redacted = json.loads(actual_value)
+        assert redacted["host"] == "localhost"
+        assert redacted["password"] == "[REDACTED]"
+        assert redacted["apiKey"] == "[REDACTED]"
+        assert redacted["privateKey"] == "[REDACTED]"
+        assert redacted["nested"] == {"token": "[REDACTED]", "safe": "kept"}
+        assert redacted["headers"] == [{"name": "Authorization", "secret": "[REDACTED]"}]
+        assert "super-secret-password" not in actual_value
+        assert "api-key-secret" not in actual_value
+        assert "private-key-secret" not in actual_value
+        assert "token-secret" not in actual_value
+        assert "header-secret" not in actual_value
 
     def test_uses_default_message_when_no_errors(self) -> None:
         """Uses default message when validation_errors list is empty."""

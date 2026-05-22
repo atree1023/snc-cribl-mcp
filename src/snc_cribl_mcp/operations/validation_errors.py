@@ -20,6 +20,18 @@ type JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 # Maximum length for JSON values in error messages
 MAX_JSON_VALUE_LENGTH = 500
+REDACTED_VALUE = "[REDACTED]"
+
+_SENSITIVE_FIELD_SUFFIXES = (
+    "apikey",
+    "passwd",
+    "password",
+    "passphrase",
+    "privatekey",
+    "secret",
+    "token",
+)
+_SENSITIVE_FIELD_NAMES = {"key"}
 
 logger = logging.getLogger("snc_cribl_mcp.operations.validation_errors")
 
@@ -236,6 +248,29 @@ def _format_json_value(value: JsonValue, max_length: int = MAX_JSON_VALUE_LENGTH
         return formatted
 
 
+def _normalize_field_name(name: str) -> str:
+    """Normalize config field names for secret-key matching."""
+    return "".join(char for char in name.casefold() if char.isalnum())
+
+
+def _is_sensitive_field_name(name: str) -> bool:
+    """Return true when a config field name commonly contains secret material."""
+    normalized = _normalize_field_name(name)
+    return normalized in _SENSITIVE_FIELD_NAMES or any(normalized.endswith(suffix) for suffix in _SENSITIVE_FIELD_SUFFIXES)
+
+
+def _redact_sensitive_values(value: JsonValue) -> JsonValue:
+    """Recursively redact sensitive config values before including them in responses."""
+    if isinstance(value, dict):
+        return {
+            key: REDACTED_VALUE if _is_sensitive_field_name(str(key)) else _redact_sensitive_values(child)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive_values(item) for item in value]
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class ErrorMessageContext:
     """Context for building a user-friendly error message.
@@ -410,7 +445,7 @@ def format_validation_error_response(
         }
 
         if field_value is not None:
-            error_entry["actual_value"] = _format_json_value(field_value)
+            error_entry["actual_value"] = _format_json_value(_redact_sensitive_values(field_value))
             error_entry["help"] = (
                 "The value shown above was returned by the Cribl API but does not match "
                 "the SDK's expected schema. Check the Cribl UI to ensure this configuration "
