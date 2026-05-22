@@ -20,6 +20,7 @@ from snc_cribl_mcp.operations.validation_errors import (
     _extract_object_info,  # pyright: ignore[reportPrivateUsage]
     _format_json_value,  # pyright: ignore[reportPrivateUsage]
     _parse_error_location,  # pyright: ignore[reportPrivateUsage]
+    _redact_sensitive_values,  # pyright: ignore[reportPrivateUsage]
     format_validation_error_response,
     parse_validation_error,
 )
@@ -798,6 +799,26 @@ class TestFormatValidationErrorResponse:
         assert "private-key-secret" not in actual_value
         assert "token-secret" not in actual_value
         assert "header-secret" not in actual_value
+
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "api_keys",
+            "auth",
+            "bearer",
+            "clientCredentials",
+            "cookies",
+            "passwords",
+            "private_keys",
+            "sessionId",
+            "tokens",
+        ],
+    )
+    def test_redacts_sensitive_field_name_variants(self, field_name: str) -> None:
+        """Redacts common singular, plural, and normalized secret field names."""
+        redacted = _redact_sensitive_values({field_name: "sensitive-value", "safe": "kept"})
+
+        assert redacted == {field_name: "[REDACTED]", "safe": "kept"}
 
     def test_uses_default_message_when_no_errors(self) -> None:
         """Uses default message when validation_errors list is empty."""

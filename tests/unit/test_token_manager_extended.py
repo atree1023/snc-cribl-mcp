@@ -111,7 +111,7 @@ class TestTokenManagerCaching:
         # Set expiration to past
         manager._token_expires_at = datetime.now(UTC) - timedelta(hours=1)
 
-        with pytest.raises(RuntimeError, match=r"expired cached token.*refresh credentials"):
+        with pytest.raises(RuntimeError, match=r"Expired or near-expiration cached token.*refresh credentials"):
             await manager.get_security()
 
 

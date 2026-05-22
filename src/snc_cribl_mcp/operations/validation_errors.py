@@ -24,14 +24,18 @@ REDACTED_VALUE = "[REDACTED]"
 
 _SENSITIVE_FIELD_SUFFIXES = (
     "apikey",
+    "bearer",
+    "cookie",
+    "credential",
     "passwd",
     "password",
     "passphrase",
     "privatekey",
     "secret",
+    "sessionid",
     "token",
 )
-_SENSITIVE_FIELD_NAMES = {"key"}
+_SENSITIVE_FIELD_NAMES = {"auth", "authorization", "key"}
 
 logger = logging.getLogger("snc_cribl_mcp.operations.validation_errors")
 
@@ -263,9 +267,14 @@ def _normalize_field_name(name: str) -> str:
 
 
 def _is_sensitive_field_name(name: str) -> bool:
-    """Return true when a config field name commonly contains secret material."""
+    """Return true for common Cribl config secret fields, not generic PII."""
     normalized = _normalize_field_name(name)
-    return normalized in _SENSITIVE_FIELD_NAMES or any(normalized.endswith(suffix) for suffix in _SENSITIVE_FIELD_SUFFIXES)
+    singular = normalized.removesuffix("s")
+    return (
+        normalized in _SENSITIVE_FIELD_NAMES
+        or singular in _SENSITIVE_FIELD_NAMES
+        or any(normalized.endswith(suffix) or singular.endswith(suffix) for suffix in _SENSITIVE_FIELD_SUFFIXES)
+    )
 
 
 def _redact_sensitive_values(value: JsonValue) -> JsonValue:

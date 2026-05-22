@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import snc_cribl_mcp.client.token_manager as token_manager_module
-from snc_cribl_mcp.client.token_manager import TokenManager, get_token_manager
+from snc_cribl_mcp.client.token_manager import ExpiredTokenError, TokenManager, get_token_manager
 from snc_cribl_mcp.config import CriblConfig
 
 
@@ -337,3 +337,40 @@ def test_get_token_manager_separates_same_url_different_credentials() -> None:
     assert first is not second
     assert first._config is first_config
     assert second._config is second_config
+
+
+def test_secret_cache_fingerprint_is_stable_and_opaque() -> None:
+    """Secret fingerprints should compare by value without exposing the original secret."""
+    fingerprint = token_manager_module._secret_cache_fingerprint("pass")  # pyright: ignore[reportPrivateUsage]
+
+    assert token_manager_module._secret_cache_fingerprint(None) is None  # pyright: ignore[reportPrivateUsage]
+    assert fingerprint == token_manager_module._secret_cache_fingerprint("pass")  # pyright: ignore[reportPrivateUsage]
+    assert fingerprint != token_manager_module._secret_cache_fingerprint("other")  # pyright: ignore[reportPrivateUsage]
+    assert fingerprint != "pass"
+
+
+def test_get_token_manager_evicts_old_entries_after_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rotating credentials should not grow the token-manager cache without bound."""
+    monkeypatch.setattr(token_manager_module, "_TOKEN_MANAGER_CACHE_MAXSIZE", 2)
+    with _isolated_token_manager_cache():
+        first = get_token_manager(CriblConfig(url="https://cribl.example.com/api/v1", username="user", password="pass-1"))
+        second = get_token_manager(CriblConfig(url="https://cribl.example.com/api/v1", username="user", password="pass-2"))
+        third = get_token_manager(CriblConfig(url="https://cribl.example.com/api/v1", username="user", password="pass-3"))
+
+        assert first not in token_manager_module._TOKEN_MANAGERS.values()  # pyright: ignore[reportPrivateUsage]
+        assert second in token_manager_module._TOKEN_MANAGERS.values()  # pyright: ignore[reportPrivateUsage]
+        assert third in token_manager_module._TOKEN_MANAGERS.values()  # pyright: ignore[reportPrivateUsage]
+        assert len(token_manager_module._TOKEN_MANAGERS) == 2  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_expired_cached_token_without_refresh_credentials_raises_specific_error() -> None:
+    """Expired cached tokens without refresh credentials should use a catchable error type."""
+    manager = TokenManager(_config_with_credentials())
+    manager._cached_token = "preexisting-token"  # type: ignore[reportPrivateUsage]
+    manager._config.username = None  # type: ignore[reportPrivateUsage]
+    manager._config.password = None  # type: ignore[reportPrivateUsage]
+    manager._token_expires_at = datetime.now(UTC) - timedelta(hours=1)  # type: ignore[reportPrivateUsage]
+
+    with pytest.raises(ExpiredTokenError, match=r"Expired or near-expiration cached token.*refresh credentials"):
+        await manager.get_security()

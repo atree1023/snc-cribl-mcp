@@ -284,6 +284,19 @@ def get_auth_headers(security: Security) -> dict[str, str]:
     return headers
 
 
+def _is_counted_sdk_response(resp: object) -> bool:
+    """Return true when an SDK response has counted-list shape."""
+    return isinstance(getattr(resp, "items", None), list | tuple) and hasattr(resp, "count")
+
+
+def _sdk_response_items(resp: object) -> list[object]:
+    """Return SDK response items when the response has counted-list shape."""
+    raw_items = getattr(resp, "items", None)
+    if isinstance(raw_items, list | tuple):
+        return list(cast("list[object] | tuple[object, ...]", raw_items))
+    return []
+
+
 async def collect_items_via_sdk(
     coll_ctx: CollectionContext,
     list_method: Callable[..., Awaitable[Any]],
@@ -456,12 +469,11 @@ async def _collect_group_items_sdk(
         msg = f"Network error while listing {coll_ctx.resource_type} for {coll_ctx.product.value} group '{group_id}': {exc}"
         raise RuntimeError(msg) from exc
 
-    if single_response and not hasattr(resp, "items"):
+    if single_response and not _is_counted_sdk_response(resp):
         item = serialize_model(resp)
         return build_group_entry(group_id, [item] if item else [])
 
-    raw_items: list[object] = getattr(resp, "items", None) or []
-    items = [serialize_model(item) for item in raw_items]
+    items = [serialize_model(item) for item in _sdk_response_items(resp)]
     reported = getattr(resp, "count", None)
     return build_group_entry(group_id, items, reported_count=reported)
 

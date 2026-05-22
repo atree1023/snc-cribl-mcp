@@ -2,9 +2,11 @@
 
 import asyncio
 import base64
-import hashlib
+import hmac
 import json
 import logging
+import secrets
+from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Self
@@ -19,6 +21,10 @@ logger = logging.getLogger("snc_cribl_mcp.token_manager")
 
 DEFAULT_OAUTH_TOKEN_URL = "https://login.cribl.cloud/oauth/token"  # noqa: S105
 DEFAULT_OAUTH_AUDIENCE = "https://api.cribl.cloud"
+
+
+class ExpiredTokenError(RuntimeError):
+    """Raised when a cached token is expired or too close to expiration and cannot be refreshed."""
 
 
 class TokenManager:
@@ -94,8 +100,11 @@ class TokenManager:
                 return Security(bearer_auth=self._cached_token)
 
             if self._cached_token and not self._can_refresh():
-                msg = "expired cached token cannot be used because refresh credentials are missing."
-                raise RuntimeError(msg)
+                msg = (
+                    "Expired or near-expiration cached token cannot be used because refresh credentials are missing. "
+                    "Configure username/password or client_id/client_secret credentials to refresh it."
+                )
+                raise ExpiredTokenError(msg)
 
             token = await self._fetch_and_cache_token()
             return Security(bearer_auth=token)
@@ -300,12 +309,15 @@ class TokenManager:
 
 type TokenManagerCacheKey = tuple[str, str | None, str | None, str | None, str | None, str, str, bool, int]
 
+_SECRET_FINGERPRINT_KEY = secrets.token_bytes(32)
+_TOKEN_MANAGER_CACHE_MAXSIZE = 64
+
 
 def _secret_cache_fingerprint(value: str | None) -> str | None:
-    """Return a stable cache fingerprint without storing secrets in cache keys."""
+    """Return a process-local HMAC fingerprint without storing secrets in cache keys."""
     if value is None:
         return None
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return hmac.digest(_SECRET_FINGERPRINT_KEY, value.encode("utf-8"), "sha256").hex()
 
 
 def _token_manager_cache_key(config: CriblConfig) -> TokenManagerCacheKey:
@@ -323,7 +335,7 @@ def _token_manager_cache_key(config: CriblConfig) -> TokenManagerCacheKey:
     )
 
 
-_TOKEN_MANAGERS: dict[TokenManagerCacheKey, TokenManager] = {}
+_TOKEN_MANAGERS: OrderedDict[TokenManagerCacheKey, TokenManager] = OrderedDict()
 
 
 def get_token_manager(config: CriblConfig) -> TokenManager:
@@ -341,7 +353,12 @@ def get_token_manager(config: CriblConfig) -> TokenManager:
     if manager is None:
         manager = TokenManager(config)
         _TOKEN_MANAGERS[key] = manager
+        while len(_TOKEN_MANAGERS) > _TOKEN_MANAGER_CACHE_MAXSIZE:
+            _, stale_manager = _TOKEN_MANAGERS.popitem(last=False)
+            stale_manager.close()
+    else:
+        _TOKEN_MANAGERS.move_to_end(key)
     return manager
 
 
-__all__ = ["TokenManager", "get_token_manager"]
+__all__ = ["ExpiredTokenError", "TokenManager", "get_token_manager"]
