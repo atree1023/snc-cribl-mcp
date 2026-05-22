@@ -189,6 +189,13 @@ class TestExtractObjectInfo:
         assert obj_id is None
         assert obj_type is None
 
+    def test_returns_none_when_items_is_not_a_list(self) -> None:
+        """Returns (None, None) when items is present but malformed."""
+        obj_id, obj_type = _extract_object_info('{"items": "not-a-list"}', 0)
+
+        assert obj_id is None
+        assert obj_type is None
+
     def test_returns_none_for_non_object_json_body(self) -> None:
         """Returns (None, None) when body JSON is not an object."""
         obj_id, obj_type = _extract_object_info("[]", 0)
@@ -311,6 +318,14 @@ class TestExtractFieldValue:
         body = '{"items": [{"tcpjson": {"connections": [{"a": 1}]}}]}'
 
         value = _extract_field_value(body, 0, "tcpjson", ["connections", "5", "a"])
+
+        assert value is None
+
+    def test_returns_none_for_invalid_list_index(self) -> None:
+        """Returns None when a list path segment cannot be parsed as an integer."""
+        body = '{"items": [{"tcpjson": {"connections": [{"a": 1}]}}]}'
+
+        value = _extract_field_value(body, 0, "tcpjson", ["connections", "nope", "a"])
 
         assert value is None
 

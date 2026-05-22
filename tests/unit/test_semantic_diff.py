@@ -228,6 +228,20 @@ def test_semantic_validation_from_sync_result_handles_items_without_payloads() -
     }
 
 
+def test_semantic_validation_trusts_explicit_in_sync_result() -> None:
+    """An explicit in_sync result should remain semantically in sync even without item details."""
+    result = semantic_validation_from_sync_result(
+        "sources",
+        {
+            "resource_kind": "sources",
+            "in_sync": True,
+            "items": [],
+        },
+    )
+
+    assert result["semantic_in_sync"] is True
+
+
 def test_semantic_validation_from_sync_result_is_not_in_sync_when_omitted_items_may_differ() -> None:
     """Truncated validation output should not report semantic equivalence from returned items only."""
     result = semantic_validation_from_sync_result(

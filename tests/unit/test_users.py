@@ -8,6 +8,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -54,6 +55,86 @@ def test_public_user_payload_strips_common_secret_field_names() -> None:
             "roles": ["admin"],
         }
     ) == {"username": "test-user", "roles": ["admin"]}
+
+
+def test_extract_single_user_handles_empty_malformed_and_non_object_items() -> None:
+    """Counted user responses should return None for malformed item shapes."""
+    assert users_module._extract_single_user({"items": []}) is None
+    assert users_module._extract_single_user({"items": "not-a-list"}) is None
+    assert users_module._extract_single_user({"items": ["not-an-object"]}) is None
+
+
+@pytest.mark.asyncio
+async def test_user_request_json_requires_httpx_client_and_uses_fresh_security() -> None:
+    """Direct user API calls should validate the SDK HTTP client and refresh security when possible."""
+    bad_resolved = SimpleNamespace(
+        config=SimpleNamespace(base_url_str="https://target.example/api/v1", timeout_ms=1000),
+        client=SimpleNamespace(sdk_configuration=SimpleNamespace(async_client=object())),
+        security=Security(bearer_auth="old-token"),
+    )
+    with pytest.raises(TypeError, match=r"does not expose an httpx\.AsyncClient"):
+        await users_module._request_user_json(
+            cast("users_module.ResolvedControlPlane", bad_resolved),
+            method="GET",
+            url="https://target.example/api/v1/system/users/test-user",
+        )
+
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"items": [{"username": "test-user"}], "count": 1})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+        resolved = _resolved("target", "https://target.example/api/v1", http_client)
+        resolved.get_security = AsyncMock(return_value=Security(bearer_auth="fresh-token"))
+
+        result = await users_module._request_user_json(
+            cast("users_module.ResolvedControlPlane", resolved),
+            method="GET",
+            url="https://target.example/api/v1/system/users/test-user",
+        )
+
+    assert result["items"] == [{"username": "test-user"}]
+    assert requests[0].headers["Authorization"] == "Bearer fresh-token"
+    resolved.get_security.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_user_reraises_non_404_http_errors() -> None:
+    """Only 404 local-user lookups should be translated to None."""
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(500, text="boom"))
+    ) as http_client:
+        resolved = _resolved("target", "https://target.example/api/v1", http_client)
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await users_module._get_user(cast("users_module.ResolvedControlPlane", resolved), "test-user")
+
+
+def test_build_user_payload_applies_optional_overrides_and_strips_secrets() -> None:
+    """User payload construction should preserve profile overrides without copying secret fields."""
+    payload = users_module._build_user_payload(
+        username="test-user",
+        source_user={"username": "old", "password": "hidden", "apiKey": "hidden", "roles": ["reader"]},
+        password="new-secret",
+        first="Test",
+        last="User",
+        email="test.user@example.invalid",
+        roles=["admin"],
+        disabled=True,
+    )
+
+    assert payload == {
+        "username": "test-user",
+        "id": "test-user",
+        "password": "new-secret",
+        "first": "Test",
+        "last": "User",
+        "email": "test.user@example.invalid",
+        "roles": ["admin"],
+        "disabled": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -284,6 +365,73 @@ async def test_sync_user_missing_explicit_password_env_lists_checked_name(monkey
                 username="test-user",
                 password_env="MISSING_USER_PASSWORD",
             )
+
+
+@pytest.mark.asyncio
+async def test_sync_user_to_target_can_skip_post_write_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """validate_after=false should avoid the post-write user lookup."""
+    target = SimpleNamespace(
+        server_name="target",
+        config=SimpleNamespace(base_url_str="https://target.example/api/v1", timeout_ms=1000),
+    )
+    get_user = AsyncMock(return_value=None)
+    request_user_json = AsyncMock(return_value={"items": [{"username": "test-user", "id": "test-user"}]})
+    monkeypatch.setattr(users_module, "_get_user", get_user)
+    monkeypatch.setattr(users_module, "_request_user_json", request_user_json)
+
+    result = await users_module._sync_user_to_target(
+        target=cast("users_module.ResolvedControlPlane", target),
+        target_server="target",
+        username="test-user",
+        source_user=None,
+        password="secret",
+        password_source="prompt",
+        checked_env=[],
+        first=None,
+        last=None,
+        email=None,
+        roles=None,
+        disabled=None,
+        overwrite=True,
+        validate_after=False,
+    )
+
+    assert result["action"] == "created"
+    assert "validation" not in result
+    assert get_user.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_user_to_target_preserves_write_when_validation_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Post-write validation errors should be reported without discarding the write result."""
+    target = SimpleNamespace(
+        server_name="target",
+        config=SimpleNamespace(base_url_str="https://target.example/api/v1", timeout_ms=1000),
+    )
+    get_user = AsyncMock(side_effect=[None, RuntimeError("validation unavailable")])
+    request_user_json = AsyncMock(return_value={"items": [{"username": "test-user", "id": "test-user"}]})
+    monkeypatch.setattr(users_module, "_get_user", get_user)
+    monkeypatch.setattr(users_module, "_request_user_json", request_user_json)
+
+    result = await users_module._sync_user_to_target(
+        target=cast("users_module.ResolvedControlPlane", target),
+        target_server="target",
+        username="test-user",
+        source_user=None,
+        password="secret",
+        password_source="prompt",
+        checked_env=[],
+        first=None,
+        last=None,
+        email=None,
+        roles=None,
+        disabled=None,
+        overwrite=True,
+        validate_after=True,
+    )
+
+    assert result["action"] == "created"
+    assert result["validation_error"] == {"type": "RuntimeError", "message": "validation unavailable"}
 
 
 def test_type_placeholder() -> None:

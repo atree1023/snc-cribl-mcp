@@ -13,6 +13,7 @@ import httpx
 import pytest
 from cribl_control_plane.errors import CriblControlPlaneError
 from cribl_control_plane.models.productscore import ProductsCore
+from cribl_control_plane.models.security import Security
 
 import snc_cribl_mcp.operations.sync as sync_module
 
@@ -259,6 +260,16 @@ def test_copy_error_helpers_include_status_codes_and_validate_target_group() -> 
     assert sync_module._require_resolved_target_group_id("default") == "default"
     with pytest.raises(ValueError, match="resolved target group id is missing"):
         sync_module._require_resolved_target_group_id(None)
+
+
+@pytest.mark.asyncio
+async def test_resolved_security_uses_fresh_provider_when_available() -> None:
+    """Direct-HTTP sync helpers should prefer a resolved client's fresh security provider."""
+    fresh_security = Security(bearer_auth="fresh-token")
+    resolved = SimpleNamespace(get_security=AsyncMock(return_value=fresh_security), security=Security(bearer_auth="old"))
+
+    assert await sync_module._resolved_security(cast("sync_module.ResolvedControlPlane", resolved)) is fresh_security
+    resolved.get_security.assert_awaited_once()
 
 
 @pytest.mark.asyncio

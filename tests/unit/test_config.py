@@ -98,6 +98,54 @@ def test_collect_server_tables() -> None:
     }
 
 
+def test_get_local_username_handles_platform_lookup_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Local username fallback should tolerate platform-specific lookup failures."""
+
+    def _raise_getuser() -> str:
+        msg = "login database unavailable"
+        raise OSError(msg)
+
+    monkeypatch.setattr(config_module.getpass, "getuser", _raise_getuser)
+
+    assert config_module._get_local_username() is None
+
+
+def test_get_keyring_password_handles_errors_and_empty_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keyring lookup should normalize backend errors, empty values, and stored passwords."""
+
+    def _raise_keyring(_service_name: str, _username: str) -> str | None:
+        msg = "keyring locked"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(config_module.keyring, "get_password", _raise_keyring)
+    assert config_module._get_keyring_password("service", "user") is None
+
+    def _empty_keyring(_service_name: str, _username: str) -> str:
+        return ""
+
+    monkeypatch.setattr(config_module.keyring, "get_password", _empty_keyring)
+    assert config_module._get_keyring_password("service", "user") is None
+
+    def _stored_keyring(_service_name: str, _username: str) -> str:
+        return "stored-pass"
+
+    monkeypatch.setattr(config_module.keyring, "get_password", _stored_keyring)
+    assert config_module._get_keyring_password("service", "user") == "stored-pass"
+
+
+def test_on_prem_base_url_for_password_resolution_ignores_invalid_urls() -> None:
+    """Invalid on-prem URLs should skip password fallback until model validation reports the URL issue."""
+    assert config_module._on_prem_base_url_for_password_resolution({"url": "cribl.example.com"}) is None
+
+
+def test_resolve_on_prem_credentials_reports_unavailable_local_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing local usernames should produce the explicit unavailable-user message."""
+    monkeypatch.setattr(config_module, "_get_local_username", lambda: None)
+
+    with pytest.raises(RuntimeError, match="<unavailable local user>"):
+        config_module._resolve_on_prem_credentials("", {"url": "https://cribl.example.com"})
+
+
 def test_load_config_data_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing config.toml should raise an error."""
     monkeypatch.setattr(config_module, "CONFIG_PATH", tmp_path / "missing.toml")
