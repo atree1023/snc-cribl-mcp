@@ -189,6 +189,20 @@ class TestExtractObjectInfo:
         assert obj_id is None
         assert obj_type is None
 
+    def test_returns_none_for_non_object_json_body(self) -> None:
+        """Returns (None, None) when body JSON is not an object."""
+        obj_id, obj_type = _extract_object_info("[]", 0)
+
+        assert obj_id is None
+        assert obj_type is None
+
+    def test_returns_none_for_non_object_item(self) -> None:
+        """Returns (None, None) when selected item is not an object."""
+        obj_id, obj_type = _extract_object_info('{"items": [1]}', 0)
+
+        assert obj_id is None
+        assert obj_type is None
+
     def test_handles_missing_type(self) -> None:
         """Returns None for type when not present."""
         body = '{"items": [{"id": "src1"}]}'
@@ -244,6 +258,18 @@ class TestExtractFieldValue:
         body = '{"items": [{"id": "src1"}]}'
 
         value = _extract_field_value(body, 10, "tcpjson", ["host"])
+
+        assert value is None
+
+    def test_returns_none_for_non_object_json_body(self) -> None:
+        """Returns None when body JSON is not an object."""
+        value = _extract_field_value("[]", 0, "tcpjson", ["host"])
+
+        assert value is None
+
+    def test_returns_none_for_non_object_item(self) -> None:
+        """Returns None when selected item is not an object."""
+        value = _extract_field_value('{"items": [1]}', 0, "tcpjson", ["host"])
 
         assert value is None
 

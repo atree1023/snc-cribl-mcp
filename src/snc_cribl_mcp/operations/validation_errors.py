@@ -11,7 +11,7 @@ validation errors and present them to users in a clear, actionable format.
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pydantic import ValidationError
 
@@ -160,21 +160,37 @@ def _extract_object_info(body: str | None, index: int) -> tuple[str | None, str 
         Tuple of (object_id, object_type) or (None, None) if not found.
 
     """
-    if not body:
-        return None, None
-
-    try:
-        data = json.loads(body)
-        items = data.get("items", [])
-        if 0 <= index < len(items):
-            item = items[index]
-            obj_id = item.get("id") or item.get("name") or item.get("_id")
-            obj_type = item.get("type")
-            return str(obj_id) if obj_id else None, str(obj_type) if obj_type else None
-    except json.JSONDecodeError, KeyError, TypeError, IndexError:
-        pass
+    item = _extract_item(body, index)
+    if item is not None:
+        obj_id = item.get("id") or item.get("name") or item.get("_id")
+        obj_type = item.get("type")
+        return str(obj_id) if obj_id else None, str(obj_type) if obj_type else None
 
     return None, None
+
+
+def _extract_item(body: str | None, index: int) -> dict[str, Any] | None:
+    """Extract an object entry from a counted response body."""
+    if not body:
+        return None
+
+    try:
+        data = cast("object", json.loads(body))
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    payload = cast("dict[str, Any]", data)
+    items = cast("object", payload.get("items", []))
+    if not isinstance(items, list):
+        return None
+    typed_items = cast("list[object]", items)
+    if not 0 <= index < len(typed_items):
+        return None
+
+    item = typed_items[index]
+    return cast("dict[str, Any]", item) if isinstance(item, dict) else None
 
 
 def _extract_field_value(
@@ -195,17 +211,10 @@ def _extract_field_value(
         The field value or None if not found.
 
     """
-    if not body:
+    item = _extract_item(body, index)
+    if item is None:
         return None
-
     try:
-        data = json.loads(body)
-        items: list[dict[str, Any]] = data.get("items", [])
-        if not (0 <= index < len(items)):
-            return None
-
-        item = items[index]
-
         # Navigate to type-specific field first
         current: JsonValue = item.get(type_field) if type_field and type_field in item else item
 
