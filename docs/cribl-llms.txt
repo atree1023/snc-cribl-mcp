@@ -1,39 +1,44 @@
-# Cribl Documentation Index for AI Agents
+# Cribl as Code Documentation Index for AI Agents
 
-> High-level index for AI agents. Each link below goes to a doc-set llms.txt (full list of Markdown page URLs for that area), kept under ~50k characters. Use the global API links for control/management plane reference.
+> Markdown page index for Cribl as Code. Each link targets the corresponding .md file on this site.
 
-Cribl is a suite of observability products that help organizations collect, process, route, and analyze their data more efficiently. Open the doc-set index that matches your task (Stream, Edge, Search, Lake, Insights, FedRAMP, and more).
+The Cribl API provides programmatic access to manage and configure Cribl products.
 
-## Browse by documentation area
+## Cribl as Code
 
-- [Cribl Stream full page index](https://docs.cribl.io/stream/llms.txt): Cribl Stream is an observability pipeline that gives you the flexibility to collect, reduce, enrich, normalize, and route data from any source to any destination within your existing data infrastructure.
-- [Cribl Edge full page index](https://docs.cribl.io/edge/llms.txt): Cribl Edge is an agent-based observability solution that enables collection from edge locations. It provides distributed data collection with centralized configuration and management.
-- [Cribl Search full page index](https://docs.cribl.io/search/llms.txt): Cribl Search helps you explore data in place, right where it lives. You can query logs, metrics, or any sort of machine data immediately, without first moving it to specialized storage.
-- [Cribl Lake full page index](https://docs.cribl.io/lake/llms.txt): Cribl Lake is an open data lake platform built on Parquet format. It provides cost-effective data storage with instant searchability and integrates seamlessly with Cribl Stream and Cribl Search.
-- [Cribl Insights full page index](https://docs.cribl.io/insights/llms.txt): Cribl Insights provides analytics and visibility across your observability data in the Cribl suite.
-- [Cribl AI full page index](https://docs.cribl.io/copilot/llms.txt): Cribl AI tools and capabilities help you use natural language to streamline your work and maximize your productivity with Cribl products.
-- [Cribl Guard full page index](https://docs.cribl.io/guard/llms.txt): Cribl Guard helps you protect your data pipelines with security rules and policies.
-- [Cribl Identity and Access Management full page index](https://docs.cribl.io/iam/llms.txt): Identity and Access Management documentation for users, groups, roles, and authentication with Cribl products.
-- [Cribl as Code full page index](https://docs.cribl.io/cribl-as-code/llms.txt): The Cribl API provides programmatic access to manage and configure Cribl products.
-- [Cribl Reference Architectures full page index](https://docs.cribl.io/reference-architectures/llms.txt): Reference architectures, deployment patterns, and best-practice guides for Cribl solutions.
-- [Cribl LLM Observability full page index](https://docs.cribl.io/llm-observability/llms.txt): Guides for observing, securing, and governing large language model workloads and related telemetry.
-- [Cribl Common Use Cases full page index](https://docs.cribl.io/use-cases/llms.txt): Common use-case guides and implementation patterns across the Cribl product suite.
-- [Cribl.Cloud Government full page index](https://docs.cribl.io/fedramp/llms.txt): Cribl.Cloud Government (FedRAMP) documentation for regulated and government cloud deployments.
-- [Cribl Billing & Licensing full page index](https://docs.cribl.io/billing-licensing/llms.txt): Cribl Billing and Licensing covers plan management, credit tracking, usage monitoring, and on-premises license administration for Cribl products.
-
-## API reference (Markdown entry points)
-
-- [Cribl as Code full page index](https://docs.cribl.io/cribl-as-code/llms.txt): Includes Cribl as Code docs and navigation to API topics
-- [Cribl Core API Reference](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-core.md): Control Plane API for Cribl Core
-- [Cribl Stream API Reference](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-stream.md): Control Plane API for Cribl Stream
-- [Cribl Edge API Reference](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-edge.md): Control Plane API for Cribl Edge
-- [Cribl Search API Reference](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-search.md): Control Plane API for Cribl Search
-- [Cribl Lake API Reference](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-lake.md): Control Plane API for Cribl Lake
-- [Management Plane API Reference](https://docs.cribl.io/cribl-as-code/api-reference/management-plane.md): Management Plane API endpoints
-
-## Additional Resources
-
-- [Cribl Community](https://cribl.io/community/): Join the community for discussions and support
-- [Cribl Support](https://cribl.io/support/): Get help from our support team
-- [Release Notes](https://docs.cribl.io/releases/): Stay up to date with the latest releases
-- [Known Issues index](https://docs.cribl.io/llms-known-issues.txt): All published known issues by product with markdown links
+- [Cribl API](https://docs.cribl.io/cribl-as-code/api.md): Use the Cribl API to programmatically configure and manage Cribl resources.
+- [Authenticate with the Cribl API](https://docs.cribl.io/cribl-as-code/api-auth.md): Learn how to use the Cribl API to authenticate for subsequent requests.
+- [Cribl API Code Examples](https://docs.cribl.io/cribl-as-code/api-code-examples.md): Code examples demonstrate how to achieve specific tasks using the Cribl API.
+- [Configure Worker Groups with the Cribl API](https://docs.cribl.io/cribl-as-code/api-configure-worker-groups.md): These code examples demonstrate how to use the Cribl API to configure, scale, and replicate Worker Groups.
+- [Configure Resources with the Cribl API](https://docs.cribl.io/cribl-as-code/api-configure-resources.md): These code examples demonstrate how to use the Cribl API to configure a Source, Destination, Pipeline, and Route.
+- [Update Configurations](https://docs.cribl.io/cribl-as-code/update-configurations.md): Use the Cribl API to update the configuration of supported objects like Sources and Destinations.
+- [Copy, Export, and Install Packs](https://docs.cribl.io/cribl-as-code/copy-export-install-packs.md): Use the Cribl API to copy, export, and install Packs.
+- [Create and Update Lookups](https://docs.cribl.io/cribl-as-code/create-update-lookups.md): Use the Cribl API to create and update lookups.
+- [Commit and Deploy Changes](https://docs.cribl.io/cribl-as-code/commit-deploy.md): Use the Cribl API to automate commit and deploy commands.
+- [View Large Diffs](https://docs.cribl.io/cribl-as-code/view-large-diffs.md): Use the Cribl API to view large diffs that are not displayed in the Cribl UI.
+- [Query the Health Endpoint](https://docs.cribl.io/cribl-as-code/query-health-endpoint.md): Use the Cribl API to query the /health endpoint to support operational decision-making.
+- [Create API Credentials with the Cribl API](https://docs.cribl.io/cribl-as-code/api-create-api-credentials.md): Use the Cribl API to create new API Credentials.
+- [Cribl Search API Code Examples](https://docs.cribl.io/cribl-as-code/search-api-examples.md): Code examples that demonstrate how to achieve specific tasks using Search endpoints in the Cribl API.
+- [Add a Cribl Search Pack and Create a Lake Dataset with the Cribl API](https://docs.cribl.io/cribl-as-code/api-search-pack-lake-dataset.md): These code examples demonstrate how to use the Cribl API to add a Cribl Search Pack and create a Lake Dataset.
+- [Search and Retrieve Results](https://docs.cribl.io/cribl-as-code/search-results.md): Use the Cribl API to execute searches and retrieve Cribl Search results.
+- [Get Alerts for Search Results](https://docs.cribl.io/cribl-as-code/get-alerts-search-results.md): Use the Cribl API to get alerts for the results of a scheduled search.
+- [API Reference](https://docs.cribl.io/cribl-as-code/api-reference.md): The Cribl API Reference provides comprehensive and detailed API documentation for all Cribl products.
+- [Control Plane API](https://docs.cribl.io/cribl-as-code/control-plane.md): The Control Plane API Reference is divided into the several sections.
+- [Cribl Core](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-core/)
+- [Cribl Stream](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-stream/)
+- [Cribl Edge](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-edge/)
+- [Cribl Search](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-search/)
+- [Cribl Lake](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-lake/)
+- [Management Plane](https://docs.cribl.io/cribl-as-code/api-reference/management-plane/)
+- [Cribl Terraform Provider (Preview)](https://docs.cribl.io/cribl-as-code/terraform.md): Use the Cribl Terraform provider (preview) to manage consistent, end-to-end infrastructure as code (IaC) across Cribl Organizations and Workspaces.
+- [Authenticate with the Cribl Terraform Provider (Preview)](https://docs.cribl.io/cribl-as-code/terraform-auth.md): Learn how to authenticate using the Cribl Terraform provider (preview).
+- [Migrate Cribl Configurations to Terraform (Preview)](https://docs.cribl.io/cribl-as-code/terraform-migrate-resources.md): Migrate existing Cribl configurations to Terraform-managed infrastructure as code with the cribl-tf-config-exporter CLI tool.
+- [Cribl SDKs (Preview)](https://docs.cribl.io/cribl-as-code/sdks.md): Use the Cribl SDKs to configure and manage Cribl resources including Workspaces, Worker Groups and Edge Fleets, Pipelines, Sources, Destinations, Cribl Search Packs, and Lake Datasets.
+- [Authenticate with the Cribl SDKs (Preview)](https://docs.cribl.io/cribl-as-code/sdks-auth.md): Learn how to authenticate using the Cribl SDKs (preview).
+- [Cribl SDK Code Examples](https://docs.cribl.io/cribl-as-code/sdk-code-examples.md): Get code examples that use the Cribl Python SDK and the Cribl API to configure, scale, and replicate Worker Groups, configure Cribl resources, import Cribl Search Packs, and create Lake Datasets.
+- [Configure Worker Groups with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-configure-worker-groups.md): These code examples demonstrate how to use the Cribl Python SDK to configure, scale, and replicate Worker Groups.
+- [Configure Resources with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-configure-resources.md): This code example demonstrates how to use the Cribl Python SDK to configure a Source, Destination, Pipeline, and Route.
+- [Add a Cribl Search Pack and Create a Lake Dataset with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-search-pack-lake-dataset.md): This code example demonstrates how to use the Cribl Python SDK to add a Cribl Search Pack and create a Lake Dataset.
+- [Create API Credentials with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-create-api-credentials.md): Use the Cribl management plane SDK and API to create new API Credentials.
+- [Versioning](https://docs.cribl.io/cribl-as-code/versioning/)
+- [Community and Support](https://docs.cribl.io/cribl-as-code/community-support/)
