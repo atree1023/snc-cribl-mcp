@@ -44,6 +44,9 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Retrieve configured event breakers across all products and groups.
   - Retrieve configured lookups across all products and groups.
   - Retrieve configured variables across all products and groups.
+- **Edge Teleport Reads**:
+  - Read or search files on Edge nodes through the leader-proxied `/w/{nodeId}` teleport API.
+  - Resolve the leader from the three-letter datacenter token in hosts such as `cribl01.fra0`.
 - **Pack Management**:
   - List and inspect installed Packs.
   - Install Packs from IDs, URLs, Git repositories, or previously uploaded Pack files.
@@ -139,7 +142,10 @@ uv run keyring set snc-cribl-mcp:golden.oak "$(whoami)"
 If you use `${VAR}` placeholders, set the values in a `.env` file (or your shell environment). Explicit
 placeholder values still take precedence over keychain lookup and must exist when referenced.
 
-When a tool call omits a server name, the first non-`[defaults]` section in `config.toml` is used.
+When a tool call omits a server name, the first non-`[defaults]` section in `config.toml` is used. The
+`get_edge_info` tool is more specific: when `server` is omitted, it extracts the three-letter datacenter token from
+`edge_host` and selects the one configured leader whose section name or URL hostname contains that token. For example,
+`cribl01.fra0` selects a leader with a section or URL containing `fra` or `fra0`.
 
 Logging is still controlled via the `LOG_LEVEL` environment variable (default: `INFO`).
 
@@ -180,13 +186,25 @@ uv run python -m snc_cribl_mcp.server
 
 ### Available MCP Tools
 
-The server exposes twenty-four MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://variables`, `cribl://packs`):
+The server exposes twenty-five MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://variables`, `cribl://packs`):
 
 #### `get_leader_overview`
 
 Returns a compact operational overview for a configured Cribl leader.
 
 - **Returns:** JSON containing leader health, Cribl version, Stream/Edge aggregate node counts, active worker groups and Edge fleets with node counts, and source/destination runtime health summaries for groups or fleets with nodes.
+
+#### `get_edge_info`
+
+Reads or searches a file on an Edge node through the leader-proxied teleport API. Pass `edge_host` as a short host plus
+datacenter label, such as `cribl01.fra0`, or as a full `service-now.com` FQDN. Pass `file` as an absolute Edge node path.
+When `query` is empty or omitted, the tool reads file events from `offset`; when `query` is provided, it searches the
+file. Search values containing punctuation are sent quoted to match the Edge UI behavior. The tool sends `et` and
+`rulesets` in the teleport payload. For searches, `et` defaults to one hour ago; pass `earliest_time`,
+`search_window_seconds`, or `rulesets` only when you need a different search window or need to replay a captured UI
+request.
+
+- **Returns:** JSON containing the selected leader, normalized Edge host, resolved node GUID, request details, `next_offset`, and the raw teleport file response.
 
 #### `list_groups`
 

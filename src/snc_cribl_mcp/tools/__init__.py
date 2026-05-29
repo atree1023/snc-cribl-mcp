@@ -3,6 +3,7 @@
 Contains MCP tool registration modules:
 - ``list_groups``: Enumerate worker groups and Edge fleets
 - ``leader_overview``: Summarize leader health, version, nodes, and runtime status
+- ``edge_info``: Query Edge nodes through the leader-proxied teleport API
 - ``list_sources``: Enumerate configured sources per group
 - ``list_destinations``: Enumerate configured destinations per group
 - ``list_pipelines``: Enumerate configured pipelines per group

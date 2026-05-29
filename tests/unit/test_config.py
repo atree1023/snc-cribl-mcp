@@ -355,6 +355,76 @@ def test_resolve_missing_server_lists_available_without_credential_resolution(
     assert lookups == []
 
 
+def test_resolve_for_datacenter_matches_server_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Datacenter resolution should match server section names."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [edge.mel0]
+        url = "https://cribl-edge.mel0.service-now.com:9000"
+        username = "user"
+        password = "pass"
+
+        [edge.fra0]
+        url = "https://cribl-edge.fra0.service-now.com:9000"
+        username = "user"
+        password = "pass"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    config_module.clear_config_cache()
+
+    config = CriblConfig.resolve_for_datacenter("mel")
+
+    assert config.server_name == "edge.mel0"
+    assert config.base_url_str == "https://cribl-edge.mel0.service-now.com:9000/api/v1"
+
+
+def test_resolve_for_datacenter_matches_server_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Datacenter resolution should inspect server URLs when names are generic."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [primary]
+        url = "https://cribl-edge.fra0.service-now.com:9000"
+        username = "user"
+        password = "pass"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    config_module.clear_config_cache()
+
+    config = CriblConfig.resolve_for_datacenter("fra0")
+
+    assert config.server_name == "primary"
+
+
+def test_resolve_for_datacenter_requires_unique_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ambiguous datacenter matches should ask the caller for an explicit server."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [edge.mel0.primary]
+        url = "https://cribl-edge.mel0.service-now.com:9000"
+        username = "user"
+        password = "pass"
+
+        [edge.mel0.secondary]
+        url = "https://cribl-edge-dr.mel0.service-now.com:9000"
+        username = "user"
+        password = "pass"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    config_module.clear_config_cache()
+
+    with pytest.raises(RuntimeError, match="matched multiple"):
+        CriblConfig.resolve_for_datacenter("mel")
+
+
 def test_resolve_named_server_reuses_cached_built_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

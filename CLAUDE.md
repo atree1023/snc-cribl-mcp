@@ -8,7 +8,7 @@ MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and 
 
 **Key components:**
 
-- Twenty-four tools: get_leader_overview, list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_variables, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync, sync_user, replicate_group_config, validate_group_config, replicate_system_settings, validate_system_settings
+- Twenty-five tools: get_leader_overview, get_edge_info, list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_variables, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync, sync_user, replicate_group_config, validate_group_config, replicate_system_settings, validate_system_settings
 - Nine resources mirroring read-oriented tools (cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups, cribl://variables, cribl://packs)
 - Four prompts for common Cribl workflows
 - Token-based authentication with automatic refresh
@@ -77,6 +77,7 @@ uv run pyright                             # then type check
 
 - `get_config_objects` is the preferred read path for broad queries because it returns bounded summaries, cursors, and optional dependency references.
 - `get_leader_overview` is the compact operational summary path for leader health, Cribl version, Stream/Edge node counts, active groups/fleets, and source/destination runtime status. It uses SDK surfaces where available and direct `/system/info` HTTP only for leader version until the Python SDK exposes that endpoint.
+- `get_edge_info` is the Edge teleport path. It resolves the leader from the three-letter datacenter token in hosts such as `cribl01.fra0` when `server` is omitted, resolves the Edge node GUID via SDK node inventory, then calls direct HTTP under `/w/{nodeId}` for undocumented teleport endpoints.
 - `validate_config_objects` wraps the existing sync validation path with semantic comparison so environment identity differences are visible but non-blocking.
 - Keep using SDK-backed collectors when available; use direct HTTP collectors for unsupported SDK endpoints such as breakers, lookups, and variables.
 - Semantic validation should preserve target-local identity values such as hostnames, endpoint server lists, generated IDs, credential references, and volatile metadata.

@@ -20,6 +20,7 @@ Registered tools:
 - ``upload_pack``: upload a Pack file
 - ``update_pack``: upgrade a Pack
 - ``delete_pack``: uninstall a Pack
+- ``get_edge_info``: query an Edge node through the leader-proxied teleport API
 - ``get_config_objects``: query supported config objects with bounded responses
 - ``validate_config_objects``: semantically compare supported configs between leaders
 - ``copy_resource_config``: copy supported configs between configured leaders
@@ -48,6 +49,7 @@ from .client.token_manager import TokenManager, get_token_manager
 from .config import CriblConfig
 from .operations.breakers import collect_product_breakers
 from .operations.destinations import collect_product_destinations
+from .operations.edge_teleport import collect_edge_info
 from .operations.group_sync import replicate_group_config, validate_group_config_sync
 from .operations.groups import collect_product_groups, serialize_config_group
 from .operations.leader_overview import collect_leader_overview
@@ -61,6 +63,7 @@ from .operations.system_settings import replicate_system_settings, validate_syst
 from .operations.users import sync_user
 from .operations.variables import collect_product_variables
 from .tools.copy_resource_config import register as register_copy_resource_config
+from .tools.edge_info import register as register_edge_info
 from .tools.get_config_objects import register as register_get_config_objects
 from .tools.group_sync import register as register_group_sync_tools
 from .tools.leader_overview import register as register_leader_overview
@@ -127,6 +130,7 @@ __all__ = [
     "CriblConfig",
     "TokenManager",
     "app",
+    "collect_edge_info",
     "collect_product_groups",
     "create_control_plane",
     "get_token_manager",
@@ -142,6 +146,7 @@ def _register_capabilities() -> None:
     register_list_groups(app, impl=list_groups_impl)
     deps = SimpleNamespace(
         resolve_config=CriblConfig.resolve,
+        resolve_config_for_datacenter=CriblConfig.resolve_for_datacenter,
         get_token_manager=get_token_manager,
         products=PRODUCTS,
         create_cp=create_control_plane,
@@ -155,8 +160,10 @@ def _register_capabilities() -> None:
         collect_product_variables=collect_product_variables,
         collect_packs=collect_packs,
         collect_leader_overview=collect_leader_overview,
+        collect_edge_info=collect_edge_info,
     )
     register_leader_overview(app, deps=deps)
+    register_edge_info(app, deps=deps)
     register_list_sources(app, deps=deps)
     register_list_destinations(app, deps=deps)
     register_list_pipelines(app, deps=deps)

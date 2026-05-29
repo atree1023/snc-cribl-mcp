@@ -28,6 +28,7 @@ load_dotenv()
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.toml"
 _ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)\}")
 _KEYRING_SERVICE_PREFIX = "snc-cribl-mcp"
+_DATACENTER_TOKEN_LENGTH = 3
 
 logger = logging.getLogger("snc_cribl_mcp.config")
 
@@ -217,6 +218,47 @@ def _get_keyring_password(service_name: str, username: str) -> str | None:
 def _server_env_fragment(server_name: str) -> str:
     """Return the environment-variable fragment for a server name."""
     return re.sub(r"[^A-Z0-9]+", "_", server_name.upper()).strip("_")
+
+
+def _datacenter_candidates_from_text(value: str | None) -> set[str]:
+    """Return possible three-letter datacenter tokens from a name or hostname."""
+    cleaned = _non_empty_string(value)
+    if cleaned is None:
+        return set()
+
+    candidates: set[str] = set()
+    for token in re.split(r"[^A-Za-z0-9]+", cleaned.lower()):
+        if len(token) >= _DATACENTER_TOKEN_LENGTH and token[:_DATACENTER_TOKEN_LENGTH].isalpha():
+            candidates.add(token[:_DATACENTER_TOKEN_LENGTH])
+    return candidates
+
+
+def _normalize_datacenter_selector(datacenter: str) -> str:
+    """Normalize a datacenter selector to its three-letter token."""
+    cleaned = _non_empty_string(datacenter)
+    if cleaned is not None:
+        for token in re.split(r"[^A-Za-z0-9]+", cleaned.lower()):
+            if len(token) >= _DATACENTER_TOKEN_LENGTH and token[:_DATACENTER_TOKEN_LENGTH].isalpha():
+                return token[:_DATACENTER_TOKEN_LENGTH]
+
+    msg = f"Invalid datacenter selector '{datacenter}'. Expected a three-letter datacenter token."
+    raise ValueError(msg)
+
+
+def _server_datacenter_candidates(server_name: str, defaults: TomlTable, server_values: TomlTable) -> set[str]:
+    """Return datacenter tokens discoverable from a server section name or URL."""
+    candidates = _datacenter_candidates_from_text(server_name)
+    merged: TomlTable = {**defaults, **server_values}
+    raw_url = _non_empty_string(merged.get("url"))
+    if raw_url is None:
+        return candidates
+
+    try:
+        hostname = urlparse(_normalize_base_url(raw_url)).hostname
+    except ValueError:
+        hostname = urlparse(raw_url).hostname
+    candidates.update(_datacenter_candidates_from_text(hostname))
+    return candidates
 
 
 def _password_env_names(server_name: str) -> tuple[str, ...]:
@@ -488,6 +530,41 @@ class CriblConfig(BaseModel):
 
         default_name = next(iter(servers))
         return _load_config(default_name)
+
+    @classmethod
+    def resolve_for_datacenter(cls, datacenter: str) -> CriblConfig:
+        """Resolve the configured leader whose name or URL matches a datacenter.
+
+        Args:
+            datacenter: Three-letter datacenter token, or a selector beginning
+                with the token (for example, ``mel`` or ``mel0``).
+
+        Returns:
+            Resolved CriblConfig instance for the matching leader.
+
+        Raises:
+            RuntimeError: When no leader or multiple leaders match.
+
+        """
+        dc = _normalize_datacenter_selector(datacenter)
+        defaults, servers = _load_config_sections()
+        matches = [
+            server_name
+            for server_name, values in servers.items()
+            if dc in _server_datacenter_candidates(server_name, defaults, values)
+        ]
+
+        if not matches:
+            available = ", ".join(servers.keys())
+            msg = f"No configured Cribl leader matched datacenter '{dc}'. Available servers: {available}."
+            raise RuntimeError(msg)
+
+        if len(matches) > 1:
+            matched = ", ".join(matches)
+            msg = f"Datacenter '{dc}' matched multiple configured Cribl leaders: {matched}. Specify server explicitly."
+            raise RuntimeError(msg)
+
+        return _load_config(matches[0])
 
 
 __all__ = ["CONFIG_PATH", "CriblConfig", "clear_config_cache"]
