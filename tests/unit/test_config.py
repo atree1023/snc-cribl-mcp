@@ -247,6 +247,114 @@ def test_resolve_case_insensitive(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert config.server_name == "Alpha"
 
 
+def test_resolve_named_server_skips_unrelated_credential_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Named resolution should not resolve credentials for unrelated server sections."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [unrelated]
+        url = "https://unrelated.example.com"
+
+        [target]
+        url = "https://cribl.example.com"
+        username = "user"
+        password = "pass"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(config_module, "_get_local_username", lambda: "scott")
+
+    lookups: list[tuple[str, str]] = []
+
+    def _fake_keyring_password(service_name: str, username: str) -> str | None:
+        lookups.append((service_name, username))
+        return None
+
+    monkeypatch.setattr(config_module, "_get_keyring_password", _fake_keyring_password)
+    config_module.clear_config_cache()
+
+    config = CriblConfig.resolve("target")
+
+    assert config.server_name == "target"
+    assert lookups == []
+
+
+def test_resolve_default_server_skips_later_credential_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default resolution should only materialize the first configured server."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [target]
+        url = "https://cribl.example.com"
+        username = "user"
+        password = "pass"
+
+        [unrelated]
+        url = "https://unrelated.example.com"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(config_module, "_get_local_username", lambda: "scott")
+
+    lookups: list[tuple[str, str]] = []
+
+    def _fake_keyring_password(service_name: str, username: str) -> str | None:
+        lookups.append((service_name, username))
+        return None
+
+    monkeypatch.setattr(config_module, "_get_keyring_password", _fake_keyring_password)
+    config_module.clear_config_cache()
+
+    config = CriblConfig.resolve()
+
+    assert config.server_name == "target"
+    assert lookups == []
+
+
+def test_resolve_missing_server_lists_available_without_credential_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown server errors should not be masked by unrelated credential lookup failures."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [unrelated]
+        url = "https://unrelated.example.com"
+
+        [target]
+        url = "https://cribl.example.com"
+        username = "user"
+        password = "pass"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(config_module, "_get_local_username", lambda: "scott")
+
+    lookups: list[tuple[str, str]] = []
+
+    def _fake_keyring_password(service_name: str, username: str) -> str | None:
+        lookups.append((service_name, username))
+        return None
+
+    monkeypatch.setattr(config_module, "_get_keyring_password", _fake_keyring_password)
+    config_module.clear_config_cache()
+
+    with pytest.raises(RuntimeError, match="Server 'missing' not configured"):
+        CriblConfig.resolve("missing")
+
+    assert lookups == []
+
+
 def test_load_configs_defaults_on_prem_username_to_local_user_and_keyring_password(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
