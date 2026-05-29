@@ -29,7 +29,7 @@ A Model Context Protocol (MCP) server that provides tools for querying Cribl dep
 
 ## What It Does
 
-This MCP server connects to Cribl Stream and Edge deployments to retrieve and compare metadata about worker groups, fleets, sources, destinations, pipelines, routes, variables, and Packs. It also supports targeted cross-leader copy and validation workflows for local users, group/fleet contents, and global system settings so AI assistants can help keep multiple leaders aligned without passing entire configs through context.
+This MCP server connects to Cribl Stream and Edge deployments to retrieve and compare metadata about leaders, worker groups, fleets, sources, destinations, pipelines, routes, variables, and Packs. It also supports targeted cross-leader copy and validation workflows for local users, group/fleet contents, and global system settings so AI assistants can help keep multiple leaders aligned without passing entire configs through context.
 
 The server handles authentication with bearer tokens, manages token refresh automatically, and provides a clean JSON interface for exploring your Cribl infrastructure.
 
@@ -180,7 +180,13 @@ uv run python -m snc_cribl_mcp.server
 
 ### Available MCP Tools
 
-The server exposes twenty-three MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://variables`, `cribl://packs`):
+The server exposes twenty-four MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://variables`, `cribl://packs`):
+
+#### `get_leader_overview`
+
+Returns a compact operational overview for a configured Cribl leader.
+
+- **Returns:** JSON containing leader health, Cribl version, Stream/Edge aggregate node counts, active worker groups and Edge fleets with node counts, and source/destination runtime health summaries for groups or fleets with nodes.
 
 #### `list_groups`
 

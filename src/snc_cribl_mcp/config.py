@@ -12,7 +12,8 @@ import logging
 import os
 import re
 import tomllib
-from functools import lru_cache
+from collections.abc import Mapping
+from functools import cache, lru_cache
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -329,16 +330,8 @@ def _load_config_data() -> TomlTable:
 
 
 @lru_cache(maxsize=1)
-def _load_configs() -> dict[str, CriblConfig]:
-    """Load all server configurations from config.toml.
-
-    Returns:
-        Mapping of server name to CriblConfig.
-
-    Raises:
-        RuntimeError: If no servers are configured or configs are invalid.
-
-    """
+def _load_config_sections() -> tuple[TomlTable, dict[str, TomlTable]]:
+    """Load defaults and raw server sections from config.toml."""
     data = _load_config_data()
     defaults_value = data.get("defaults")
     if defaults_value is None:
@@ -355,22 +348,62 @@ def _load_configs() -> dict[str, CriblConfig]:
         msg = "No server configurations found in config.toml."
         raise RuntimeError(msg)
 
-    configs: dict[str, CriblConfig] = {}
-    for server_name, server_values in servers.items():
-        merged: TomlTable = {**defaults, **server_values, "server_name": server_name}
-        merged = _resolve_on_prem_credentials(server_name, merged)
-        try:
-            configs[server_name] = CriblConfig.model_validate(merged)
-        except ValidationError as exc:
-            messages = "; ".join(err["msg"] for err in exc.errors())
-            msg = f"Invalid Cribl configuration for '{server_name}': {messages}"
-            raise RuntimeError(msg) from exc
+    return defaults, servers
 
-    return configs
+
+def _build_config(server_name: str, defaults: TomlTable, server_values: TomlTable) -> CriblConfig:
+    """Merge, resolve credentials, and validate one server config."""
+    merged: TomlTable = {**defaults, **server_values, "server_name": server_name}
+    merged = _resolve_on_prem_credentials(server_name, merged)
+    try:
+        return CriblConfig.model_validate(merged)
+    except ValidationError as exc:
+        messages = "; ".join(err["msg"] for err in exc.errors())
+        msg = f"Invalid Cribl configuration for '{server_name}': {messages}"
+        raise RuntimeError(msg) from exc
+
+
+def _match_server_name(server: str, servers: Mapping[str, TomlTable]) -> str:
+    """Return the configured server name matching a user-supplied selector."""
+    if server in servers:
+        return server
+
+    lowered = {name.lower(): name for name in servers}
+    match = lowered.get(server.lower())
+    if match is not None:
+        return match
+
+    available = ", ".join(servers.keys())
+    msg = f"Server '{server}' not configured. Available servers: {available}."
+    raise RuntimeError(msg)
+
+
+@cache
+def _load_config(server_name: str) -> CriblConfig:
+    """Load and validate one canonical server config."""
+    defaults, servers = _load_config_sections()
+    return _build_config(server_name, defaults, servers[server_name])
+
+
+@lru_cache(maxsize=1)
+def _load_configs() -> dict[str, CriblConfig]:
+    """Load all server configurations from config.toml.
+
+    Returns:
+        Mapping of server name to CriblConfig.
+
+    Raises:
+        RuntimeError: If no servers are configured or configs are invalid.
+
+    """
+    _, servers = _load_config_sections()
+    return {server_name: _load_config(server_name) for server_name in servers}
 
 
 def clear_config_cache() -> None:
     """Clear cached config.toml parsing results."""
+    _load_config.cache_clear()
+    _load_config_sections.cache_clear()
     _load_configs.cache_clear()
 
 
@@ -447,21 +480,14 @@ class CriblConfig(BaseModel):
             RuntimeError: When no valid configuration is found.
 
         """
-        configs = _load_configs()
+        _, servers = _load_config_sections()
 
         if server:
-            if server in configs:
-                return configs[server]
-            lowered = {name.lower(): name for name in configs}
-            match = lowered.get(server.lower())
-            if match:
-                return configs[match]
-            available = ", ".join(configs.keys())
-            msg = f"Server '{server}' not configured. Available servers: {available}."
-            raise RuntimeError(msg)
+            server_name = _match_server_name(server, servers)
+            return _load_config(server_name)
 
-        default_name = next(iter(configs))
-        return configs[default_name]
+        default_name = next(iter(servers))
+        return _load_config(default_name)
 
 
 __all__ = ["CONFIG_PATH", "CriblConfig", "clear_config_cache"]

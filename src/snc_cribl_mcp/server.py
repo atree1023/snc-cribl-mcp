@@ -6,6 +6,7 @@ duplication and improve maintainability.
 
 Registered tools:
 - ``list_groups``: list worker groups (Stream) and fleets (Edge)
+- ``get_leader_overview``: summarize leader health, version, nodes, groups, and runtime status
 - ``list_sources``: list configured sources per group across products
 - ``list_destinations``: list configured destinations per group across products
 - ``list_pipelines``: list configured pipelines per group across products
@@ -49,6 +50,7 @@ from .operations.breakers import collect_product_breakers
 from .operations.destinations import collect_product_destinations
 from .operations.group_sync import replicate_group_config, validate_group_config_sync
 from .operations.groups import collect_product_groups, serialize_config_group
+from .operations.leader_overview import collect_leader_overview
 from .operations.lookups import collect_product_lookups
 from .operations.packs import collect_packs
 from .operations.pipelines import collect_product_pipelines
@@ -61,6 +63,7 @@ from .operations.variables import collect_product_variables
 from .tools.copy_resource_config import register as register_copy_resource_config
 from .tools.get_config_objects import register as register_get_config_objects
 from .tools.group_sync import register as register_group_sync_tools
+from .tools.leader_overview import register as register_leader_overview
 from .tools.list_breakers import register as register_list_breakers
 from .tools.list_destinations import register as register_list_destinations
 from .tools.list_groups import register as register_list_groups
@@ -151,7 +154,9 @@ def _register_capabilities() -> None:
         collect_product_lookups=collect_product_lookups,
         collect_product_variables=collect_product_variables,
         collect_packs=collect_packs,
+        collect_leader_overview=collect_leader_overview,
     )
+    register_leader_overview(app, deps=deps)
     register_list_sources(app, deps=deps)
     register_list_destinations(app, deps=deps)
     register_list_pipelines(app, deps=deps)
