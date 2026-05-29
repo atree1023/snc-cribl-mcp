@@ -355,6 +355,47 @@ def test_resolve_missing_server_lists_available_without_credential_resolution(
     assert lookups == []
 
 
+def test_resolve_named_server_reuses_cached_built_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Named resolution should reuse the built config until caches are cleared."""
+    config_path = tmp_path / "config.toml"
+    _write_config(
+        config_path,
+        """
+        [golden.oak]
+        url = "https://cribl.example.com"
+        """,
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(config_module, "_get_local_username", lambda: "scott")
+
+    lookups: list[tuple[str, str]] = []
+
+    def _fake_keyring_password(service_name: str, username: str) -> str | None:
+        lookups.append((service_name, username))
+        return "keychain-pass"
+
+    monkeypatch.setattr(config_module, "_get_keyring_password", _fake_keyring_password)
+    config_module.clear_config_cache()
+
+    first = CriblConfig.resolve("golden.oak")
+    second = CriblConfig.resolve("GOLDEN.OAK")
+
+    assert first is second
+    assert lookups == [("snc-cribl-mcp:golden.oak", "scott")]
+
+    config_module.clear_config_cache()
+    third = CriblConfig.resolve("golden.oak")
+
+    assert third is not first
+    assert lookups == [
+        ("snc-cribl-mcp:golden.oak", "scott"),
+        ("snc-cribl-mcp:golden.oak", "scott"),
+    ]
+
+
 def test_load_configs_defaults_on_prem_username_to_local_user_and_keyring_password(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

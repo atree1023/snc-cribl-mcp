@@ -13,7 +13,7 @@ import os
 import re
 import tomllib
 from collections.abc import Mapping
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -378,6 +378,13 @@ def _match_server_name(server: str, servers: Mapping[str, TomlTable]) -> str:
     raise RuntimeError(msg)
 
 
+@cache
+def _load_config(server_name: str) -> CriblConfig:
+    """Load and validate one canonical server config."""
+    defaults, servers = _load_config_sections()
+    return _build_config(server_name, defaults, servers[server_name])
+
+
 @lru_cache(maxsize=1)
 def _load_configs() -> dict[str, CriblConfig]:
     """Load all server configurations from config.toml.
@@ -389,12 +396,13 @@ def _load_configs() -> dict[str, CriblConfig]:
         RuntimeError: If no servers are configured or configs are invalid.
 
     """
-    defaults, servers = _load_config_sections()
-    return {server_name: _build_config(server_name, defaults, server_values) for server_name, server_values in servers.items()}
+    _, servers = _load_config_sections()
+    return {server_name: _load_config(server_name) for server_name in servers}
 
 
 def clear_config_cache() -> None:
     """Clear cached config.toml parsing results."""
+    _load_config.cache_clear()
     _load_config_sections.cache_clear()
     _load_configs.cache_clear()
 
@@ -472,14 +480,14 @@ class CriblConfig(BaseModel):
             RuntimeError: When no valid configuration is found.
 
         """
-        defaults, servers = _load_config_sections()
+        _, servers = _load_config_sections()
 
         if server:
             server_name = _match_server_name(server, servers)
-            return _build_config(server_name, defaults, servers[server_name])
+            return _load_config(server_name)
 
         default_name = next(iter(servers))
-        return _build_config(default_name, defaults, servers[default_name])
+        return _load_config(default_name)
 
 
 __all__ = ["CONFIG_PATH", "CriblConfig", "clear_config_cache"]
