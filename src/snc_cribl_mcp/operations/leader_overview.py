@@ -29,6 +29,10 @@ from .validation_errors import format_validation_error_response, parse_validatio
 logger = logging.getLogger("snc_cribl_mcp.operations.leader_overview")
 
 STATUS_PAGE_LIMIT = 500
+SYSTEM_INFO_TOP_FIELDS = ("version", "cribl_version", "criblVersion", "build", "distMode", "hostname", "guid")
+SYSTEM_INFO_NODE_FIELDS = ("hostname", "node", "platform", "release", "architecture")
+SYSTEM_INFO_CRIBL_FIELDS = ("version", "distMode", "guid", "group", "startTime", "installType")
+VERSION_FIELDS = ("cribl_version", "criblVersion", "version")
 
 type StatusListMethod = Callable[..., Awaitable[object | None]]
 
@@ -194,6 +198,7 @@ async def _collect_group_statuses(
     try:
         response = await list_method(
             metrics=False,
+            offset=0,
             limit=STATUS_PAGE_LIMIT,
             server_url=get_group_url(overview_ctx.client, group_id),
             timeout_ms=overview_ctx.timeout_ms,
@@ -283,14 +288,69 @@ def _version_from_build(build: object) -> str | None:
     return parsed if isinstance(parsed, str) else raw_version
 
 
+def _version_from_fields(data: dict[str, Any], *, source_prefix: str | None = None) -> tuple[str | None, str | None]:
+    """Extract a Cribl software version from one object."""
+    for key in VERSION_FIELDS:
+        version = _as_str(data.get(key))
+        if version is not None:
+            source = f"{source_prefix}.{key}" if source_prefix is not None else key
+            return version, source
+
+    for build_key in ("build", "BUILD"):
+        build_version = _version_from_build(data.get(build_key))
+        if build_version is not None:
+            source = f"{source_prefix}.{build_key}.VERSION" if source_prefix is not None else f"{build_key}.VERSION"
+            return build_version, source
+    return None, None
+
+
+def _system_info_version(item: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Extract a Cribl software version from known leader system-info shapes."""
+    candidates: list[tuple[dict[str, Any], str | None]] = [(item, None)]
+    info = _as_dict(item.get("info"))
+    if info is not None:
+        cribl = _as_dict(info.get("cribl"))
+        if cribl is not None:
+            candidates.append((cribl, "info.cribl"))
+        candidates.append((info, "info"))
+
+    for data, prefix in candidates:
+        version, source = _version_from_fields(data, source_prefix=prefix)
+        if version is not None:
+            return version, source
+    return None, None
+
+
+def _compact_fields(source: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+    """Return a copy with only present fields."""
+    return {key: value for key in fields if (value := source.get(key)) is not None}
+
+
 def _compact_system_info(item: dict[str, Any]) -> dict[str, Any]:
     """Keep only system-info fields useful for leader identity and version."""
     result: dict[str, Any] = {"status": "ok"}
-    for key in ("version", "build", "distMode", "hostname", "guid"):
-        value = item.get(key)
-        if value is not None:
-            result[key] = value
-    result["cribl_version"] = _as_str(item.get("version")) or _version_from_build(item.get("build"))
+    result.update(_compact_fields(item, SYSTEM_INFO_TOP_FIELDS))
+    if "build" not in result:
+        build = item.get("BUILD")
+        if build is not None:
+            result["build"] = build
+
+    info = _as_dict(item.get("info"))
+    if info is not None:
+        node_info = _compact_fields(info, SYSTEM_INFO_NODE_FIELDS)
+        if node_info:
+            result["node"] = node_info
+
+        cribl_info = _as_dict(info.get("cribl"))
+        if cribl_info is not None:
+            compact_cribl = _compact_fields(cribl_info, SYSTEM_INFO_CRIBL_FIELDS)
+            if compact_cribl:
+                result["cribl"] = compact_cribl
+
+    version, version_source = _system_info_version(item)
+    result["cribl_version"] = version
+    if version_source is not None:
+        result["version_source"] = version_source
     return result
 
 
@@ -415,6 +475,7 @@ async def _collect_node_inventory(
         response = await client.nodes.list_async(
             product=product,
             limit=STATUS_PAGE_LIMIT,
+            offset=0,
             timeout_ms=timeout_ms,
         )
         items, reported_count = await _collect_paginated_items(response)

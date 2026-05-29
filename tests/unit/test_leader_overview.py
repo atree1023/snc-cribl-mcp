@@ -98,8 +98,7 @@ async def _system_info_handler(request: httpx.Request) -> httpx.Response:
         json={
             "items": [
                 {
-                    "version": "4.18.1",
-                    "build": {"VERSION": '"4.18.1"'},
+                    "BUILD": {"VERSION": "4.18.1-37206a7f", "BRANCH": "v4.18.1"},
                     "distMode": "master",
                     "hostname": "cribl-leader",
                     "guid": "leader-guid",
@@ -148,7 +147,10 @@ def _build_overview_client(config: CriblConfig, async_client: httpx.AsyncClient)
 
     client.nodes.summaries.get_async = AsyncMock(side_effect=summary_async)
 
-    async def nodes_list_async(product: ProductsCore, limit: int, timeout_ms: int) -> _Page:
+    async def nodes_list_async(product: ProductsCore, limit: int, offset: int, timeout_ms: int) -> _Page:
+        assert limit == 500
+        assert offset == 0
+        assert timeout_ms == config.timeout_ms
         if product == ProductsCore.STREAM:
             nodes = [
                 _Model({"id": "s1", "group": "default", "status": "healthy", "info": {"cribl": {"version": "4.18.1"}}}),
@@ -165,6 +167,8 @@ def _build_overview_client(config: CriblConfig, async_client: httpx.AsyncClient)
     client.nodes.list_async = AsyncMock(side_effect=nodes_list_async)
 
     async def source_status_async(**kwargs: object) -> _Page:
+        assert kwargs["limit"] == 500
+        assert kwargs["offset"] == 0
         server_url = str(kwargs["server_url"])
         if server_url.endswith("/m/default"):
             return _Page(
@@ -176,6 +180,8 @@ def _build_overview_client(config: CriblConfig, async_client: httpx.AsyncClient)
         return _Page([_Model({"id": "edge_agent", "status": {"health": "green", "healthCounts": {"green": 3}}})])
 
     async def destination_status_async(**kwargs: object) -> _Page:
+        assert kwargs["limit"] == 500
+        assert kwargs["offset"] == 0
         server_url = str(kwargs["server_url"])
         if server_url.endswith("/m/default"):
             return _Page([_Model({"id": "devnull", "status": {"health": "green", "healthCounts": {"green": 2}}})])
@@ -203,7 +209,9 @@ async def test_collect_leader_overview_success(config: CriblConfig, mock_ctx: Co
         await async_client.aclose()
 
     assert result["server"] == "prod"
-    assert result["cribl_version"] == "4.18.1"
+    assert result["cribl_version"] == "4.18.1-37206a7f"
+    assert result["system_info"]["build"]["VERSION"] == "4.18.1-37206a7f"
+    assert result["system_info"]["version_source"] == "BUILD.VERSION"
     assert result["health"]["details"]["status"] == "healthy"
 
     stream = result["products"]["stream"]
