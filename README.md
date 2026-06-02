@@ -55,6 +55,8 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Copy supported resources between configured leaders.
   - Validate whether supported resources are in sync between configured leaders.
   - Resolve different source and target group selectors during copy and validation workflows.
+  - Select config subsets by wildcard boolean expressions such as `oodp-* but not oodp-source-*`, regular expressions, and explicit exclude filters.
+  - Dry-run copy workflows to inspect matched configs and planned create/update/append/skip actions before writing.
   - Create or replicate local users, using explicit or environment-sourced passwords because Cribl does not return passwords from the API.
   - Replicate and validate complete Stream worker groups or Edge fleets, including group/fleet settings, variables, event breakers, lookups, destinations, pipelines, sources, and routes.
   - Replicate and validate global system settings from the Global Settings page.
@@ -307,18 +309,21 @@ Queries supported config objects through one bounded read tool: groups, sources,
 Semantically compares groups, sources, destinations, pipelines, routes, breakers, lookups, or variables between two configured leaders.
 
 - **Returns:** Functional validation results that classify differences as blocking functional drift, non-blocking environment identity differences, or volatile metadata differences. Hostnames, endpoint server lists, generated IDs, credential references, and timestamps are reported but do not count as functional drift.
+- **Subset matching:** Use `item_pattern`, `item_regex`, `exclude_item_pattern`, `exclude_item_regex`, and `case_sensitive` to validate selected config IDs without first listing every object.
 
 #### `copy_resource_config`
 
 Copies groups, sources, destinations, pipelines, routes, breakers, lookups, or variables from one configured leader to another.
 
 - **Returns:** JSON describing the copy actions taken, including created, updated, appended, skipped, and unsupported items. For group-scoped resources, the response includes both the requested source and target group selectors and the resolved group IDs used on each leader.
+- **Subset matching and dry-run:** Use `item_pattern` for wildcard boolean selectors like `oodp-* but not oodp-source-*`, `item_regex` for regex selectors, and `dry_run=true` to report matched configs plus planned actions without writing.
 
 #### `validate_resource_sync`
 
 Compares groups, sources, destinations, pipelines, routes, breakers, lookups, or variables between two configured leaders.
 
 - **Returns:** JSON describing whether the selected item or scope is in sync, along with per-item status and differing paths. For group-scoped resources, the response includes both the requested source and target group selectors and the resolved group IDs used on each leader.
+- **Subset matching:** Use the same `item_pattern`, `item_regex`, exclude filters, and `case_sensitive` controls as `copy_resource_config`.
 
 #### `sync_user`
 

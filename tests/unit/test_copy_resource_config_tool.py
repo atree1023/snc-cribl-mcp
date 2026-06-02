@@ -76,9 +76,15 @@ async def test_copy_resource_config_tool_forwards_arguments(mock_ctx: Context) -
         group_id="sandbox_appnode",
         target_group_id="default",
         item_id="cisco_asa",
+        item_pattern=None,
+        item_regex=None,
+        exclude_item_pattern=None,
+        exclude_item_regex=None,
+        case_sensitive=False,
         overwrite=True,
         validate_after=True,
         append_routes=False,
+        dry_run=False,
     )
 
 
@@ -146,7 +152,54 @@ async def test_copy_resource_config_tool_forwards_product_scoped_groups(mock_ctx
         group_id=None,
         target_group_id=None,
         item_id="default",
+        item_pattern=None,
+        item_regex=None,
+        exclude_item_pattern=None,
+        exclude_item_regex=None,
+        case_sensitive=False,
         overwrite=True,
         validate_after=True,
         append_routes=False,
+        dry_run=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_tool_forwards_filters_and_dry_run(mock_ctx: Context) -> None:
+    """The tool should forward item filters and dry-run controls to the implementation."""
+    impl = AsyncMock(return_value={"dry_run": True, "planned_count": 2})
+
+    app = _FakeApp()
+    register_copy_resource_config(app, impl=impl)  # type: ignore[arg-type]
+
+    result = await app.tools["copy_resource_config"](
+        mock_ctx,
+        resource_kind="sources",
+        source_server="dev-dvb",
+        target_server="dev-dva",
+        source_group="default",
+        item_pattern="sdpe-rest-* but not sdpe-rest-test-*",
+        item_regex=r"^sdpe-rest-",
+        exclude_item_regex=r"-tmp$",
+        dry_run=True,
+    )
+
+    assert result["dry_run"] is True
+    impl.assert_awaited_once_with(
+        "sources",
+        "dev-dvb",
+        "dev-dva",
+        product=ProductsCore.STREAM,
+        group_id="default",
+        target_group_id=None,
+        item_id=None,
+        item_pattern="sdpe-rest-* but not sdpe-rest-test-*",
+        item_regex=r"^sdpe-rest-",
+        exclude_item_pattern=None,
+        exclude_item_regex=r"-tmp$",
+        case_sensitive=False,
+        overwrite=True,
+        validate_after=True,
+        append_routes=False,
+        dry_run=True,
     )

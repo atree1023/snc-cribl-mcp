@@ -95,6 +95,11 @@ async def test_validate_config_objects_tool_returns_semantic_results(mock_ctx: C
         group_id="default",
         target_group_id=None,
         item_id=None,
+        item_pattern=None,
+        item_regex=None,
+        exclude_item_pattern=None,
+        exclude_item_regex=None,
+        case_sensitive=False,
         include_payloads=True,
     )
 
@@ -159,5 +164,48 @@ async def test_validate_config_objects_tool_forwards_product_scoped_groups(mock_
         group_id=None,
         target_group_id=None,
         item_id="default",
+        item_pattern=None,
+        item_regex=None,
+        exclude_item_pattern=None,
+        exclude_item_regex=None,
+        case_sensitive=False,
+        include_payloads=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_config_objects_tool_forwards_item_filters(mock_ctx: Context) -> None:
+    """Semantic validation should forward item filters to sync validation."""
+    impl = AsyncMock(return_value={"items": []})
+
+    app = _FakeApp()
+    register_validate_config_objects(app, impl=impl)  # type: ignore[arg-type]
+
+    result = await app.tools["validate_config_objects"](
+        mock_ctx,
+        resource_kind="sources",
+        source_server="dev-dvb",
+        target_server="dev-dva",
+        source_group="default",
+        item_pattern="sdpe-rest-* but not sdpe-rest-test-*",
+        item_regex=r"^sdpe-rest-",
+        exclude_item_pattern="*-tmp",
+        case_sensitive=True,
+    )
+
+    assert result["semantic_in_sync"] is True
+    impl.assert_awaited_once_with(
+        "sources",
+        "dev-dvb",
+        "dev-dva",
+        product=ProductsCore.STREAM,
+        group_id="default",
+        target_group_id=None,
+        item_id=None,
+        item_pattern="sdpe-rest-* but not sdpe-rest-test-*",
+        item_regex=r"^sdpe-rest-",
+        exclude_item_pattern="*-tmp",
+        exclude_item_regex=None,
+        case_sensitive=True,
         include_payloads=True,
     )

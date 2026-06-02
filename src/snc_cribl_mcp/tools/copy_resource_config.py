@@ -22,7 +22,9 @@ def register(app: FastMCP, *, impl: CopyResourceConfigFunc) -> None:
         name="copy_resource_config",
         description=(
             "Copy groups, sources, destinations, pipelines, routes, breakers, lookups, or variables from one "
-            "configured Cribl leader to another. Group-scoped resources support different source and target group selectors."
+            "configured Cribl leader to another. Group-scoped resources support different source and target group selectors. "
+            "Use item_pattern for wildcard boolean expressions such as 'oodp-* and not oodp-source-*' or 'oodp-* but not "
+            "oodp-source-*', item_regex for regular expressions, and dry_run=true to inspect planned actions without writing."
         ),
         annotations={
             "title": "Copy config between leaders",
@@ -37,11 +39,17 @@ def register(app: FastMCP, *, impl: CopyResourceConfigFunc) -> None:
         source_group: str | None = None,
         target_group: str | None = None,
         item_id: str | None = None,
+        item_pattern: str | None = None,
+        item_regex: str | None = None,
+        exclude_item_pattern: str | None = None,
+        exclude_item_regex: str | None = None,
         product: ProductName = "stream",
         *,
+        case_sensitive: bool = False,
         overwrite: bool = True,
         validate_after: bool = True,
         append_routes: bool = False,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         """Copy one config or a whole resource scope between leaders."""
         await ctx.info(f"Copying Cribl {resource_kind} from '{source_server}' to '{target_server}'.")
@@ -65,9 +73,15 @@ def register(app: FastMCP, *, impl: CopyResourceConfigFunc) -> None:
             group_id=source_group,
             target_group_id=target_group,
             item_id=item_id,
+            item_pattern=item_pattern,
+            item_regex=item_regex,
+            exclude_item_pattern=exclude_item_pattern,
+            exclude_item_regex=exclude_item_regex,
+            case_sensitive=case_sensitive,
             overwrite=overwrite,
             validate_after=validate_after,
             append_routes=append_routes,
+            dry_run=dry_run,
         )
 
 

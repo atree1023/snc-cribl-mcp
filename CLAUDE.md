@@ -87,6 +87,7 @@ uv run pyright                             # then type check
 **Cross-leader mutation workflows:**
 
 - `sync_user` can create or replicate local users. Cribl user reads do not expose passwords, so creation requires an explicit `password`, a `password_env`, or one of the tool's `.env`/environment fallback names. Never return password values in tool responses.
+- `copy_resource_config`, `validate_resource_sync`, and `validate_config_objects` support item ID subset selection with `item_pattern` wildcard boolean expressions such as `oodp-* but not oodp-source-*`, `item_regex`, explicit exclude filters, and `case_sensitive`. Use `dry_run=true` on copy calls to confirm matched configs and planned create/update/append/skip actions before writing.
 - `replicate_group_config` and `validate_group_config` are the high-level group/fleet workflows. They cover group/fleet settings plus variables, breakers, lookups, destinations, pipelines, sources, and routes.
 - `replicate_system_settings` and `validate_system_settings` operate on global Cribl system settings from the Global Settings page. They intentionally use direct `/system/settings/conf` HTTP because the installed SDK can reject valid live payloads where disabled SSL settings omit certificate fields.
 

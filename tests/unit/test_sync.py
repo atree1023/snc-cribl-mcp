@@ -206,6 +206,59 @@ def test_index_items_skips_entries_without_ids() -> None:
     }
 
 
+def test_item_filter_supports_boolean_wildcards_regex_and_exclusions() -> None:
+    """Item filters should support wildcard boolean expressions plus regex selectors."""
+    predicate, details = sync_module._build_item_filter(
+        item_id=None,
+        item_pattern="oodp-* but not oodp-source-*",
+        item_regex=r"^oodp-",
+        exclude_item_pattern=None,
+        exclude_item_regex=r"-tmp$",
+        case_sensitive=False,
+    )
+
+    assert details == {
+        "mode": "filtered",
+        "case_sensitive": False,
+        "item_pattern": "oodp-* but not oodp-source-*",
+        "item_regex": r"^oodp-",
+        "exclude_item_regex": r"-tmp$",
+    }
+    assert predicate("oodp-main")
+    assert predicate("OODP-MAIN")
+    assert not predicate("oodp-source-main")
+    assert not predicate("oodp-main-tmp")
+    assert not predicate("other-main")
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        sync_module._build_item_filter(
+            item_id="one",
+            item_pattern="two*",
+            item_regex=None,
+            exclude_item_pattern=None,
+            exclude_item_regex=None,
+            case_sensitive=False,
+        )
+    with pytest.raises(ValueError, match="unmatched"):
+        sync_module._build_item_filter(
+            item_id=None,
+            item_pattern="(oodp-*",
+            item_regex=None,
+            exclude_item_pattern=None,
+            exclude_item_regex=None,
+            case_sensitive=False,
+        )
+    with pytest.raises(ValueError, match="Invalid item_regex"):
+        sync_module._build_item_filter(
+            item_id=None,
+            item_pattern=None,
+            item_regex="[",
+            exclude_item_pattern=None,
+            exclude_item_regex=None,
+            case_sensitive=False,
+        )
+
+
 def test_compare_items_raw_bypasses_resource_canonicalization() -> None:
     """Raw comparisons should not depend on one resource kind's canonicalizer."""
     result = sync_module._compare_items(
@@ -319,6 +372,57 @@ async def test_validate_resource_sync_collection_reports_differences(monkeypatch
     }
     assert "source" not in result["items"][0]
     assert "target" not in result["items"][0]
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_filters_collection_with_boolean_pattern(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Collection validation should compare only IDs matched by item filters."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    list_resource = AsyncMock(
+        side_effect=[
+            [
+                {"id": "sdpe-rest-main", "type": "http"},
+                {"id": "sdpe-rest-test", "type": "http"},
+                {"id": "other-rest-main", "type": "http"},
+            ],
+            [
+                {"id": "sdpe-rest-main", "type": "http"},
+                {"id": "sdpe-rest-extra", "type": "http"},
+                {"id": "sdpe-rest-test", "type": "http"},
+            ],
+        ]
+    )
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+
+    result = await sync_module.validate_resource_sync(
+        "sources",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+        item_pattern="sdpe-rest-* but not sdpe-rest-test",
+    )
+
+    assert result["item_selection"]["item_pattern"] == "sdpe-rest-* but not sdpe-rest-test"
+    assert result["matched_count"] == 2
+    assert result["counts"] == {
+        "source": 1,
+        "target": 2,
+        "in_sync": 1,
+        "different": 0,
+        "missing_on_source": 1,
+        "missing_on_target": 0,
+    }
+    assert {item["item_id"]: item["status"] for item in result["items"]} == {
+        "sdpe-rest-extra": "missing_on_source",
+        "sdpe-rest-main": "in_sync",
+    }
 
 
 @pytest.mark.asyncio
@@ -480,6 +584,56 @@ async def test_copy_resource_config_continues_after_per_item_write_failure(
         },
     ]
     assert create_resource.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_dry_run_filters_and_reports_planned_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dry-run copy should inspect targets and report planned actions without writes."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_items = [
+        {"id": "oodp-main", "conf": {"output": "default"}},
+        {"id": "oodp-extra", "conf": {"output": "default"}},
+        {"id": "oodp-source-main", "conf": {"output": "default"}},
+        {"id": "other-main", "conf": {"output": "default"}},
+    ]
+    list_resource = AsyncMock(return_value=source_items)
+    maybe_get_item = AsyncMock(side_effect=[None, {"id": "oodp-extra", "conf": {"output": "old"}}])
+    create_resource = AsyncMock()
+    update_resource = AsyncMock()
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "create_resource", create_resource)
+    monkeypatch.setattr(sync_module, "update_resource", update_resource)
+
+    result = await sync_module.copy_resource_config(
+        "pipelines",
+        "golden.oak",
+        "cribl.cloud",
+        group_id="default",
+        item_pattern="oodp-* but not oodp-source-*",
+        dry_run=True,
+    )
+
+    assert result["dry_run"] is True
+    assert result["matched_count"] == 2
+    assert result["copied_count"] == 0
+    assert result["planned_count"] == 2
+    assert result["planned_created_count"] == 1
+    assert result["planned_updated_count"] == 1
+    assert result["items"] == [
+        {"item_id": "oodp-main", "action": "would_create"},
+        {"item_id": "oodp-extra", "action": "would_update"},
+    ]
+    create_resource.assert_not_awaited()
+    update_resource.assert_not_awaited()
 
 
 @pytest.mark.asyncio

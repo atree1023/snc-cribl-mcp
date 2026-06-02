@@ -23,7 +23,9 @@ def register(app: FastMCP, *, impl: ValidateResourceSyncFunc) -> None:
         description=(
             "Compare groups, sources, destinations, pipelines, routes, breakers, lookups, or variables between two configured "
             "Cribl leaders. "
-            "Group-scoped resources support different source and target group selectors."
+            "Group-scoped resources support different source and target group selectors. Use item_pattern for wildcard boolean "
+            "expressions such as 'sdpe-rest-* and not sdpe-rest-test-*' or 'sdpe-rest-* but not sdpe-rest-test-*', "
+            "item_regex for regular expressions, and exclude filters to compare a matched subset in one call."
         ),
         annotations={
             "title": "Validate config sync",
@@ -38,8 +40,13 @@ def register(app: FastMCP, *, impl: ValidateResourceSyncFunc) -> None:
         source_group: str | None = None,
         target_group: str | None = None,
         item_id: str | None = None,
+        item_pattern: str | None = None,
+        item_regex: str | None = None,
+        exclude_item_pattern: str | None = None,
+        exclude_item_regex: str | None = None,
         product: ProductName = "stream",
         *,
+        case_sensitive: bool = False,
         include_payloads: bool = False,
     ) -> dict[str, Any]:
         """Validate whether one config or scope is in sync between leaders."""
@@ -64,6 +71,11 @@ def register(app: FastMCP, *, impl: ValidateResourceSyncFunc) -> None:
             group_id=source_group,
             target_group_id=target_group,
             item_id=item_id,
+            item_pattern=item_pattern,
+            item_regex=item_regex,
+            exclude_item_pattern=exclude_item_pattern,
+            exclude_item_regex=exclude_item_regex,
+            case_sensitive=case_sensitive,
             include_payloads=include_payloads,
         )
 

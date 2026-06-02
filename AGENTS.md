@@ -84,6 +84,8 @@ docs/                      # SDK docs, schemas, examples
 
 **Prompts:** Summarize Cribl Configuration, Find Broken Sources, Analyze Pipeline, Troubleshoot Destination
 
+**Subset sync:** `copy_resource_config`, `validate_resource_sync`, and `validate_config_objects` support item ID filters with `item_pattern` wildcard boolean expressions such as `oodp-* but not oodp-source-*`, `item_regex`, exclude filters, and `case_sensitive`. Use `dry_run=true` on copy calls to inspect matched configs and planned actions before writing.
+
 ## Common Workflows
 
 ### Add New Tool

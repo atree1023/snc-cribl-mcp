@@ -75,6 +75,11 @@ async def test_validate_resource_sync_tool_forwards_group_resource_arguments(moc
         group_id=None,
         target_group_id=None,
         item_id="default",
+        item_pattern=None,
+        item_regex=None,
+        exclude_item_pattern=None,
+        exclude_item_regex=None,
+        case_sensitive=False,
         include_payloads=False,
     )
 
@@ -163,5 +168,47 @@ async def test_validate_resource_sync_tool_forwards_group_scoped_resources(
         group_id="default",
         target_group_id="edge-default",
         item_id=None,
+        item_pattern=None,
+        item_regex=None,
+        exclude_item_pattern=None,
+        exclude_item_regex=None,
+        case_sensitive=False,
         include_payloads=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_resource_sync_tool_forwards_item_filters(mock_ctx: Context) -> None:
+    """The tool should forward wildcard and regex item filters."""
+    impl = AsyncMock(return_value={"in_sync": False, "matched_count": 2})
+
+    app = _FakeApp()
+    register_validate_resource_sync(app, impl=impl)  # type: ignore[arg-type]
+
+    result = await app.tools["validate_resource_sync"](
+        mock_ctx,
+        resource_kind="pipelines",
+        source_server="dev-dvb",
+        target_server="dev-dva",
+        source_group="default",
+        item_pattern="oodp-* but not oodp-source-*",
+        exclude_item_regex=r"-tmp$",
+        case_sensitive=True,
+    )
+
+    assert result["matched_count"] == 2
+    impl.assert_awaited_once_with(
+        "pipelines",
+        "dev-dvb",
+        "dev-dva",
+        product=ProductsCore.STREAM,
+        group_id="default",
+        target_group_id=None,
+        item_id=None,
+        item_pattern="oodp-* but not oodp-source-*",
+        item_regex=None,
+        exclude_item_pattern=None,
+        exclude_item_regex=r"-tmp$",
+        case_sensitive=True,
+        include_payloads=False,
     )

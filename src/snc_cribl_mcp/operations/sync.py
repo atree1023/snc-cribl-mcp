@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from typing import Any, Literal, cast
 
 import httpx
@@ -27,9 +29,11 @@ from .resource_actions import (
 
 _MAX_DIFF_PATHS = 25
 _MAX_VALIDATE_RESPONSE_BYTES = 900_000
+_SELECTOR_TOKEN_RE = re.compile(r"\(|\)|\bAND\b|\bOR\b|\bNOT\b|[^\s()]+", re.IGNORECASE)
 type GroupMatchField = Literal["description", "id", "name", "passthrough"]
 type JsonValue = dict[str, "JsonValue"] | list["JsonValue"] | str | int | float | bool | None
 type CompareKind = ResourceKind | Literal["raw"]
+type ItemPredicate = Callable[[str], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +55,243 @@ class ResolvedGroupSelector:
             "name": self.name,
             "description": self.description,
         }
+
+
+def _and_predicate(left: ItemPredicate, right: ItemPredicate) -> ItemPredicate:
+    """Return a predicate that requires both child predicates to match."""
+
+    def _matches(item_id: str) -> bool:
+        return left(item_id) and right(item_id)
+
+    return _matches
+
+
+def _or_predicate(left: ItemPredicate, right: ItemPredicate) -> ItemPredicate:
+    """Return a predicate that requires either child predicate to match."""
+
+    def _matches(item_id: str) -> bool:
+        return left(item_id) or right(item_id)
+
+    return _matches
+
+
+def _not_predicate(predicate: ItemPredicate) -> ItemPredicate:
+    """Return a predicate that negates another predicate."""
+
+    def _matches(item_id: str) -> bool:
+        return not predicate(item_id)
+
+    return _matches
+
+
+def _wildcard_predicate(pattern: str, *, case_sensitive: bool) -> ItemPredicate:
+    """Compile one wildcard pattern into an item-id predicate."""
+    if not pattern:
+        msg = "Wildcard item patterns must not be blank."
+        raise ValueError(msg)
+    expected = pattern if case_sensitive else pattern.casefold()
+
+    def _matches(item_id: str) -> bool:
+        candidate = item_id if case_sensitive else item_id.casefold()
+        return fnmatchcase(candidate, expected)
+
+    return _matches
+
+
+def _exact_predicate(expected: str) -> ItemPredicate:
+    """Compile one exact item id into an item-id predicate."""
+
+    def _matches(item_id: str) -> bool:
+        return item_id == expected
+
+    return _matches
+
+
+def _regex_predicate(pattern: str, *, case_sensitive: bool, field_name: str) -> ItemPredicate:
+    """Compile one regular expression into an item-id predicate."""
+    if not pattern.strip():
+        msg = f"{field_name} must not be blank."
+        raise ValueError(msg)
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        compiled = re.compile(pattern, flags)
+    except re.error as exc:
+        msg = f"Invalid {field_name} regular expression: {exc}."
+        raise ValueError(msg) from exc
+
+    def _matches(item_id: str) -> bool:
+        return compiled.search(item_id) is not None
+
+    return _matches
+
+
+def _selector_tokens(expression: str) -> list[str]:
+    """Tokenize a wildcard boolean expression."""
+    normalized = re.sub(r"\bbut\s+not\b", "and not", expression.strip(), flags=re.IGNORECASE)
+    if not normalized:
+        msg = "item_pattern must not be blank."
+        raise ValueError(msg)
+    return _SELECTOR_TOKEN_RE.findall(normalized)
+
+
+def _operator(token: str) -> str | None:
+    """Return the normalized operator for a selector token."""
+    normalized = token.casefold()
+    return normalized if normalized in {"and", "or", "not"} else None
+
+
+class _WildcardExpressionParser:
+    """Parse boolean wildcard expressions into predicates."""
+
+    def __init__(self, tokens: list[str], *, case_sensitive: bool) -> None:
+        self._tokens = tokens
+        self._case_sensitive = case_sensitive
+        self._index = 0
+
+    def parse(self) -> ItemPredicate:
+        """Parse all tokens into a predicate."""
+        predicate = self._parse_or()
+        if self._peek() is not None:
+            msg = f"Unexpected token '{self._peek()}' in item_pattern."
+            raise ValueError(msg)
+        return predicate
+
+    def _peek(self) -> str | None:
+        if self._index >= len(self._tokens):
+            return None
+        return self._tokens[self._index]
+
+    def _pop(self) -> str:
+        current = self._tokens[self._index]
+        self._index += 1
+        return current
+
+    def _parse_or(self) -> ItemPredicate:
+        predicate = self._parse_and()
+        while self._peek() is not None and _operator(cast("str", self._peek())) == "or":
+            self._pop()
+            predicate = _or_predicate(predicate, self._parse_and())
+        return predicate
+
+    def _parse_and(self) -> ItemPredicate:
+        predicate = self._parse_factor()
+        while self._peek() is not None:
+            current = cast("str", self._peek())
+            operator = _operator(current)
+            if current == ")" or operator == "or":
+                break
+            if operator == "and":
+                self._pop()
+            predicate = _and_predicate(predicate, self._parse_factor())
+        return predicate
+
+    def _parse_factor(self) -> ItemPredicate:
+        current = self._peek()
+        if current is None:
+            msg = "item_pattern ended before a wildcard pattern was provided."
+            raise ValueError(msg)
+        operator = _operator(current)
+        if operator == "not":
+            self._pop()
+            return _not_predicate(self._parse_factor())
+        if operator in {"and", "or"}:
+            msg = f"Unexpected operator '{current}' in item_pattern."
+            raise ValueError(msg)
+        if current == "(":
+            self._pop()
+            predicate = self._parse_or()
+            if self._peek() != ")":
+                msg = "item_pattern has an unmatched '('."
+                raise ValueError(msg)
+            self._pop()
+            return predicate
+        if current == ")":
+            msg = "item_pattern has an unmatched ')'."
+            raise ValueError(msg)
+        return _wildcard_predicate(self._pop(), case_sensitive=self._case_sensitive)
+
+
+def _wildcard_expression_predicate(expression: str, *, case_sensitive: bool) -> ItemPredicate:
+    """Compile a boolean wildcard selector expression."""
+    tokens = _selector_tokens(expression)
+    if not tokens:
+        msg = "item_pattern must contain at least one wildcard pattern."
+        raise ValueError(msg)
+    return _WildcardExpressionParser(tokens, case_sensitive=case_sensitive).parse()
+
+
+def _build_item_filter(  # noqa: PLR0913
+    *,
+    item_id: str | None,
+    item_pattern: str | None,
+    item_regex: str | None,
+    exclude_item_pattern: str | None,
+    exclude_item_regex: str | None,
+    case_sensitive: bool,
+) -> tuple[ItemPredicate, dict[str, Any]]:
+    """Build an item-id predicate and JSON-friendly selector metadata."""
+    non_exact_filter = any((item_pattern, item_regex, exclude_item_pattern, exclude_item_regex))
+    if item_id is not None and non_exact_filter:
+        msg = "item_id cannot be combined with item_pattern, item_regex, exclude_item_pattern, or exclude_item_regex."
+        raise ValueError(msg)
+
+    if item_id is not None:
+        return (
+            _exact_predicate(item_id),
+            {
+                "mode": "exact",
+                "item_id": item_id,
+                "case_sensitive": True,
+            },
+        )
+
+    include_predicates: list[ItemPredicate] = []
+    exclude_predicates: list[ItemPredicate] = []
+    details: dict[str, Any] = {
+        "mode": "all",
+        "case_sensitive": case_sensitive,
+    }
+
+    if item_pattern is not None:
+        include_predicates.append(_wildcard_expression_predicate(item_pattern, case_sensitive=case_sensitive))
+        details["mode"] = "filtered"
+        details["item_pattern"] = item_pattern
+    if item_regex is not None:
+        include_predicates.append(_regex_predicate(item_regex, case_sensitive=case_sensitive, field_name="item_regex"))
+        details["mode"] = "filtered"
+        details["item_regex"] = item_regex
+    if exclude_item_pattern is not None:
+        exclude_predicates.append(_wildcard_expression_predicate(exclude_item_pattern, case_sensitive=case_sensitive))
+        details["mode"] = "filtered"
+        details["exclude_item_pattern"] = exclude_item_pattern
+    if exclude_item_regex is not None:
+        exclude_predicates.append(
+            _regex_predicate(exclude_item_regex, case_sensitive=case_sensitive, field_name="exclude_item_regex")
+        )
+        details["mode"] = "filtered"
+        details["exclude_item_regex"] = exclude_item_regex
+
+    def _matches(candidate_item_id: str) -> bool:
+        included = all(predicate(candidate_item_id) for predicate in include_predicates) if include_predicates else True
+        excluded = any(predicate(candidate_item_id) for predicate in exclude_predicates)
+        return included and not excluded
+
+    return _matches, details
+
+
+def _filter_indexed_items(
+    indexed: dict[str, dict[str, Any]],
+    predicate: ItemPredicate,
+) -> dict[str, dict[str, Any]]:
+    """Return indexed items whose IDs match the selector predicate."""
+    return {item_id: item for item_id, item in indexed.items() if predicate(item_id)}
+
+
+def _selection_warnings(selection: dict[str, Any], *, matched_count: int) -> list[str]:
+    """Return warnings for surprising item-selection outcomes."""
+    if selection["mode"] != "all" and matched_count == 0:
+        return ["No items matched the requested item filters."]
+    return []
 
 
 def _resource_item_id(item: dict[str, Any]) -> str | None:
@@ -300,7 +541,7 @@ def _apply_validate_response_limit(response: dict[str, Any]) -> dict[str, Any]:
     adjusted = dict(response)
     adjusted_items = [dict(item) for item in items]
     adjusted["items"] = adjusted_items
-    warnings: list[str] = []
+    warnings = [warning for warning in adjusted.get("warnings", []) if isinstance(warning, str)]
 
     if _estimate_json_size_bytes(adjusted) <= _MAX_VALIDATE_RESPONSE_BYTES:
         return adjusted
@@ -438,11 +679,24 @@ async def validate_resource_sync(  # noqa: PLR0913
     group_id: str | None = None,
     target_group_id: str | None = None,
     item_id: str | None = None,
+    item_pattern: str | None = None,
+    item_regex: str | None = None,
+    exclude_item_pattern: str | None = None,
+    exclude_item_regex: str | None = None,
+    case_sensitive: bool = False,
     include_payloads: bool = False,
 ) -> dict[str, Any]:
     """Validate whether two leaders are in sync for a resource scope."""
     spec = get_resource_spec(kind)
     effective_target_group = target_group_id or group_id
+    item_filter, item_selection = _build_item_filter(
+        item_id=item_id,
+        item_pattern=item_pattern,
+        item_regex=item_regex,
+        exclude_item_pattern=exclude_item_pattern,
+        exclude_item_regex=exclude_item_regex,
+        case_sensitive=case_sensitive,
+    )
 
     async with connect_server_pair(source_server, target_server) as (source, target):
         source_group = None
@@ -498,6 +752,8 @@ async def validate_resource_sync(  # noqa: PLR0913
                     "target_group_id": resolved_target_group_id,
                     "source_group": source_group.as_dict() if source_group else None,
                     "target_group": target_group.as_dict() if target_group else None,
+                    "item_selection": item_selection,
+                    "matched_count": 1,
                     "in_sync": item_result["status"] == "in_sync",
                     "items": [item_result],
                 }
@@ -521,6 +777,7 @@ async def validate_resource_sync(  # noqa: PLR0913
         )
         source_index = _index_items(source_items)
         target_index = _index_items(target_items)
+        compared_ids = sorted(item_id for item_id in set(source_index) | set(target_index) if item_filter(item_id))
 
         results = [
             _compare_items(
@@ -530,34 +787,38 @@ async def validate_resource_sync(  # noqa: PLR0913
                 target_index.get(compared_id),
                 include_payloads=include_payloads,
             )
-            for compared_id in sorted(set(source_index) | set(target_index))
+            for compared_id in compared_ids
         ]
 
-        return _apply_validate_response_limit(
-            {
-                "resource_kind": kind,
-                "scope": spec.scope,
-                "source_server": source.server_name,
-                "target_server": target.server_name,
-                "product": product.value if product else None,
-                "source_group_selector": group_id,
-                "target_group_selector": effective_target_group,
-                "group_id": resolved_source_group_id,
-                "target_group_id": resolved_target_group_id,
-                "source_group": source_group.as_dict() if source_group else None,
-                "target_group": target_group.as_dict() if target_group else None,
-                "in_sync": all(result["status"] == "in_sync" for result in results),
-                "counts": {
-                    "source": len(source_index),
-                    "target": len(target_index),
-                    "in_sync": sum(result["status"] == "in_sync" for result in results),
-                    "different": sum(result["status"] == "different" for result in results),
-                    "missing_on_source": sum(result["status"] == "missing_on_source" for result in results),
-                    "missing_on_target": sum(result["status"] == "missing_on_target" for result in results),
-                },
-                "items": results,
-            }
-        )
+        response: dict[str, Any] = {
+            "resource_kind": kind,
+            "scope": spec.scope,
+            "source_server": source.server_name,
+            "target_server": target.server_name,
+            "product": product.value if product else None,
+            "source_group_selector": group_id,
+            "target_group_selector": effective_target_group,
+            "group_id": resolved_source_group_id,
+            "target_group_id": resolved_target_group_id,
+            "source_group": source_group.as_dict() if source_group else None,
+            "target_group": target_group.as_dict() if target_group else None,
+            "item_selection": item_selection,
+            "matched_count": len(compared_ids),
+            "in_sync": all(result["status"] == "in_sync" for result in results),
+            "counts": {
+                "source": sum(compared_id in source_index for compared_id in compared_ids),
+                "target": sum(compared_id in target_index for compared_id in compared_ids),
+                "in_sync": sum(result["status"] == "in_sync" for result in results),
+                "different": sum(result["status"] == "different" for result in results),
+                "missing_on_source": sum(result["status"] == "missing_on_source" for result in results),
+                "missing_on_target": sum(result["status"] == "missing_on_target" for result in results),
+            },
+            "items": results,
+        }
+        warnings = _selection_warnings(item_selection, matched_count=len(compared_ids))
+        if warnings:
+            response["warnings"] = warnings
+        return _apply_validate_response_limit(response)
 
 
 async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
@@ -569,13 +830,27 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
     group_id: str | None = None,
     target_group_id: str | None = None,
     item_id: str | None = None,
+    item_pattern: str | None = None,
+    item_regex: str | None = None,
+    exclude_item_pattern: str | None = None,
+    exclude_item_regex: str | None = None,
+    case_sensitive: bool = False,
     overwrite: bool = True,
     validate_after: bool = True,
     append_routes: bool = False,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Copy one or more configs from a source leader to a target leader."""
     spec = get_resource_spec(kind)
     effective_target_group = target_group_id or group_id
+    item_filter, item_selection = _build_item_filter(
+        item_id=item_id,
+        item_pattern=item_pattern,
+        item_regex=item_regex,
+        exclude_item_pattern=exclude_item_pattern,
+        exclude_item_regex=exclude_item_regex,
+        case_sensitive=case_sensitive,
+    )
 
     async with connect_server_pair(source_server, target_server) as (source, target):
         source_group = None
@@ -610,16 +885,19 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
             )
             source_items[item_id] = source_item
         else:
-            source_items = _index_items(
-                await list_resource(
-                    source.client,
-                    kind,
-                    timeout_ms=source.config.timeout_ms,
-                    product=product,
-                    group_id=resolved_source_group_id,
-                    security=await _resolved_security(source),
-                    hydrate_lookup_content=kind == "lookups",
-                )
+            source_items = _filter_indexed_items(
+                _index_items(
+                    await list_resource(
+                        source.client,
+                        kind,
+                        timeout_ms=source.config.timeout_ms,
+                        product=product,
+                        group_id=resolved_source_group_id,
+                        security=await _resolved_security(source),
+                        hydrate_lookup_content=kind == "lookups",
+                    )
+                ),
+                item_filter,
             )
 
         item_results: list[dict[str, Any]] = []
@@ -633,6 +911,44 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     product=product,
                     group_id=resolved_target_group_id,
                 )
+
+                if dry_run:
+                    if target_item is None:
+                        if spec.supports("create"):
+                            result = {
+                                "item_id": current_item_id,
+                                "action": "would_create",
+                            }
+                        elif kind == "routes" and spec.supports("update"):
+                            result = {
+                                "item_id": current_item_id,
+                                "action": "unsupported",
+                                "reason": "Routes require an existing target route set before they can be updated or appended.",
+                            }
+                        else:
+                            result = {
+                                "item_id": current_item_id,
+                                "action": "unsupported",
+                                "reason": f"Create is not supported for resource kind '{kind}'.",
+                            }
+                    elif not overwrite:
+                        result = {
+                            "item_id": current_item_id,
+                            "action": "would_skip",
+                            "reason": "Target item already exists and overwrite is disabled.",
+                        }
+                    elif kind == "routes" and append_routes:
+                        result = {
+                            "item_id": current_item_id,
+                            "action": "would_append",
+                        }
+                    else:
+                        result = {
+                            "item_id": current_item_id,
+                            "action": "would_update",
+                        }
+                    item_results.append(result)
+                    continue
 
                 if target_item is None:
                     if spec.supports("create"):
@@ -730,7 +1046,7 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     result["validation_error"] = _serialize_copy_error(exc)
             item_results.append(result)
 
-        return {
+        response: dict[str, Any] = {
             "resource_kind": kind,
             "scope": spec.scope,
             "source_server": source.server_name,
@@ -742,15 +1058,34 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
             "target_group_id": resolved_target_group_id,
             "source_group": source_group.as_dict() if source_group else None,
             "target_group": target_group.as_dict() if target_group else None,
+            "item_selection": item_selection,
+            "matched_count": len(source_items),
+            "dry_run": dry_run,
             "copied_count": sum(result.get("action") in {"appended", "created", "updated"} for result in item_results),
             "created_count": sum(result.get("action") == "created" for result in item_results),
             "updated_count": sum(result.get("action") == "updated" for result in item_results),
             "appended_count": sum(result.get("action") == "appended" for result in item_results),
-            "skipped_count": sum(result.get("action") == "skipped" for result in item_results),
+            "skipped_count": sum(result.get("action") in {"skipped", "would_skip"} for result in item_results),
             "unsupported_count": sum(result.get("action") == "unsupported" for result in item_results),
             "failed_count": sum(result.get("action") == "failed" for result in item_results),
             "items": item_results,
         }
+        if dry_run:
+            response.update(
+                {
+                    "planned_count": sum(
+                        result.get("action") in {"would_append", "would_create", "would_update"} for result in item_results
+                    ),
+                    "planned_created_count": sum(result.get("action") == "would_create" for result in item_results),
+                    "planned_updated_count": sum(result.get("action") == "would_update" for result in item_results),
+                    "planned_appended_count": sum(result.get("action") == "would_append" for result in item_results),
+                    "planned_skipped_count": sum(result.get("action") == "would_skip" for result in item_results),
+                }
+            )
+        warnings = _selection_warnings(item_selection, matched_count=len(source_items))
+        if warnings:
+            response["warnings"] = warnings
+        return response
 
 
 __all__ = [
