@@ -1,6 +1,6 @@
 # SNC Cribl MCP
 
-MCP server providing tools to query Cribl Stream and Edge deployments. Uses FastMCP 2 and the cribl-control-plane SDK.
+MCP server providing tools to query Cribl Stream and Edge deployments. Uses FastMCP 3 and the cribl-control-plane SDK.
 
 > **For Claude Code users:** See `CLAUDE.md` for detailed guidance on architecture decisions, workflows, and patterns.
 
@@ -8,7 +8,7 @@ MCP server providing tools to query Cribl Stream and Edge deployments. Uses Fast
 
 ```bash
 uv sync                                    # install dependencies
-uv run snc_cribl_mcp                       # run server
+uv run snc-cribl-mcp                       # run server
 uv run pytest                              # run tests
 ```
 

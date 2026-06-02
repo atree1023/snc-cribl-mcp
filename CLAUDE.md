@@ -26,7 +26,7 @@ MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and 
 
 - Inspect the actual installed package in `.venv/` rather than relying on memory
 - For `cribl-control-plane` SDK: check `docs/CRIBL-SDK-README.md` for examples, documentation and best practices
-- For endpoints where the SDK does not have a dedicated function, consult the [Cribl API reference](https://docs.cribl.io/cribl-as-code/api/) or place a local OpenAPI spec at `docs/cribl-openapi-spec.yml` (gitignored; download from Cribl)
+- For endpoints where the SDK does not have a dedicated function, consult the local `docs/CRIBL-API-README.md`, `docs/CRIBL-API-AUTH.md`, or `docs/cribl-llms.txt`, the [Cribl API reference](https://docs.cribl.io/cribl-as-code/api/), or place a local OpenAPI spec at `docs/cribl-openapi-spec.yml` (gitignored; download from Cribl)
 - For FastMCP: Check `docs/fastmcp-llms.txt` for links to latest documentation from gofastmcp.com
 
 ## Commands
@@ -40,6 +40,8 @@ uv run python -m snc_cribl_mcp.server      # run server via module
 uv run pytest                              # all tests
 uv run pytest tests/unit/test_server.py   # single file
 uv run pytest --cov=src/snc_cribl_mcp     # with coverage report
+# Note: pytest is configured with --cov-fail-under=80, so `uv run pytest`
+# FAILS if total coverage drops below 80% (it is a gate, not just a report).
 
 # Quality (run all three before committing)
 uv run ruff format                         # format first
@@ -176,7 +178,7 @@ Configuration file (`config.toml`) loaded by `src/snc_cribl_mcp/config.py`:
 
 When you need to find something:
 
-- **Tool definitions**: `src/snc_cribl_mcp/tools/list_*.py`
+- **Tool definitions**: `src/snc_cribl_mcp/tools/*.py` (list tools are `list_*.py`; non-list tools include `packs.py`, `edge_info.py`, `leader_overview.py`, `group_sync.py`, `system_settings.py`, `users.py`, `get_config_objects.py`, `copy_resource_config.py`, `validate_config_objects.py`, `validate_resource_sync.py`)
 - **API logic**: `src/snc_cribl_mcp/operations/*.py`
 - **Pydantic models**: `src/snc_cribl_mcp/models/`
 - **SDK examples**: `docs/CRIBL-SDK-README.md`
