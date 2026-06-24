@@ -152,22 +152,22 @@ https://${hostname}:${port}/api/v1/w/${nodeId}
 {{% /tab-item %}}
 {{% /tabs %}}
 
-To get the `nodeId`, send a request to the `GET /master/workers` endpoint using the [global context](#base-url-global) for the base URL. The response lists detailed metadata for all Worker and Edge Nodes that the Leader manages. Use the `id` value for the desired Node as the `nodeId` in the request URL.
+To get the `nodeId`, send a request to the `GET /products/{product}/workers` endpoint using the [global context](#base-url-global) for the base URL. The response lists detailed metadata for all Worker and Edge Nodes that the Leader manages. Use the `id` value for the desired Node as the `nodeId` in the request URL.
 
-For example, to send a request to the `GET /edge/metadata` endpoint for the Edge Node `abc123a9-ea69-4066-b295-456defb55784`, the complete URL is:
+For example, to send a request to the `GET /health` endpoint for the Worker Node `abc123a9-ea69-4066-b295-456defb55784`, the complete URL is:
 
 {{% tabs "cloud" "cloud" "Cribl.Cloud and Hybrid Example (Worker/Edge Node)" "on-prem" "On-Prem Example (Worker/Edge Node)" %}}
 {{% tab-item "cloud" %}}
 
 ```
-https://${workspaceName}-${organizationId}.cribl.cloud/api/v1/w/abc123a9-ea69-4066-b295-456defb55784/edge/metadata
+https://${workspaceName}-${organizationId}.cribl.cloud/api/v1/w/abc123a9-ea69-4066-b295-456defb55784/health
 ```
 
 {{% /tab-item %}}
 {{% tab-item "on-prem" %}}
 
 ```
-https://${hostname}:${port}/api/v1/w/abc123a9-ea69-4066-b295-456defb55784/edge/metadata
+https://${hostname}:${port}/api/v1/w/abc123a9-ea69-4066-b295-456defb55784/health
 ```
 
 {{% /tab-item %}}
@@ -181,10 +181,10 @@ For [Cribl Search endpoints](/cribl-as-code/api-reference/control-plane/cribl-se
 https://${workspaceName}-${organizationId}.cribl.cloud/api/v1/m/default_search
 ```
 
-For example, for a request to the `GET /search/jobs` endpoint, the complete URL is:
+For example, for a request to the `GET /search/jobs/{id}` endpoint, the complete URL is:
 
 ```
-https://${workspaceName}-${organizationId}.cribl.cloud/api/v1/m/default_search/search/jobs
+https://${workspaceName}-${organizationId}.cribl.cloud/api/v1/m/default_search/search/jobs/{id}
 ```
 
 ### Management Plane Base URL {#mgmt-plane-base-url}
@@ -271,3 +271,5 @@ The Cribl API can return the following HTTP status codes in response headers:
 | 503 Service Unavailable    | The server could not handle the request due to temporary overload or maintenance. |
 
 See the [MDN Web Docs](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status) for more information about HTTP status codes.
+
+

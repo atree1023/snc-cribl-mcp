@@ -176,3 +176,4 @@ To use the script, you'll need:
 - The Python 3 Requests module (use brew or pip3 to install).
 - A working, distributed Cribl Stream or Edge installation, with a configured [Splunk HEC Source](/stream/sources-splunk-hec).
 - An admin username and password.
+
