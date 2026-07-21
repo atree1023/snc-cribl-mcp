@@ -30,6 +30,13 @@ Registered tools:
 - ``validate_group_config``: validate a whole worker group or Edge fleet
 - ``replicate_system_settings``: replicate global system settings
 - ``validate_system_settings``: validate global system settings
+- ``get_group_git_status``: inspect group/fleet Git and deployment status
+- ``get_group_git_diff``: inspect pending or deployed-baseline group/fleet diffs
+- ``commit_group_config``: commit one group/fleet configuration
+- ``deploy_group_config``: deploy an explicit group/fleet commit
+- ``commit_and_deploy_group``: commit and deploy one group/fleet
+- ``commit_and_deploy_all``: commit and deploy groups/fleets in dependency order
+- ``push_config_git``: push committed Cribl configuration to its Git remote
 """
 
 import logging
@@ -62,6 +69,15 @@ from .operations.sync import copy_resource_config, validate_resource_sync
 from .operations.system_settings import replicate_system_settings, validate_system_settings_sync
 from .operations.users import sync_user
 from .operations.variables import collect_product_variables
+from .operations.version_control import (
+    collect_group_git_diff,
+    collect_group_git_status,
+    commit_and_deploy_all,
+    commit_and_deploy_group,
+    commit_group_config,
+    deploy_group_config,
+    push_config_git,
+)
 from .tools.copy_resource_config import register as register_copy_resource_config
 from .tools.edge_info import register as register_edge_info
 from .tools.get_config_objects import register as register_get_config_objects
@@ -80,6 +96,7 @@ from .tools.system_settings import register as register_system_settings_tools
 from .tools.users import register as register_user_tools
 from .tools.validate_config_objects import register as register_validate_config_objects
 from .tools.validate_resource_sync import register as register_validate_resource_sync
+from .tools.version_control import register as register_version_control_tools
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -186,6 +203,16 @@ def _register_capabilities() -> None:
         app,
         replicate_impl=replicate_system_settings,
         validate_impl=validate_system_settings_sync,
+    )
+    register_version_control_tools(
+        app,
+        status_impl=collect_group_git_status,
+        diff_impl=collect_group_git_diff,
+        commit_impl=commit_group_config,
+        deploy_impl=deploy_group_config,
+        commit_deploy_impl=commit_and_deploy_group,
+        commit_deploy_all_impl=commit_and_deploy_all,
+        push_impl=push_config_git,
     )
     resources.register(app, deps=deps)
     prompts.register(app)

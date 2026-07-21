@@ -60,6 +60,12 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Create or replicate local users, using explicit or environment-sourced passwords because Cribl does not return passwords from the API.
   - Replicate and validate complete Stream worker groups or Edge fleets, including group/fleet settings, variables, event breakers, lookups, destinations, pipelines, sources, and routes.
   - Replicate and validate global system settings from the Global Settings page.
+- **Git-Safe Commit and Deployment Workflows**:
+  - Inspect Git status and compare the current configuration with either the deployed version or the current group/fleet commit.
+  - Commit or deploy one Stream worker group, Edge fleet, or subfleet, including controlled deployment of an existing commit for rollback.
+  - Commit and deploy all selected targets, ordering Edge parents before descendants and re-evaluating inherited subfleet changes after each parent commit.
+  - Push committed configuration to the Leader's configured Git remote with conflict, behind-branch, and drift preflights.
+  - Preview every mutation as a dry-run plan and execute only with the matching plan digest.
 - **Typed Pipeline Models**: 41 Pydantic models for pipeline function configurations (eval, mask, sampling, regex_extract, etc.) with full type safety.
 - **Typed Collector Models**: 9 Pydantic models for collector source configurations (S3, REST, database, Splunk, Azure Blob, GCS, filesystem, script, health check) with full type safety.
 - **Graceful Error Handling**: SDK validation errors return structured, user-friendly responses with actionable guidance instead of crashing.
@@ -188,7 +194,7 @@ uv run python -m snc_cribl_mcp.server
 
 ### Available MCP Tools
 
-The server exposes twenty-five MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://variables`, `cribl://packs`):
+The server exposes thirty-two MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://variables`, `cribl://packs`):
 
 #### `get_leader_overview`
 
@@ -358,6 +364,41 @@ Validates global Cribl system settings between two configured leaders.
 
 - **Returns:** JSON with an in-sync flag and differing setting paths. Use `include_payloads=true` when the raw source and target setting payloads are needed.
 
+#### `get_group_git_status`
+
+Reports Git and deployment state for one or all Stream worker groups and Edge fleets/subfleets.
+
+- **Returns:** Branch and ahead/behind state, conflicts, changed paths, committed and deployed versions, and current rollout node counts.
+
+#### `get_group_git_diff`
+
+Shows the configuration diff for one Stream worker group or Edge fleet/subfleet.
+
+- **Baselines:** `compare_to="deployed"` validates the complete pending deployment against the active `configVersion`; `compare_to="head"` shows only uncommitted changes.
+- **Returns:** A bounded diff plus a digest of the complete pending diff. Use `filename` to inspect one file or `diff_line_limit=0` for the full diff.
+
+#### `commit_group_config`
+
+Commits pending changes for one group/fleet without deploying. An optional `files` list restricts the commit, `effective=true` includes inherited Edge configuration, and `push=true` pushes after a successful commit.
+
+#### `deploy_group_config`
+
+Deploys an explicit existing commit to one group/fleet, enabling a controlled rollback as well as forward deployment. The workflow then commits the resulting Leader deployment metadata and can optionally push it.
+
+#### `commit_and_deploy_group`
+
+Commits and deploys one group/fleet. If its working tree is clean but its current commit is not deployed, the current commit is deployed without creating an empty commit. A targeted Edge subfleet is blocked while any ancestor has pending configuration, preserving parent-first deployment order.
+
+#### `commit_and_deploy_all`
+
+Commits all selected targets before deploying them. Edge parents are processed before descendants, each descendant is re-evaluated after its parent commit, and Leader deployment metadata is committed once after successful deployments. Use `product="stream"`, `product="edge"`, or `product="all"` to set the scope.
+
+#### `push_config_git`
+
+Pushes already committed Leader configuration to the configured remote. Preflight rejects a missing remote, unresolved conflicts, or a local branch behind its remote.
+
+All five mutation tools default to `dry_run=true`. Review the plan and diff, then pass the returned `plan_sha256` as `expected_plan_sha256` with `dry_run=false`. Execution stops if relevant Git or deployment state changed after planning. A successful deployment confirms the Leader's active `configVersion`; use the returned rollout counts or a later status call to confirm that every worker or Edge node has converged.
+
 ### Example Integration with Claude
 
 Add this server to your Claude desktop app configuration. Use an absolute path to the source checkout that contains `config.toml`:
@@ -404,6 +445,7 @@ snc_cribl_mcp/
 │   │   ├── variables.py      # Variable collection helpers
 │   │   ├── users.py          # Local user create/replicate helpers
 │   │   ├── group_sync.py     # Whole group/fleet copy and validation helpers
+│   │   ├── version_control.py # Group/fleet Git commit, deployment, and push workflows
 │   │   ├── system_settings.py # Global system setting sync helpers
 │   │   ├── packs.py          # Top-level Pack management helpers
 │   │   ├── config_objects.py # Consolidated config object response shaping
@@ -424,6 +466,7 @@ snc_cribl_mcp/
 │   │   ├── list_variables.py
 │   │   ├── users.py
 │   │   ├── group_sync.py
+│   │   ├── version_control.py
 │   │   ├── system_settings.py
 │   │   ├── packs.py
 │   │   ├── get_config_objects.py

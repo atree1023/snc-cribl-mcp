@@ -58,6 +58,9 @@ Before writing code:
 - "On-prem", "onprem", and "customer managed" are equivalent terms
 - Distributed environments require `/m/{group_id}/` URL scoping
 - Pack management tools support distributed scoping with `product` plus `group`; resolve the group selector before calling SDK Pack methods with `server_url`.
+- Version-control mutations default to `dry_run=true` and require the returned `plan_sha256` as `expected_plan_sha256` for execution. Group/fleet commits and diffs are scoped under `/m/{group_id}`; deploy an immutable commit and then commit only `local/cribl/groups.yml` at Leader scope.
+- Commit/deploy-all workflows must process Edge parents before descendants and re-evaluate each descendant after its parent commit so inherited changes are captured. Treat node rollout convergence as a follow-up status check, not part of the synchronous deploy guarantee.
+- Targeted Edge subfleet mutations must preflight the ancestor chain and block while any parent has uncommitted or undeployed configuration.
 
 ## File Structure
 
@@ -78,7 +81,7 @@ docs/                      # SDK docs, schemas, examples
 
 ## MCP Capabilities
 
-**Tools:** get_leader_overview, get_edge_info, list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_variables, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync, sync_user, replicate_group_config, validate_group_config, replicate_system_settings, validate_system_settings
+**Tools:** get_leader_overview, get_edge_info, list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_variables, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync, sync_user, replicate_group_config, validate_group_config, replicate_system_settings, validate_system_settings, get_group_git_status, get_group_git_diff, commit_group_config, deploy_group_config, commit_and_deploy_group, commit_and_deploy_all, push_config_git
 
 **Resources:** cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups, cribl://variables, cribl://packs
 

@@ -8,7 +8,7 @@ MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and 
 
 **Key components:**
 
-- Twenty-five tools: get_leader_overview, get_edge_info, list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_variables, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync, sync_user, replicate_group_config, validate_group_config, replicate_system_settings, validate_system_settings
+- Thirty-two tools: get_leader_overview, get_edge_info, list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_variables, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync, sync_user, replicate_group_config, validate_group_config, replicate_system_settings, validate_system_settings, get_group_git_status, get_group_git_diff, commit_group_config, deploy_group_config, commit_and_deploy_group, commit_and_deploy_all, push_config_git
 - Nine resources mirroring read-oriented tools (cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups, cribl://variables, cribl://packs)
 - Four prompts for common Cribl workflows
 - Token-based authentication with automatic refresh
@@ -90,6 +90,11 @@ uv run pyright                             # then type check
 - `copy_resource_config`, `validate_resource_sync`, and `validate_config_objects` support item ID subset selection with `item_pattern` wildcard boolean expressions such as `oodp-* but not oodp-source-*`, `item_regex`, explicit exclude filters, and `case_sensitive`. Use `dry_run=true` on copy calls to confirm matched configs and planned create/update/append/skip actions before writing.
 - `replicate_group_config` and `validate_group_config` are the high-level group/fleet workflows. They cover group/fleet settings plus variables, breakers, lookups, destinations, pipelines, sources, and routes.
 - `replicate_system_settings` and `validate_system_settings` operate on global Cribl system settings from the Global Settings page. They intentionally use direct `/system/settings/conf` HTTP because the installed SDK can reject valid live payloads where disabled SSL settings omit certificate fields.
+- Version-control mutations always default to a dry-run. Execute only by returning the plan's exact `plan_sha256` as `expected_plan_sha256`; the implementation recomputes the plan and rejects state drift.
+- Group/fleet commits and diffs use a group-scoped SDK client. Deployments use an immutable commit hash, then commit only `local/cribl/groups.yml` at Leader scope to record the active deployment version.
+- `commit_and_deploy_all` commits every selected target before starting deployments. Edge targets are topologically ordered parent-first and descendants are re-evaluated after each parent commit so inherited changes are included. A push occurs only if the workflow has no errors.
+- Targeted Edge subfleet mutations inspect their ancestor chain and block while any parent has uncommitted or undeployed configuration.
+- Deployment completion confirms the Leader's `configVersion`, not immediate convergence of every worker/Edge node; preserve and report rollout node counts for follow-up status checks.
 
 ## Adding a New Tool
 
@@ -179,7 +184,7 @@ Configuration file (`config.toml`) loaded by `src/snc_cribl_mcp/config.py`:
 
 When you need to find something:
 
-- **Tool definitions**: `src/snc_cribl_mcp/tools/*.py` (list tools are `list_*.py`; non-list tools include `packs.py`, `edge_info.py`, `leader_overview.py`, `group_sync.py`, `system_settings.py`, `users.py`, `get_config_objects.py`, `copy_resource_config.py`, `validate_config_objects.py`, `validate_resource_sync.py`)
+- **Tool definitions**: `src/snc_cribl_mcp/tools/*.py` (list tools are `list_*.py`; non-list tools include `packs.py`, `edge_info.py`, `leader_overview.py`, `group_sync.py`, `version_control.py`, `system_settings.py`, `users.py`, `get_config_objects.py`, `copy_resource_config.py`, `validate_config_objects.py`, `validate_resource_sync.py`)
 - **API logic**: `src/snc_cribl_mcp/operations/*.py`
 - **Pydantic models**: `src/snc_cribl_mcp/models/`
 - **SDK examples**: `docs/CRIBL-SDK-README.md`
