@@ -30,17 +30,21 @@ The Cribl API provides programmatic access to manage and configure Cribl product
 - [Cribl Edge](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-edge/)
 - [Cribl Search](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-search/)
 - [Cribl Lake](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-lake/)
-- [Management Plane](https://docs.cribl.io/cribl-as-code/api-reference/management-plane/)
+- [Schemas](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/control-plane-schemas/)
+- [](https://docs.cribl.io/cribl-as-code/api-reference/management-plane/)
+- [Schemas](https://docs.cribl.io/cribl-as-code/api-reference/management-plane/management-plane-schemas/)
 - [Cribl Terraform Provider (Preview)](https://docs.cribl.io/cribl-as-code/terraform.md): Use the Cribl Terraform provider (preview) to manage consistent, end-to-end infrastructure as code (IaC) across Cribl Organizations and Workspaces.
 - [Authenticate with the Cribl Terraform Provider (Preview)](https://docs.cribl.io/cribl-as-code/terraform-auth.md): Learn how to authenticate using the Cribl Terraform provider (preview).
 - [Migrate Cribl Configurations to Terraform (Preview)](https://docs.cribl.io/cribl-as-code/terraform-migrate-resources.md): Migrate existing Cribl configurations to Terraform-managed infrastructure as code with the cribl-tf-config-exporter CLI tool.
+- [Cribl Terraform Provider Code Examples](https://docs.cribl.io/cribl-as-code/terraform-code-examples.md): Get code examples that use the Cribl Terraform provider to configure Cribl resources.
+- [Configure Resources with the Cribl Terraform Provider](https://docs.cribl.io/cribl-as-code/terraform-configure-resources.md): This code example demonstrates how to use the Cribl Terraform provider to configure a Worker Group, Source, Destination, Pipeline, and Route.
 - [Cribl SDKs (Preview)](https://docs.cribl.io/cribl-as-code/sdks.md): Use the Cribl SDKs to configure and manage Cribl resources including Workspaces, Worker Groups and Edge Fleets, Pipelines, Sources, Destinations, Cribl Search Packs, and Lake Datasets.
 - [Authenticate with the Cribl SDKs (Preview)](https://docs.cribl.io/cribl-as-code/sdks-auth.md): Learn how to authenticate using the Cribl SDKs (preview).
-- [Cribl SDK Code Examples](https://docs.cribl.io/cribl-as-code/sdk-code-examples.md): Get code examples that use the Cribl Python SDK and the Cribl API to configure, scale, and replicate Worker Groups, configure Cribl resources, import Cribl Search Packs, and create Lake Datasets.
-- [Configure Worker Groups with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-configure-worker-groups.md): These code examples demonstrate how to use the Cribl Python SDK to configure, scale, replicate, and confirm Worker Groups.
-- [Configure Resources with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-configure-resources.md): This code example demonstrates how to use the Cribl Python SDK to configure a Source, Destination, Pipeline, and Route.
-- [Add a Cribl Search Pack and Create a Lake Dataset with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-search-pack-lake-dataset.md): This code example demonstrates how to use the Cribl Python SDK to add a Cribl Search Pack and create a Lake Dataset.
-- [Create API Credentials with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-create-api-credentials.md): Use the Cribl management plane SDK and API to create new API Credentials.
+- [Cribl SDK Code Examples](https://docs.cribl.io/cribl-as-code/sdk-code-examples.md): Get code examples that use the Cribl SDKs to configure, scale, and replicate Worker Groups, configure Cribl resources, import Cribl Search Packs, and create Lake Datasets.
+- [Configure Worker Groups with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-configure-worker-groups.md): These code examples demonstrate how to use the Cribl SDK to configure, scale, replicate, and confirm Worker Groups.
+- [Configure Resources with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-configure-resources.md): This code example demonstrates how to use the Cribl SDK to configure a Source, Destination, Pipeline, and Route.
+- [Add a Cribl Search Pack and Create a Lake Dataset with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-search-pack-lake-dataset.md): Use the Cribl Python SDK for the control plane to add a Cribl Search Pack and create a Lake Dataset.
+- [Create API Credentials with the Cribl SDK](https://docs.cribl.io/cribl-as-code/sdk-create-api-credentials.md): Use the Cribl Python SDK for the management plane SDK and API to create new API Credentials.
 - [Versioning](https://docs.cribl.io/cribl-as-code/versioning/)
 - [Community and Support](https://docs.cribl.io/cribl-as-code/community-support/)
 
@@ -54,6 +58,7 @@ The Cribl API provides programmatic access to manage and configure Cribl product
 - [Version 4.4](https://docs.cribl.io/cribl-as-code/4.4/llms.txt)
 - [Version 4.3](https://docs.cribl.io/cribl-as-code/4.3/llms.txt)
 - [Version 4.2](https://docs.cribl.io/cribl-as-code/4.2/llms.txt)
+- [Version 4.18](https://docs.cribl.io/cribl-as-code/4.18/llms.txt)
 - [Version 4.17](https://docs.cribl.io/cribl-as-code/4.17/llms.txt)
 - [Version 4.16](https://docs.cribl.io/cribl-as-code/4.16/llms.txt)
 - [Version 4.15](https://docs.cribl.io/cribl-as-code/4.15/llms.txt)
