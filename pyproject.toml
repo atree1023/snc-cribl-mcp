@@ -50,6 +50,7 @@ convention = "google"
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
+  "CPY001", # copyright notice
   "D203", # one-blank-line-before-class
   "D213", # multi-line-summary-second-line
   "TC001", # typing-only-first-party-import
