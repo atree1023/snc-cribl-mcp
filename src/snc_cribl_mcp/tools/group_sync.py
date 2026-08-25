@@ -34,7 +34,7 @@ def register(
             "readOnlyHint": False,
         },
     )
-    async def replicate_group_config(  # noqa: PLR0913
+    async def replicate_group_config(
         ctx: Context,
         source_server: str,
         target_server: str,
@@ -75,7 +75,7 @@ def register(
             "readOnlyHint": True,
         },
     )
-    async def validate_group_config(  # noqa: PLR0913
+    async def validate_group_config(
         ctx: Context,
         source_server: str,
         target_server: str,

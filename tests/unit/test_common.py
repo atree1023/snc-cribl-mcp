@@ -413,6 +413,23 @@ class TestListGroupsMinimal:
 
         assert result == []
 
+    async def test_handles_current_sdk_result_wrapper(self) -> None:
+        """Reads group items from the current SDK's counted result wrapper."""
+        mock_client = MagicMock()
+        mock_item = MagicMock()
+        mock_item.model_dump.return_value = {"id": "wrapped"}
+        mock_response = MagicMock()
+        mock_response.result.items = [mock_item]
+        mock_client.groups.list_async = AsyncMock(return_value=mock_response)
+
+        result = await list_groups_minimal(
+            mock_client,
+            product=ProductsCore.STREAM,
+            timeout_ms=5000,
+        )
+
+        assert result == [{"id": "wrapped"}]
+
 
 class TestHandleProductUnavailable:
     """Tests for handle_product_unavailable async function."""

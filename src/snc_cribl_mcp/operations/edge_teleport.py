@@ -294,7 +294,7 @@ def _next_offset(response: dict[str, Any]) -> int | None:
     return offset if isinstance(offset, int) else None
 
 
-def _build_file_search_payload(  # noqa: PLR0913
+def _build_file_search_payload(
     *,
     file_path: str,
     query: str,
@@ -360,7 +360,7 @@ async def _post_file_search(
     return cast("dict[str, Any]", data)
 
 
-async def collect_edge_info(  # noqa: PLR0913
+async def collect_edge_info(
     client: CriblControlPlane,
     *,
     config: CriblConfig,

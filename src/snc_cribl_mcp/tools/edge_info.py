@@ -38,7 +38,7 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
             "openWorldHint": False,
         },
     )
-    async def get_edge_info(  # noqa: PLR0913
+    async def get_edge_info(
         ctx: Context,
         edge_host: str,
         file: str,

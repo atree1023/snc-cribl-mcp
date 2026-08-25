@@ -123,7 +123,15 @@ async def list_groups_minimal(
 
     """
     resp = await client.groups.list_async(product=product, timeout_ms=timeout_ms)
-    return [serialize_model(item) for item in resp.items or []]
+    if resp is None:
+        return []
+    result: object = getattr(resp, "result", None)
+    items: object = getattr(result, "items", None) if result is not None else None
+    if not isinstance(items, list | tuple):
+        items = getattr(resp, "items", None)
+    if not isinstance(items, list | tuple):
+        return []
+    return [serialize_model(item) for item in cast("list[object] | tuple[object, ...]", items)]
 
 
 def build_unavailable_result(*, is_grouped: bool = True) -> ProductResult:
@@ -577,7 +585,7 @@ async def collect_items_via_http(http_ctx: HttpCollectionContext) -> ProductResu
     return build_success_result([], is_grouped=True, groups=group_results)
 
 
-async def _collect_group_items_http(  # noqa: PLR0913 (unavoidable for HTTP context)
+async def _collect_group_items_http(
     *,
     http_client: httpx.AsyncClient,
     base_url: str,

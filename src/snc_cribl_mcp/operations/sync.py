@@ -220,7 +220,7 @@ def _wildcard_expression_predicate(expression: str, *, case_sensitive: bool) -> 
     return _WildcardExpressionParser(tokens, case_sensitive=case_sensitive).parse()
 
 
-def _build_item_filter(  # noqa: PLR0913
+def _build_item_filter(
     *,
     item_id: str | None,
     item_pattern: str | None,
@@ -670,7 +670,7 @@ def _index_items(items: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return indexed
 
 
-async def validate_resource_sync(  # noqa: PLR0913
+async def validate_resource_sync(
     kind: ResourceKind,
     source_server: str,
     target_server: str,
@@ -821,7 +821,7 @@ async def validate_resource_sync(  # noqa: PLR0913
         return _apply_validate_response_limit(response)
 
 
-async def copy_resource_config(  # noqa: C901, PLR0912, PLR0913, PLR0915
+async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
     kind: ResourceKind,
     source_server: str,
     target_server: str,

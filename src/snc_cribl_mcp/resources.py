@@ -88,7 +88,7 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
                     "error_type": exc.__class__.__name__,
                 }
 
-    async def _run_collect_fn(  # noqa: PLR0913
+    async def _run_collect_fn(
         collect_fn: Callable[..., Awaitable[dict[str, Any]]],
         *,
         client: CriblControlPlane,

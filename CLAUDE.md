@@ -8,7 +8,7 @@ MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and 
 
 **Key components:**
 
-- Thirty-two tools: get_leader_overview, get_edge_info, list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_variables, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync, sync_user, replicate_group_config, validate_group_config, replicate_system_settings, validate_system_settings, get_group_git_status, get_group_git_diff, commit_group_config, deploy_group_config, commit_and_deploy_group, commit_and_deploy_all, push_config_git
+- Thirty-three tools: get_leader_overview, get_edge_info, list_groups, list_sources, list_destinations, list_pipelines, list_routes, list_breakers, list_lookups, list_variables, list_packs, get_pack, install_pack, upload_pack, update_pack, delete_pack, get_config_objects, validate_config_objects, copy_resource_config, validate_resource_sync, sync_user, replicate_group_config, validate_group_config, replicate_system_settings, validate_system_settings, get_group_git_status, get_group_git_diff, get_config_deployment_job, commit_group_config, deploy_group_config, commit_and_deploy_group, commit_and_deploy_all, push_config_git
 - Nine resources mirroring read-oriented tools (cribl://groups, cribl://sources, cribl://destinations, cribl://pipelines, cribl://routes, cribl://breakers, cribl://lookups, cribl://variables, cribl://packs)
 - Four prompts for common Cribl workflows
 - Token-based authentication with automatic refresh
@@ -91,6 +91,8 @@ uv run pyright                             # then type check
 - `replicate_group_config` and `validate_group_config` are the high-level group/fleet workflows. They cover group/fleet settings plus variables, breakers, lookups, destinations, pipelines, sources, and routes.
 - `replicate_system_settings` and `validate_system_settings` operate on global Cribl system settings from the Global Settings page. They intentionally use direct `/system/settings/conf` HTTP because the installed SDK can reject valid live payloads where disabled SSL settings omit certificate fields.
 - Version-control mutations always default to a dry-run. Execute only by returning the plan's exact `plan_sha256` as `expected_plan_sha256`; the implementation recomputes the plan and rejects state drift.
+- Mutation executions run in a worker-thread job and return immediately with a `job_id`; poll `get_config_deployment_job` for the bounded final result. Jobs are process-local, retained in a bounded in-memory registry, and serialized per configured server.
+- Review plans return one capped changed-path preview plus complete path/diff digests. Execution results must not embed full plans, diffs, changed-path arrays, or raw SDK commit/deployment responses; use `get_group_git_diff` for drill-down.
 - Group/fleet commits and diffs use a group-scoped SDK client. Deployments use an immutable commit hash, then commit only `local/cribl/groups.yml` at Leader scope to record the active deployment version.
 - `commit_and_deploy_all` commits every selected target before starting deployments. Edge targets are topologically ordered parent-first and descendants are re-evaluated after each parent commit so inherited changes are included. A push occurs only if the workflow has no errors.
 - Targeted Edge subfleet mutations inspect their ancestor chain and block while any parent has uncommitted or undeployed configuration.
@@ -157,7 +159,7 @@ Follow this checklist:
 async def test_collect_sources(httpx_mock):
     httpx_mock.add_response(
         url="https://cribl.example.com/api/v1/m/default/system/inputs",
-        json={"items": [{"id": "syslog:in_syslog", "type": "syslog"}]}
+        json={"items": [{"id": "syslog:in_syslog", "type": "syslog"}]},
     )
     # ... test logic
 ```

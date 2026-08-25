@@ -187,7 +187,7 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
             "idempotentHint": True,
         },
     )
-    async def get_pack_tool(  # noqa: PLR0913
+    async def get_pack_tool(
         ctx: Context,
         pack_id: str,
         server: str | None = None,
@@ -326,7 +326,7 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
             "idempotentHint": False,
         },
     )
-    async def update_pack_tool(  # noqa: PLR0913
+    async def update_pack_tool(
         ctx: Context,
         pack_id: str,
         source: str,

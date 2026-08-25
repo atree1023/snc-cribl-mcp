@@ -10,17 +10,19 @@ from typing import Any
 from fastmcp import Context, FastMCP
 
 from ..operations.version_control import CompareTo, ProductScope
+from ..operations.version_control_jobs import VersionControlJobManager
 from .sync_common import ProductName, parse_product
 
 type VersionControlFunc = Callable[..., Awaitable[dict[str, Any]]]
 
 _PLAN_GUIDANCE = (
     "This mutation defaults to dry_run=true. Review the returned plan and pass its plan_sha256 as "
-    "expected_plan_sha256 with dry_run=false; execution stops if Git or deployment state drifted."
+    "expected_plan_sha256 with dry_run=false; execution stops if Git or deployment state drifted. "
+    "Execution returns a job_id immediately; poll get_config_deployment_job for the bounded final result."
 )
 
 
-def register(  # noqa: PLR0913
+def register(  # noqa: C901
     app: FastMCP,
     *,
     status_impl: VersionControlFunc,
@@ -30,8 +32,42 @@ def register(  # noqa: PLR0913
     commit_deploy_impl: VersionControlFunc,
     commit_deploy_all_impl: VersionControlFunc,
     push_impl: VersionControlFunc,
+    job_manager: VersionControlJobManager,
 ) -> None:
     """Register Cribl Git and deployment workflow tools."""
+
+    async def _plan_or_submit(
+        *,
+        operation: str,
+        server: str | None,
+        dry_run: bool,
+        expected_plan_sha256: str | None,
+        impl: VersionControlFunc,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        """Run review plans inline and mutations in the isolated job worker."""
+        if dry_run:
+            return await impl(
+                server,
+                **kwargs,
+                dry_run=True,
+                expected_plan_sha256=expected_plan_sha256,
+            )
+
+        async def _runner() -> dict[str, Any]:
+            return await impl(
+                server,
+                **kwargs,
+                dry_run=False,
+                expected_plan_sha256=expected_plan_sha256,
+            )
+
+        return await job_manager.submit(
+            operation=operation,
+            server=server,
+            expected_plan_sha256=expected_plan_sha256,
+            runner=_runner,
+        )
 
     @app.tool(
         name="get_group_git_status",
@@ -70,7 +106,7 @@ def register(  # noqa: PLR0913
             "idempotentHint": True,
         },
     )
-    async def get_group_git_diff(  # noqa: PLR0913
+    async def get_group_git_diff(
         ctx: Context,
         group: str,
         product: ProductName = "stream",
@@ -91,6 +127,28 @@ def register(  # noqa: PLR0913
         )
 
     @app.tool(
+        name="get_config_deployment_job",
+        description=(
+            "Get the current state and bounded result of an asynchronous Cribl commit, deploy, or Git push job. "
+            "Pass the job_id returned by a mutation execution for its final result, or omit job_id to list recent "
+            "jobs. Job state is retained in this MCP server process and is cleared when the server restarts."
+        ),
+        annotations={
+            "title": "Get configuration deployment job",
+            "readOnlyHint": True,
+            "idempotentHint": True,
+        },
+    )
+    async def get_config_deployment_job(
+        ctx: Context,
+        job_id: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Get one deployment job or list recent jobs."""
+        await ctx.info("Getting Cribl configuration deployment job status.")
+        return await job_manager.get(job_id=job_id, limit=limit)
+
+    @app.tool(
         name="commit_group_config",
         description=(
             "Commit pending configuration changes for one Stream worker group or Edge fleet without deploying them. "
@@ -104,7 +162,7 @@ def register(  # noqa: PLR0913
             "idempotentHint": False,
         },
     )
-    async def commit_group_config(  # noqa: PLR0913
+    async def commit_group_config(
         ctx: Context,
         group: str,
         message: str,
@@ -119,16 +177,18 @@ def register(  # noqa: PLR0913
     ) -> dict[str, Any]:
         """Plan or commit one group/fleet configuration."""
         await ctx.info(f"Planning or committing Cribl {product} configuration for '{group}'.")
-        return await commit_impl(
-            server,
+        return await _plan_or_submit(
+            operation="commit_group_config",
+            server=server,
+            dry_run=dry_run,
+            expected_plan_sha256=expected_plan_sha256,
+            impl=commit_impl,
             product=parse_product(product),
             group=group,
             message=message,
             files=files,
             effective=effective,
             push=push,
-            dry_run=dry_run,
-            expected_plan_sha256=expected_plan_sha256,
         )
 
     @app.tool(
@@ -145,7 +205,7 @@ def register(  # noqa: PLR0913
             "idempotentHint": False,
         },
     )
-    async def deploy_group_config(  # noqa: PLR0913
+    async def deploy_group_config(
         ctx: Context,
         group: str,
         version: str,
@@ -158,14 +218,16 @@ def register(  # noqa: PLR0913
     ) -> dict[str, Any]:
         """Plan or deploy an explicit group/fleet configuration version."""
         await ctx.info(f"Planning or deploying Cribl {product} version '{version}' to '{group}'.")
-        return await deploy_impl(
-            server,
+        return await _plan_or_submit(
+            operation="deploy_group_config",
+            server=server,
+            dry_run=dry_run,
+            expected_plan_sha256=expected_plan_sha256,
+            impl=deploy_impl,
             product=parse_product(product),
             group=group,
             version=version,
             push=push,
-            dry_run=dry_run,
-            expected_plan_sha256=expected_plan_sha256,
         )
 
     @app.tool(
@@ -183,7 +245,7 @@ def register(  # noqa: PLR0913
             "idempotentHint": False,
         },
     )
-    async def commit_and_deploy_group(  # noqa: PLR0913
+    async def commit_and_deploy_group(
         ctx: Context,
         group: str,
         message: str,
@@ -198,16 +260,18 @@ def register(  # noqa: PLR0913
     ) -> dict[str, Any]:
         """Plan or commit and deploy one group/fleet."""
         await ctx.info(f"Planning or committing and deploying Cribl {product} target '{group}'.")
-        return await commit_deploy_impl(
-            server,
+        return await _plan_or_submit(
+            operation="commit_and_deploy_group",
+            server=server,
+            dry_run=dry_run,
+            expected_plan_sha256=expected_plan_sha256,
+            impl=commit_deploy_impl,
             product=parse_product(product),
             group=group,
             message=message,
             files=files,
             effective=effective,
             push=push,
-            dry_run=dry_run,
-            expected_plan_sha256=expected_plan_sha256,
         )
 
     @app.tool(
@@ -226,7 +290,7 @@ def register(  # noqa: PLR0913
             "idempotentHint": False,
         },
     )
-    async def commit_and_deploy_all(  # noqa: PLR0913
+    async def commit_and_deploy_all(
         ctx: Context,
         message: str,
         server: str | None = None,
@@ -240,15 +304,17 @@ def register(  # noqa: PLR0913
     ) -> dict[str, Any]:
         """Plan or commit and deploy all selected targets."""
         await ctx.info(f"Planning or committing and deploying all Cribl {product} targets.")
-        return await commit_deploy_all_impl(
-            server,
+        return await _plan_or_submit(
+            operation="commit_and_deploy_all",
+            server=server,
+            dry_run=dry_run,
+            expected_plan_sha256=expected_plan_sha256,
+            impl=commit_deploy_all_impl,
             message=message,
             product=product,
             effective=effective,
             push=push,
             stop_on_error=stop_on_error,
-            dry_run=dry_run,
-            expected_plan_sha256=expected_plan_sha256,
         )
 
     @app.tool(
@@ -274,10 +340,12 @@ def register(  # noqa: PLR0913
     ) -> dict[str, Any]:
         """Plan or push the configured Cribl Git remote."""
         await ctx.info("Planning or pushing the Cribl configuration Git repository.")
-        return await push_impl(
-            server,
+        return await _plan_or_submit(
+            operation="push_config_git",
+            server=server,
             dry_run=dry_run,
             expected_plan_sha256=expected_plan_sha256,
+            impl=push_impl,
         )
 
 

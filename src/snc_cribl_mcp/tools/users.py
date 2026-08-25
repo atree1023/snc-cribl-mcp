@@ -27,7 +27,7 @@ def register(app: FastMCP, *, impl: SyncUserFunc) -> None:
             "readOnlyHint": False,
         },
     )
-    async def sync_user(  # noqa: PLR0913
+    async def sync_user(
         ctx: Context,
         target_server: str,
         username: str,

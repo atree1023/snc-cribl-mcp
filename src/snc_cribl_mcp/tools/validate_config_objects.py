@@ -33,7 +33,7 @@ def register(app: FastMCP, *, impl: ValidateResourceSyncFunc) -> None:
             "readOnlyHint": True,
         },
     )
-    async def validate_config_objects(  # noqa: PLR0913
+    async def validate_config_objects(
         ctx: Context,
         resource_kind: ResourceKind,
         source_server: str,

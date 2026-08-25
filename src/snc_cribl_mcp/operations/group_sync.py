@@ -74,7 +74,7 @@ def _group_level_target_supported(source_group_id: str, target_group_id: str) ->
     return target_group_id == source_group_id
 
 
-async def replicate_group_config(  # noqa: PLR0913
+async def replicate_group_config(
     source_server: str,
     target_server: str,
     *,
@@ -158,7 +158,7 @@ async def replicate_group_config(  # noqa: PLR0913
     }
 
 
-async def validate_group_config_sync(  # noqa: PLR0913
+async def validate_group_config_sync(
     source_server: str,
     target_server: str,
     *,

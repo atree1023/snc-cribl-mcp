@@ -371,7 +371,7 @@ def _response_items(payload: object) -> list[dict[str, Any]]:
     return []
 
 
-async def _direct_request_json(  # noqa: PLR0913
+async def _direct_request_json(
     client: CriblControlPlane,
     *,
     method: str,
@@ -420,7 +420,7 @@ async def _hydrate_lookup_content(
     return hydrated
 
 
-async def _direct_list_resource(  # noqa: PLR0913
+async def _direct_list_resource(
     client: CriblControlPlane,
     kind: ResourceKind,
     *,
@@ -457,7 +457,7 @@ async def _direct_list_resource(  # noqa: PLR0913
     return items
 
 
-async def _direct_get_resource(  # noqa: PLR0913
+async def _direct_get_resource(
     client: CriblControlPlane,
     kind: ResourceKind,
     *,
@@ -534,7 +534,7 @@ def _lookup_write_payload(item: dict[str, Any], uploaded_filename: str) -> dict[
     return payload
 
 
-async def _direct_write_resource(  # noqa: PLR0913
+async def _direct_write_resource(
     client: CriblControlPlane,
     kind: ResourceKind,
     *,
@@ -578,7 +578,7 @@ async def _direct_write_resource(  # noqa: PLR0913
     return _response_items(payload)
 
 
-async def list_resource(  # noqa: PLR0913
+async def list_resource(
     client: CriblControlPlane,
     kind: ResourceKind,
     *,
@@ -606,7 +606,7 @@ async def list_resource(  # noqa: PLR0913
     return _serialize_items(response)
 
 
-async def get_resource(  # noqa: PLR0913
+async def get_resource(
     client: CriblControlPlane,
     kind: ResourceKind,
     *,
@@ -643,7 +643,7 @@ async def get_resource(  # noqa: PLR0913
     return items[0]
 
 
-async def create_resource(  # noqa: PLR0913
+async def create_resource(
     client: CriblControlPlane,
     kind: ResourceKind,
     *,
@@ -678,7 +678,7 @@ async def create_resource(  # noqa: PLR0913
     return _serialize_items(response)
 
 
-async def update_resource(  # noqa: PLR0913
+async def update_resource(
     client: CriblControlPlane,
     kind: ResourceKind,
     *,
@@ -715,7 +715,7 @@ async def update_resource(  # noqa: PLR0913
     return _serialize_items(response)
 
 
-async def append_resource(  # noqa: PLR0913
+async def append_resource(
     client: CriblControlPlane,
     kind: ResourceKind,
     *,
@@ -739,7 +739,7 @@ async def append_resource(  # noqa: PLR0913
     return _serialize_items(response)
 
 
-async def delete_resource(  # noqa: PLR0913
+async def delete_resource(
     client: CriblControlPlane,
     kind: ResourceKind,
     *,
@@ -773,7 +773,7 @@ async def delete_resource(  # noqa: PLR0913
     return _serialize_items(response)
 
 
-async def deploy_group(  # noqa: PLR0913
+async def deploy_group(
     client: CriblControlPlane,
     *,
     product: ProductsCore,

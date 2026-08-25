@@ -498,7 +498,7 @@ def _pack_direct_url(
     return path
 
 
-async def _collect_pack_http_objects(  # noqa: PLR0913
+async def _collect_pack_http_objects(
     client: CriblControlPlane,
     *,
     security: Security,
@@ -551,7 +551,7 @@ async def _collect_pack_http_objects(  # noqa: PLR0913
     return _serialize_http_counted_payload(payload)
 
 
-async def _collect_pack_sdk_objects(  # noqa: PLR0913
+async def _collect_pack_sdk_objects(
     client: CriblControlPlane,
     *,
     section_kind: Literal["sources", "destinations", "pipelines", "routes"],
@@ -581,7 +581,7 @@ async def _collect_pack_sdk_objects(  # noqa: PLR0913
     )
 
 
-async def _collect_shaped_sdk_section(  # noqa: PLR0913
+async def _collect_shaped_sdk_section(
     client: CriblControlPlane,
     *,
     section_kind: Literal["sources", "destinations", "pipelines", "routes"],
@@ -611,7 +611,7 @@ async def _collect_shaped_sdk_section(  # noqa: PLR0913
     )
 
 
-async def _collect_shaped_http_section(  # noqa: PLR0913
+async def _collect_shaped_http_section(
     client: CriblControlPlane,
     *,
     security: Security,
@@ -644,7 +644,7 @@ async def _collect_shaped_http_section(  # noqa: PLR0913
     )
 
 
-async def _gather_pack_http_categories(  # noqa: PLR0913
+async def _gather_pack_http_categories(
     client: CriblControlPlane,
     *,
     security: Security,
@@ -898,7 +898,7 @@ async def collect_packs(
     )
 
 
-async def get_pack(  # noqa: PLR0911, PLR0913
+async def get_pack(  # noqa: PLR0911
     client: CriblControlPlane,
     *,
     timeout_ms: int,

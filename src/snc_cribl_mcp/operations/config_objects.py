@@ -307,7 +307,7 @@ def _status_errors(product_results: dict[str, dict[str, Any]]) -> list[dict[str,
     return errors
 
 
-def shape_config_object_response(  # noqa: PLR0913
+def shape_config_object_response(
     *,
     kind: ConfigObjectKind,
     product_results: dict[str, dict[str, Any]],

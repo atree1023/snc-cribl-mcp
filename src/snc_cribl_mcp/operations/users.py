@@ -167,7 +167,7 @@ def _strip_sensitive_user_fields(user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_user_payload(  # noqa: PLR0913
+def _build_user_payload(
     *,
     username: str,
     source_user: dict[str, Any] | None = None,
@@ -202,7 +202,7 @@ def _public_user_payload(user: dict[str, Any]) -> dict[str, Any]:
     return _strip_sensitive_user_fields(user)
 
 
-async def sync_user(  # noqa: PLR0913
+async def sync_user(
     *,
     target_server: str,
     username: str,
@@ -268,7 +268,7 @@ async def sync_user(  # noqa: PLR0913
         )
 
 
-async def _sync_user_to_target(  # noqa: PLR0913
+async def _sync_user_to_target(
     *,
     target: ResolvedControlPlane,
     target_server: str,

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -37,7 +38,7 @@ class _Counted:
         self.count = len(items) if count is None else count
 
 
-def _group_payload(  # noqa: PLR0913
+def _group_payload(
     group_id: str,
     *,
     product: ProductsCore,
@@ -82,6 +83,8 @@ class _Harness:
         self.deploy_error_for: str | None = None
         self.dirty_leader_on_group_commit = False
         self.inherit_on_commit: dict[str, list[str]] = {}
+        self.changed_paths_by_group: dict[str, list[str]] = {}
+        self.diff_paths_by_group: dict[str, list[str]] = {}
         self._commit_sequence = 1
 
         self.client.groups.list_async = AsyncMock(side_effect=self._list_groups)
@@ -135,7 +138,7 @@ class _Harness:
 
         state = self._state_for_id(group_id)
         dirty = bool(cast("dict[str, Any]", state["git"])["localChanges"])
-        changed = [f"local/cribl/{group_id}.yml"] if dirty else []
+        changed = self.changed_paths_by_group.get(group_id, [f"local/cribl/{group_id}.yml"] if dirty else [])
         return _Counted(
             {
                 "ahead": 0,
@@ -199,7 +202,18 @@ class _Harness:
         git = cast("dict[str, Any]", state["git"])
         dirty = bool(git["localChanges"])
         differs_from_commit = commit is not None and commit != git["commit"]
-        files = [self._diff_file(group_id)] if dirty or differs_from_commit else []
+        configured_paths = self.diff_paths_by_group.get(group_id)
+        if configured_paths is not None:
+            files = [
+                {
+                    **self._diff_file(group_id),
+                    "newName": path,
+                    "oldName": path,
+                }
+                for path in configured_paths
+            ]
+        else:
+            files = [self._diff_file(group_id)] if dirty or differs_from_commit else []
         return _Counted({"diffJson": files})
 
     async def _commit(
@@ -346,6 +360,56 @@ def test_status_diff_and_remote_helpers_cover_response_shapes() -> None:
     assert vc._canonical_digest(vc._diff_files(diff_payload)) == vc._canonical_digest(vc._diff_files(diff_payload))
     assert vc._safe_remote("https://user:password@git.example.test/repo.git") == "https://git.example.test/repo.git"
     assert vc._safe_remote("git@example.test:repo.git") == "configured"
+    bounded_error = vc._error_payload(RuntimeError("x" * 3000))
+    assert len(bounded_error["message"]) == vc._MAX_ERROR_MESSAGE_CHARS
+    assert bounded_error["message_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_large_change_plan_and_execution_results_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Large replications should return one capped path preview and no raw mutation payloads."""
+    state = _group_payload("default", product=ProductsCore.STREAM)
+    harness = _Harness((ProductsCore.STREAM, state))
+    paths = [f"local/cribl/config-{index:03}.yml" for index in range(107)]
+    harness.changed_paths_by_group["default"] = paths
+    harness.diff_paths_by_group["default"] = paths
+    _install_harness(monkeypatch, harness)
+
+    planned = await vc.commit_and_deploy_group(
+        "test",
+        product=ProductsCore.STREAM,
+        group="default",
+        message="Replicate complete configuration",
+    )
+    plan = cast("dict[str, Any]", planned["plan"])
+    changes = cast("dict[str, Any]", plan["changes"])
+
+    assert changes["changed_count"] == 107
+    assert len(changes["changed_paths"]) == vc._MAX_STATUS_PATHS
+    assert changes["changed_paths_truncated"] is True
+    assert len(changes["changed_paths_sha256"]) == 64
+    assert "changed_paths" not in plan["git"]
+    assert "pending_diff" not in plan
+    assert json.dumps(planned).count(paths[0]) == 1
+    assert len(json.dumps(planned)) < 12_000
+
+    result = await vc.commit_and_deploy_group(
+        "test",
+        product=ProductsCore.STREAM,
+        group="default",
+        message="Replicate complete configuration",
+        dry_run=False,
+        expected_plan_sha256=plan["plan_sha256"],
+    )
+    serialized_result = json.dumps(result)
+
+    assert result["status"] == "deployed"
+    assert result["executed_plan_sha256"] == plan["plan_sha256"]
+    assert "plan" not in result
+    assert "commit_response" not in result
+    assert "deployment" not in result
+    assert all(path not in serialized_result for path in paths)
+    assert len(serialized_result) < 4_000
 
 
 def test_deployment_order_is_parent_first_and_validates_hierarchy() -> None:
@@ -473,7 +537,10 @@ async def test_commit_group_requires_reviewed_plan_and_reports_push_failure(monk
 
     assert result["status"] == "partial_failure"
     assert result["completed_steps"] == ["group_commit"]
-    assert result["commit"].startswith("commit-default-")
+    assert result["commit"]["version"].startswith("commit-default-")
+    assert result["push"]["status"] == "failed"
+    assert "plan" not in result
+    assert "commit_response" not in result
 
 
 @pytest.mark.asyncio

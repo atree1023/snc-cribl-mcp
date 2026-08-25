@@ -66,6 +66,8 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Commit and deploy all selected targets, ordering Edge parents before descendants and re-evaluating inherited subfleet changes after each parent commit.
   - Push committed configuration to the Leader's configured Git remote with conflict, behind-branch, and drift preflights.
   - Preview every mutation as a dry-run plan and execute only with the matching plan digest.
+  - Run reviewed mutations as non-blocking jobs so status and diff tools remain responsive during long deployments.
+  - Keep review and execution responses bounded with one capped changed-path preview, complete drift digests, and compact final results.
 - **Typed Pipeline Models**: 41 Pydantic models for pipeline function configurations (eval, mask, sampling, regex_extract, etc.) with full type safety.
 - **Typed Collector Models**: 9 Pydantic models for collector source configurations (S3, REST, database, Splunk, Azure Blob, GCS, filesystem, script, health check) with full type safety.
 - **Graceful Error Handling**: SDK validation errors return structured, user-friendly responses with actionable guidance instead of crashing.
@@ -368,7 +370,7 @@ Validates global Cribl system settings between two configured leaders.
 
 Reports Git and deployment state for one or all Stream worker groups and Edge fleets/subfleets.
 
-- **Returns:** Branch and ahead/behind state, conflicts, changed paths, committed and deployed versions, and current rollout node counts.
+- **Returns:** Branch and ahead/behind state, conflicts, committed and deployed versions, and current rollout node counts. Changed paths are capped at 25 entries and include `changed_count`, `changed_paths_truncated`, and a digest of the complete path set.
 
 #### `get_group_git_diff`
 
@@ -376,6 +378,14 @@ Shows the configuration diff for one Stream worker group or Edge fleet/subfleet.
 
 - **Baselines:** `compare_to="deployed"` validates the complete pending deployment against the active `configVersion`; `compare_to="head"` shows only uncommitted changes.
 - **Returns:** A bounded diff plus a digest of the complete pending diff. Use `filename` to inspect one file or `diff_line_limit=0` for the full diff.
+
+#### `get_config_deployment_job`
+
+Polls an asynchronous commit, deploy, or Git push execution.
+
+- **With `job_id`:** Returns queued/running/completed/failed state and the bounded final result when available.
+- **Without `job_id`:** Lists recent jobs without embedding every final result.
+- **Lifetime:** Jobs are retained in memory by the current MCP server process and are cleared when it restarts.
 
 #### `commit_group_config`
 
@@ -397,7 +407,9 @@ Commits all selected targets before deploying them. Edge parents are processed b
 
 Pushes already committed Leader configuration to the configured remote. Preflight rejects a missing remote, unresolved conflicts, or a local branch behind its remote.
 
-All five mutation tools default to `dry_run=true`. Review the plan and diff, then pass the returned `plan_sha256` as `expected_plan_sha256` with `dry_run=false`. Execution stops if relevant Git or deployment state changed after planning. A successful deployment confirms the Leader's active `configVersion`; use the returned rollout counts or a later status call to confirm that every worker or Edge node has converged.
+All five mutation tools default to `dry_run=true`. Review the plan and diff, then pass the returned `plan_sha256` as `expected_plan_sha256` with `dry_run=false`. The execution call returns an accepted `job_id` immediately; poll `get_config_deployment_job` for completion. Mutations are serialized per configured server while read-only tools remain responsive.
+
+Plans contain a single 25-path preview plus digests over the complete path set and pending diff. Final results omit full plans, diffs, deployment objects, and changed-path arrays; they retain the executed plan digest, action/status, commit and line/file counts, deployed versions, rollout aggregates, push status, and recovery details. Use `get_group_git_diff` for file-level drill-down. A successful deployment confirms the Leader's active `configVersion`; use the returned rollout counts or a later status call to confirm that every worker or Edge node has converged. The installed Cribl SDK does not expose a failed-node aggregate, so `rollout.failed` remains `null` unless a future API response provides it.
 
 ### Example Integration with Claude
 
@@ -446,6 +458,7 @@ snc_cribl_mcp/
 │   │   ├── users.py          # Local user create/replicate helpers
 │   │   ├── group_sync.py     # Whole group/fleet copy and validation helpers
 │   │   ├── version_control.py # Group/fleet Git commit, deployment, and push workflows
+│   │   ├── version_control_jobs.py # Non-blocking mutation execution and polling
 │   │   ├── system_settings.py # Global system setting sync helpers
 │   │   ├── packs.py          # Top-level Pack management helpers
 │   │   ├── config_objects.py # Consolidated config object response shaping

@@ -26,6 +26,8 @@ type ProductScope = Literal["all", "edge", "stream"]
 _PRODUCTS: tuple[ProductsCore, ...] = (ProductsCore.STREAM, ProductsCore.EDGE)
 _GROUP_GIT_FIELDS = "git.commit,git.localChanges"
 _MAX_SUMMARY_PATHS = 100
+_MAX_STATUS_PATHS = 25
+_MAX_ERROR_MESSAGE_CHARS = 2000
 _LEADER_METADATA_PATH = "local/cribl/groups.yml"
 
 
@@ -60,6 +62,7 @@ class GroupTarget:
     worker_count: int | None = None
     deploying_worker_count: int | None = None
     incompatible_worker_count: int | None = None
+    failed_worker_count: int | None = None
 
     @classmethod
     def from_payload(cls, product: ProductsCore, payload: dict[str, Any]) -> GroupTarget:
@@ -85,6 +88,7 @@ class GroupTarget:
             incompatible_worker_count=_optional_int(
                 _field_value(payload, "incompatibleWorkerCount", "incompatible_worker_count")
             ),
+            failed_worker_count=_optional_int(_field_value(payload, "failedWorkerCount", "failed_worker_count")),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -101,7 +105,18 @@ class GroupTarget:
             "worker_count": self.worker_count,
             "deploying_worker_count": self.deploying_worker_count,
             "incompatible_worker_count": self.incompatible_worker_count,
+            "failed_worker_count": self.failed_worker_count,
         }
+
+
+def _target_ref(target: GroupTarget) -> dict[str, str | None]:
+    """Return compact target identity for plans and mutation results."""
+    return {
+        "product": target.product.value,
+        "id": target.group_id,
+        "name": target.name,
+        "inherits": target.inherits,
+    }
 
 
 def _optional_text(value: object) -> str | None:
@@ -308,8 +323,57 @@ def _status_summary(status: dict[str, Any]) -> dict[str, Any]:
         "behind": _optional_int(status.get("behind")) or 0,
         "clean": not changed_paths,
         "changed_count": len(changed_paths),
-        "changed_paths": changed_paths,
-        "conflicted": conflicted,
+        "changed_paths": changed_paths[:_MAX_STATUS_PATHS],
+        "changed_paths_truncated": len(changed_paths) > _MAX_STATUS_PATHS,
+        "changed_paths_sha256": _canonical_digest(changed_paths),
+        "conflicted": conflicted[:_MAX_STATUS_PATHS],
+        "conflict_count": len(conflicted),
+        "conflicts_truncated": len(conflicted) > _MAX_STATUS_PATHS,
+        "conflicts_sha256": _canonical_digest(conflicted),
+    }
+
+
+def _compact_git_status(
+    status: dict[str, Any],
+    *,
+    include_change_metadata: bool = True,
+    include_changed_paths: bool = False,
+) -> dict[str, Any]:
+    """Return safety-relevant Git state without repeating changed path previews."""
+    excluded = {"changed_paths", "changed_paths_truncated"}
+    if not include_change_metadata:
+        excluded.update({"changed_count", "changed_paths_sha256"})
+    compact = {key: value for key, value in status.items() if key not in excluded}
+    if include_changed_paths:
+        compact["changed_paths"] = status.get("changed_paths", [])
+        compact["changed_paths_truncated"] = bool(status.get("changed_paths_truncated"))
+    return compact
+
+
+def _plan_change_summary(git_status: dict[str, Any], pending_diff: dict[str, Any]) -> dict[str, Any]:
+    """Return one bounded changed-path preview and complete drift digests for a plan."""
+    diff_summary = cast("dict[str, Any]", pending_diff["summary"])
+    return {
+        "changed_count": git_status["changed_count"],
+        "changed_paths": git_status["changed_paths"],
+        "changed_paths_truncated": git_status["changed_paths_truncated"],
+        "changed_paths_sha256": git_status["changed_paths_sha256"],
+        "pending_diff_sha256": pending_diff["sha256"],
+        "file_count": diff_summary["file_count"],
+        "added_lines": diff_summary["added_lines"],
+        "deleted_lines": diff_summary["deleted_lines"],
+        "binary_file_count": diff_summary["binary_file_count"],
+        "too_big_file_count": diff_summary["too_big_file_count"],
+    }
+
+
+def _execution_change_counts(git_status: dict[str, Any], pending_diff: dict[str, Any]) -> dict[str, Any]:
+    """Return change counts for execution results without path previews."""
+    plan_summary = _plan_change_summary(git_status, pending_diff)
+    return {
+        key: value
+        for key, value in plan_summary.items()
+        if key not in {"changed_paths", "changed_paths_truncated", "changed_paths_sha256", "pending_diff_sha256"}
     }
 
 
@@ -413,7 +477,10 @@ async def _fetch_diff(
 async def _global_status(resolved: ResolvedControlPlane) -> dict[str, Any]:
     """Return the Leader repository Git status summary."""
     response = await resolved.client.versions.statuses.get_async(timeout_ms=resolved.config.timeout_ms)
-    return _status_summary(_first_counted_item(response) or {})
+    raw_status = _first_counted_item(response) or {}
+    summary = _status_summary(raw_status)
+    summary["deployment_metadata_changed"] = _LEADER_METADATA_PATH in _status_changed_paths(raw_status)
+    return summary
 
 
 def _safe_remote(remote: str) -> str:
@@ -449,10 +516,7 @@ async def _git_info(resolved: ResolvedControlPlane) -> dict[str, Any]:
 
 def _leader_metadata_paths(status: dict[str, Any]) -> list[str]:
     """Return changed Leader files that record deployed group versions."""
-    changed = status.get("changed_paths")
-    if not isinstance(changed, list):
-        return []
-    return sorted(path for path in (str(item) for item in cast("list[object]", changed)) if path == _LEADER_METADATA_PATH)
+    return [_LEADER_METADATA_PATH] if bool(status.get("deployment_metadata_changed")) else []
 
 
 def _target_sort_key(target: GroupTarget) -> tuple[str, str]:
@@ -538,13 +602,13 @@ async def _edge_ancestor_preflight(
         try:
             git_status = await _group_status(resolved, parent)
         except Exception as exc:  # noqa: BLE001 - return a reviewable blocked plan
-            ancestors.append({"target": parent.as_dict(), "status": "error", "error": _error_payload(exc)})
+            ancestors.append({"target": _target_ref(parent), "status": "error", "error": _error_payload(exc)})
             blocked_reasons.append(
                 f"Cannot verify Edge ancestor '{parent_id}'; deploy the parent chain before targeting '{target.group_id}'."
             )
             break
 
-        ancestors.append({"target": parent.as_dict(), "status": "ok", "git": git_status})
+        ancestors.append({"target": _target_ref(parent), "status": "ok", "git": _compact_git_status(git_status)})
         if not bool(git_status["clean"]) or bool(git_status["local_changes"]) or bool(git_status["deployment_pending"]):
             blocked_reasons.append(
                 f"Edge ancestor '{parent_id}' has pending configuration; commit and deploy the parent chain first."
@@ -557,10 +621,13 @@ async def _edge_ancestor_preflight(
 
 def _error_payload(exc: Exception) -> dict[str, Any]:
     """Return a compact structured workflow error."""
+    message = str(exc)
     payload: dict[str, Any] = {
         "type": type(exc).__name__,
-        "message": str(exc),
+        "message": message[:_MAX_ERROR_MESSAGE_CHARS],
     }
+    if len(message) > _MAX_ERROR_MESSAGE_CHARS:
+        payload["message_truncated"] = True
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int):
         payload["status_code"] = status_code
@@ -585,6 +652,68 @@ def _commit_hash(response_payload: dict[str, Any]) -> str | None:
     if not isinstance(first, dict):
         return None
     return _optional_text(cast("dict[str, object]", first).get("commit"))
+
+
+def _first_response_item(response_payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the first item from an already serialized counted response."""
+    items = response_payload.get("items")
+    if not isinstance(items, list) or not items:
+        return {}
+    first = cast("list[object]", items)[0]
+    return cast("dict[str, Any]", first) if isinstance(first, dict) else {}
+
+
+def _commit_result_summary(response_payload: dict[str, Any], *, version: str) -> dict[str, Any]:
+    """Summarize a commit response without returning affected path arrays."""
+    item = _first_response_item(response_payload)
+    line_summary_value = item.get("summary")
+    line_summary = cast("dict[str, Any]", line_summary_value) if isinstance(line_summary_value, dict) else {}
+    files_value = item.get("files")
+    files = cast("dict[str, Any]", files_value) if isinstance(files_value, dict) else {}
+    file_counts: dict[str, int] = {}
+    for change_type in ("created", "modified", "deleted", "renamed"):
+        changed = files.get(change_type)
+        file_counts[change_type] = len(cast("list[object]", changed)) if isinstance(changed, list) else 0
+    return {
+        "version": version,
+        "branch": _optional_text(item.get("branch")),
+        "line_changes": {
+            "total": _optional_int(line_summary.get("changes")) or 0,
+            "insertions": _optional_int(line_summary.get("insertions")) or 0,
+            "deletions": _optional_int(line_summary.get("deletions")) or 0,
+        },
+        "file_changes": {
+            **file_counts,
+            "total": sum(file_counts.values()),
+        },
+    }
+
+
+def _rollout_summary(target: GroupTarget) -> dict[str, int | None]:
+    """Return aggregate rollout counts available from the group/fleet response."""
+    updated: int | None = None
+    counts = (target.worker_count, target.deploying_worker_count, target.incompatible_worker_count)
+    if all(value is not None for value in counts):
+        total, deploying, incompatible = cast("tuple[int, int, int]", counts)
+        updated = max(total - deploying - incompatible - (target.failed_worker_count or 0), 0)
+    return {
+        "total": target.worker_count,
+        "updated": updated,
+        "deploying": target.deploying_worker_count,
+        "failed": target.failed_worker_count,
+        "incompatible": target.incompatible_worker_count,
+    }
+
+
+def _push_result(*, requested: bool, pushed: bool = False, attempted: bool = False) -> dict[str, Any]:
+    """Return a stable push outcome without the raw SDK response."""
+    status = "not_requested"
+    if requested:
+        status = "pushed" if pushed else "failed" if attempted else "not_attempted"
+    return {
+        "requested": requested,
+        "status": status,
+    }
 
 
 async def _create_group_commit(
@@ -646,7 +775,6 @@ async def _commit_leader_metadata(resolved: ResolvedControlPlane, *, message: st
         "status": "committed",
         "files": files,
         "commit": _commit_hash(payload),
-        "response": payload,
     }
 
 
@@ -705,7 +833,7 @@ async def collect_group_git_status(
         }
 
 
-async def collect_group_git_diff(  # noqa: PLR0913
+async def collect_group_git_diff(
     server: str | None,
     *,
     product: ProductsCore,
@@ -757,7 +885,7 @@ async def collect_group_git_diff(  # noqa: PLR0913
         }
 
 
-async def _build_group_plan(  # noqa: PLR0913
+async def _build_group_plan(
     resolved: ResolvedControlPlane,
     target: GroupTarget,
     *,
@@ -800,18 +928,15 @@ async def _build_group_plan(  # noqa: PLR0913
         blocked_reasons.extend(ancestor_blocks)
 
     plan_body = {
-        "target": target.as_dict(),
+        "target": _target_ref(target),
         "action": action,
         "message": message,
         "files": files,
         "effective": effective,
         "push": push,
-        "git": git_status,
-        "pending_diff": {
-            "sha256": pending_diff["sha256"],
-            "summary": pending_diff["summary"],
-        },
-        "leader_git": leader_status,
+        "git": _compact_git_status(git_status, include_change_metadata=False),
+        "changes": _plan_change_summary(git_status, pending_diff),
+        "leader_git": _compact_git_status(leader_status),
         "git_integration": git_info,
         "edge_ancestors": edge_ancestors,
         "blocked_reasons": blocked_reasons,
@@ -851,7 +976,7 @@ def _validate_runtime_target_drift(
     raise RuntimeError(msg)
 
 
-async def commit_group_config(  # noqa: PLR0913
+async def commit_group_config(
     server: str | None,
     *,
     product: ProductsCore,
@@ -881,7 +1006,13 @@ async def commit_group_config(  # noqa: PLR0913
 
         _validate_execution_plan(plan, expected_plan_sha256)
         if plan["action"] == "noop":
-            return {"status": "noop", "dry_run": False, "plan": plan}
+            return {
+                "status": "noop",
+                "dry_run": False,
+                "action": "noop",
+                "executed_plan_sha256": plan["plan_sha256"],
+                "push": _push_result(requested=False),
+            }
 
         version, response = await _create_group_commit(
             resolved,
@@ -896,19 +1027,21 @@ async def commit_group_config(  # noqa: PLR0913
             return {
                 "status": "partial_failure",
                 "dry_run": False,
-                "plan": plan,
-                "commit": version,
-                "commit_response": response,
+                "action": plan["action"],
+                "executed_plan_sha256": plan["plan_sha256"],
+                "commit": _commit_result_summary(response, version=version),
+                "push": _push_result(requested=True, attempted=True),
                 "completed_steps": ["group_commit"],
                 "error": _error_payload(exc),
             }
         return {
             "status": "committed",
             "dry_run": False,
-            "plan": plan,
-            "commit": version,
-            "commit_response": response,
-            "push_response": push_response,
+            "action": plan["action"],
+            "executed_plan_sha256": plan["plan_sha256"],
+            "commit": _commit_result_summary(response, version=version),
+            "push": _push_result(requested=push, pushed=push_response is not None),
+            "completed_steps": ["group_commit", *(["push"] if push else [])],
         }
 
 
@@ -922,21 +1055,25 @@ async def _deploy_and_finalize(
 ) -> dict[str, Any]:
     """Deploy one version, commit Leader metadata, and optionally push."""
     completed_steps: list[str] = []
+    leader_commit: dict[str, Any] | None = None
+    push_attempted = False
     try:
         await _guard_predeploy_leader_state(resolved)
-        deployment = await _deploy_version(resolved, target, version)
+        await _deploy_version(resolved, target, version)
         completed_steps.append("deploy")
         leader_commit = await _commit_leader_metadata(resolved, message=leader_message)
         completed_steps.append("leader_commit")
-        push_response = None
         if push:
-            push_response = await _push(resolved)
+            push_attempted = True
+            await _push(resolved)
             completed_steps.append("push")
     except Exception as exc:  # noqa: BLE001 - return recovery details after irreversible steps
         return {
             "status": "partial_failure" if completed_steps else "failed",
             "version": version,
             "completed_steps": completed_steps,
+            "leader_commit": leader_commit,
+            "push": _push_result(requested=push, pushed="push" in completed_steps, attempted=push_attempted),
             "error": _error_payload(exc),
         }
 
@@ -947,25 +1084,26 @@ async def _deploy_and_finalize(
             "status": "partial_failure",
             "version": version,
             "completed_steps": completed_steps,
-            "deployment": deployment,
             "leader_commit": leader_commit,
-            "push_response": push_response,
+            "push": _push_result(requested=push, pushed="push" in completed_steps, attempted=push_attempted),
             "control_plane_version_confirmed": None,
+            "rollout": _rollout_summary(target),
             "error": _error_payload(exc),
         }
     return {
         "status": "deployed",
         "version": version,
         "completed_steps": completed_steps,
-        "deployment": deployment,
         "leader_commit": leader_commit,
-        "push_response": push_response,
-        "target_after": refreshed.as_dict(),
+        "push": _push_result(requested=push, pushed="push" in completed_steps, attempted=push_attempted),
+        "committed_version": refreshed.committed_version,
+        "deployed_version": refreshed.config_version,
+        "rollout": _rollout_summary(refreshed),
         "control_plane_version_confirmed": refreshed.config_version == version,
     }
 
 
-async def deploy_group_config(  # noqa: PLR0913
+async def deploy_group_config(
     server: str | None,
     *,
     product: ProductsCore,
@@ -1002,11 +1140,11 @@ async def deploy_group_config(  # noqa: PLR0913
             edge_ancestors, ancestor_blocks = await _edge_ancestor_preflight(resolved, target)
             blocked_reasons.extend(ancestor_blocks)
         plan_body = {
-            "target": target.as_dict(),
+            "target": _target_ref(target),
             "action": action,
             "version": normalized_version,
             "push": push,
-            "leader_git": leader_status,
+            "leader_git": _compact_git_status(leader_status),
             "git_integration": git_info,
             "edge_ancestors": edge_ancestors,
             "blocked_reasons": blocked_reasons,
@@ -1017,7 +1155,14 @@ async def deploy_group_config(  # noqa: PLR0913
 
         _validate_execution_plan(plan, expected_plan_sha256)
         if plan["action"] == "noop":
-            return {"status": "noop", "dry_run": False, "plan": plan}
+            return {
+                "status": "noop",
+                "dry_run": False,
+                "action": "noop",
+                "executed_plan_sha256": plan["plan_sha256"],
+                "version": normalized_version,
+                "push": _push_result(requested=False),
+            }
         result = await _deploy_and_finalize(
             resolved,
             target,
@@ -1025,10 +1170,15 @@ async def deploy_group_config(  # noqa: PLR0913
             leader_message=f"Sync deployed {product.value} group/fleet {target.group_id} at {normalized_version[:12]}",
             push=push,
         )
-        return {"dry_run": False, "plan": plan, **result}
+        return {
+            "dry_run": False,
+            "action": plan["action"],
+            "executed_plan_sha256": plan["plan_sha256"],
+            **result,
+        }
 
 
-async def commit_and_deploy_group(  # noqa: PLR0913
+async def commit_and_deploy_group(
     server: str | None,
     *,
     product: ProductsCore,
@@ -1057,7 +1207,13 @@ async def commit_and_deploy_group(  # noqa: PLR0913
 
         _validate_execution_plan(plan, expected_plan_sha256)
         if plan["action"] == "noop":
-            return {"status": "noop", "dry_run": False, "plan": plan}
+            return {
+                "status": "noop",
+                "dry_run": False,
+                "action": "noop",
+                "executed_plan_sha256": plan["plan_sha256"],
+                "push": _push_result(requested=False),
+            }
 
         commit_response: dict[str, Any] | None = None
         version = _optional_text(cast("dict[str, Any]", plan["git"]).get("committed_version"))
@@ -1076,7 +1232,9 @@ async def commit_and_deploy_group(  # noqa: PLR0913
                 return {
                     "status": "failed",
                     "dry_run": False,
-                    "plan": plan,
+                    "action": plan["action"],
+                    "executed_plan_sha256": plan["plan_sha256"],
+                    "push": _push_result(requested=False),
                     "completed_steps": completed_steps,
                     "error": _error_payload(exc),
                 }
@@ -1085,7 +1243,9 @@ async def commit_and_deploy_group(  # noqa: PLR0913
             return {
                 "status": "failed",
                 "dry_run": False,
-                "plan": plan,
+                "action": plan["action"],
+                "executed_plan_sha256": plan["plan_sha256"],
+                "push": _push_result(requested=False),
                 "completed_steps": completed_steps,
                 "error": {"type": "RuntimeError", "message": "No committed version is available to deploy."},
             }
@@ -1098,16 +1258,19 @@ async def commit_and_deploy_group(  # noqa: PLR0913
             push=push,
         )
         finalized_steps = cast("list[str]", finalized.get("completed_steps", []))
-        return {
+        result = {
             "dry_run": False,
-            "plan": plan,
-            "commit_response": commit_response,
+            "action": plan["action"],
+            "executed_plan_sha256": plan["plan_sha256"],
             **finalized,
             "completed_steps": [*completed_steps, *finalized_steps],
         }
+        if commit_response is not None:
+            result["commit"] = _commit_result_summary(commit_response, version=version)
+        return result
 
 
-async def _build_all_plan(  # noqa: PLR0913
+async def _build_all_plan(
     resolved: ResolvedControlPlane,
     *,
     product: ProductScope,
@@ -1135,10 +1298,10 @@ async def _build_all_plan(  # noqa: PLR0913
             blocked_reasons.append(f"{target.product.value} target '{target.group_id}' contains Git conflicts.")
         target_plans.append(
             {
-                "target": target.as_dict(),
+                "target": _target_ref(target),
                 "action": action,
-                "git": git_status,
-                "pending_diff": {"sha256": pending["sha256"], "summary": pending["summary"]},
+                "git": _compact_git_status(git_status, include_change_metadata=False),
+                "changes": _plan_change_summary(git_status, pending),
                 "commit_message": f"{message} [{target.product.value}:{target.group_id}]",
             }
         )
@@ -1165,7 +1328,7 @@ async def _build_all_plan(  # noqa: PLR0913
         "push": push,
         "push_action": push_action,
         "stop_on_error": stop_on_error,
-        "leader_git": leader_status,
+        "leader_git": _compact_git_status(leader_status),
         "git_integration": git_info,
         "targets": target_plans,
         "blocked_reasons": list(dict.fromkeys(blocked_reasons)),
@@ -1173,7 +1336,7 @@ async def _build_all_plan(  # noqa: PLR0913
     return {**plan_body, "plan_sha256": _canonical_digest(plan_body)}, targets
 
 
-async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0913, PLR0915
+async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
     server: str | None,
     *,
     message: str,
@@ -1224,7 +1387,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 blocked_edge_commits.add(planned_target.group_id)
                 commit_results.append(
                     {
-                        "target": planned_target.as_dict(),
+                        "target": _target_ref(planned_target),
                         "status": "skipped_dependency",
                         "blocked_by": blocked_by,
                     }
@@ -1239,7 +1402,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 git_status = await _group_status(resolved, target)
                 pending = await _fetch_diff(resolved, target, diff_line_limit=0)
                 initial_target_plan = initial_target_plans[(target.product, target.group_id)]
-                initial_pending = cast("dict[str, Any]", initial_target_plan["pending_diff"])
+                initial_changes = cast("dict[str, Any]", initial_target_plan["changes"])
                 changed_ancestor = _blocked_edge_ancestor(
                     target,
                     edge_targets=edge_targets,
@@ -1248,7 +1411,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 _validate_runtime_target_drift(
                     target,
                     pending_sha256=pending["sha256"],
-                    initial_sha256=initial_pending["sha256"],
+                    initial_sha256=initial_changes["pending_diff_sha256"],
                     changed_ancestor=changed_ancestor,
                 )
                 has_pending = (
@@ -1272,13 +1435,16 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     deploy_candidates[(target.product, target.group_id)] = (target, version)
                 commit_results.append(
                     {
-                        "target": target.as_dict(),
+                        "target": _target_ref(target),
                         "status": action,
                         "version": version,
-                        "commit_response": response,
-                        "pending_diff": {
-                            "sha256": pending["sha256"],
-                            "summary": pending["summary"],
+                        "commit": (
+                            _commit_result_summary(response, version=version)
+                            if response is not None and version is not None
+                            else None
+                        ),
+                        "changes": {
+                            **_execution_change_counts(git_status, pending),
                             "changed_after_parent_commit": changed_ancestor is not None,
                         },
                     }
@@ -1286,11 +1452,11 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0913, PLR0915
             except Exception as exc:  # noqa: BLE001 - all-target workflow reports per-target failures
                 error = {
                     "phase": "commit",
-                    "target": planned_target.as_dict(),
+                    "target": _target_ref(planned_target),
                     "error": _error_payload(exc),
                 }
                 errors.append(error)
-                commit_results.append({"target": planned_target.as_dict(), "status": "failed", **error})
+                commit_results.append({"target": _target_ref(planned_target), "status": "failed", **error})
                 if planned_target.product == ProductsCore.EDGE:
                     blocked_edge_commits.add(planned_target.group_id)
                 if stop_on_error:
@@ -1320,7 +1486,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     blocked_edge_deployments.add(target.group_id)
                     deploy_results.append(
                         {
-                            "target": target.as_dict(),
+                            "target": _target_ref(target),
                             "status": "skipped_dependency",
                             "version": version,
                             "blocked_by": blocked_by,
@@ -1328,9 +1494,9 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     )
                     continue
                 try:
-                    response = await _deploy_version(resolved, target, version)
+                    await _deploy_version(resolved, target, version)
                 except Exception as exc:  # noqa: BLE001 - preserve earlier successful deployments
-                    error = {"phase": "deploy", "target": target.as_dict(), "error": _error_payload(exc)}
+                    error = {"phase": "deploy", "target": _target_ref(target), "error": _error_payload(exc)}
                     errors.append(error)
                     deploy_results.append({"status": "failed", "version": version, **error})
                     if target.product == ProductsCore.EDGE:
@@ -1340,22 +1506,24 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     continue
 
                 deployment_result: dict[str, Any] = {
-                    "target": target.as_dict(),
+                    "target": _target_ref(target),
                     "status": "deployed",
                     "version": version,
-                    "deployment": response,
                     "control_plane_version_confirmed": None,
+                    "rollout": _rollout_summary(target),
                 }
                 try:
                     refreshed = await _get_target(resolved, product=target.product, selector=target.group_id)
                     deployment_result.update(
                         {
-                            "target_after": refreshed.as_dict(),
+                            "committed_version": refreshed.committed_version,
+                            "deployed_version": refreshed.config_version,
+                            "rollout": _rollout_summary(refreshed),
                             "control_plane_version_confirmed": refreshed.config_version == version,
                         }
                     )
                 except Exception as exc:  # noqa: BLE001 - the deployment already succeeded
-                    error = {"phase": "verify", "target": target.as_dict(), "error": _error_payload(exc)}
+                    error = {"phase": "verify", "target": _target_ref(target), "error": _error_payload(exc)}
                     errors.append(error)
                     deployment_result["verification_error"] = error["error"]
                 deploy_results.append(deployment_result)
@@ -1372,10 +1540,13 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0913, PLR0915
             except Exception as exc:  # noqa: BLE001 - deployments already occurred
                 errors.append({"phase": "leader_commit", "error": _error_payload(exc)})
 
-        push_response: dict[str, Any] | None = None
+        push_attempted = False
+        pushed = False
         if plan["push_action"] == "push" and not errors:
             try:
-                push_response = await _push(resolved)
+                push_attempted = True
+                await _push(resolved)
+                pushed = True
             except Exception as exc:  # noqa: BLE001 - commits/deployments already occurred
                 errors.append({"phase": "push", "error": _error_payload(exc)})
 
@@ -1383,11 +1554,25 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0913, PLR0915
         return {
             "status": status,
             "dry_run": False,
-            "plan": plan,
+            "action": "commit_and_deploy_all",
+            "executed_plan_sha256": plan["plan_sha256"],
+            "summary": {
+                "target_count": len(targets),
+                "committed": sum(result.get("status") == "committed" for result in commit_results),
+                "deployed": sum(result.get("status") == "deployed" for result in deploy_results),
+                "skipped_dependency": sum(
+                    result.get("status") == "skipped_dependency" for result in [*commit_results, *deploy_results]
+                ),
+                "failed": len(errors),
+            },
             "commit_results": commit_results,
             "deploy_results": deploy_results,
             "leader_commit": leader_commit,
-            "push_response": push_response,
+            "push": _push_result(
+                requested=plan["push_action"] == "push",
+                pushed=pushed,
+                attempted=push_attempted,
+            ),
             "errors": errors,
         }
 
@@ -1415,7 +1600,7 @@ async def push_config_git(
         plan_body = {
             "action": action,
             "git_integration": info,
-            "leader_git": status,
+            "leader_git": _compact_git_status(status),
             "blocked_reasons": blocked_reasons,
         }
         plan = {**plan_body, "plan_sha256": _canonical_digest(plan_body)}
@@ -1424,12 +1609,20 @@ async def push_config_git(
 
         _validate_execution_plan(plan, expected_plan_sha256)
         if plan["action"] == "noop":
-            return {"status": "noop", "dry_run": False, "plan": plan}
+            return {
+                "status": "noop",
+                "dry_run": False,
+                "action": "noop",
+                "executed_plan_sha256": plan["plan_sha256"],
+                "push": _push_result(requested=False),
+            }
+        await _push(resolved)
         return {
             "status": "pushed",
             "dry_run": False,
-            "plan": plan,
-            "push_response": await _push(resolved),
+            "action": "push",
+            "executed_plan_sha256": plan["plan_sha256"],
+            "push": _push_result(requested=True, pushed=True),
         }
 
 

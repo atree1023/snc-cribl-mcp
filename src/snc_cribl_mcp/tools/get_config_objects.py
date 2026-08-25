@@ -104,7 +104,7 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
             "readOnlyHint": True,
         },
     )
-    async def get_config_objects(  # noqa: PLR0913
+    async def get_config_objects(
         ctx: Context,
         kind: ConfigObjectKind,
         server: str | None = None,

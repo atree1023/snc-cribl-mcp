@@ -4,6 +4,16 @@
 
 The Cribl API provides programmatic access to manage and configure Cribl products.
 
+## Cribl Web Properties
+
+The Cribl web ecosystem is organized around complementary user objectives. While docs.cribl.io specializes in implementation guidance, users and AI systems may benefit from other Cribl properties depending on the task they are trying to accomplish.
+
+- [cribl.io](https://cribl.io/): Understand Cribl products, evaluate solutions, explore customer stories, and compare approaches.
+- [docs.cribl.io](https://docs.cribl.io/): Configure, deploy, integrate, operate, and troubleshoot Cribl products. Documentation is the canonical source for implementation guidance.
+- [sandbox.cribl.io](https://sandbox.cribl.io/): Gain hands-on experience through guided product exploration and interactive learning.
+- [university.cribl.io](https://university.cribl.io/): Build product proficiency through structured learning paths, hands-on labs, and certifications.
+- [knowledge.cribl.io](https://knowledge.cribl.io/): Explore practitioner guidance, operational best practices, and community-driven experiences that extend canonical documentation.
+
 ## Cribl as Code
 
 - [Basic Concepts for Cribl as Code](https://docs.cribl.io/cribl-as-code/cribl-as-code-concepts.md): Learn about basic Cribl concepts as context for Cribl as Code.
@@ -23,6 +33,10 @@ The Cribl API provides programmatic access to manage and configure Cribl product
 - [Add a Cribl Search Pack and Create a Lake Dataset with the Cribl API](https://docs.cribl.io/cribl-as-code/api-search-pack-lake-dataset.md): These code examples demonstrate how to use the Cribl API to add a Cribl Search Pack and create a Lake Dataset.
 - [Search and Retrieve Results](https://docs.cribl.io/cribl-as-code/search-results.md): Use the Cribl API to execute searches and retrieve Cribl Search results.
 - [Get Alerts for Search Results](https://docs.cribl.io/cribl-as-code/get-alerts-search-results.md): Use the Cribl API to get alerts for the results of a scheduled search.
+- [Billing and FinOps API Code Examples](https://docs.cribl.io/cribl-as-code/api-billing-examples.md): Code examples that demonstrate how to retrieve billing and FinOps data using the Cribl API.
+- [Get Cumulative Consumption by Contract](https://docs.cribl.io/cribl-as-code/api-billing-contracts-utilization.md): Use the Cribl API to retrieve per-contract cumulative credit consumption for an Organization.
+- [Get Monthly or Daily Credit Consumption](https://docs.cribl.io/cribl-as-code/api-billing-monthly-daily-consumption.md): Use the Cribl API to retrieve monthly or daily credit consumption, including per-product and Worker Group infrastructure breakdowns.
+- [Get Credit Grants and Statistics](https://docs.cribl.io/cribl-as-code/api-billing-grants-statistics.md): Use the Cribl API to retrieve credit grants and credit balance totals for an Organization.
 - [API Reference](https://docs.cribl.io/cribl-as-code/api-reference.md): The Cribl API Reference provides comprehensive and detailed API documentation for all Cribl products.
 - [Control Plane API](https://docs.cribl.io/cribl-as-code/control-plane.md): The Control Plane API Reference is divided into the several sections.
 - [Cribl Core](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-core/)
@@ -30,6 +44,7 @@ The Cribl API provides programmatic access to manage and configure Cribl product
 - [Cribl Edge](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-edge/)
 - [Cribl Search](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-search/)
 - [Cribl Lake](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-lake/)
+- [Cribl Insights](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/cribl-insights/)
 - [Schemas](https://docs.cribl.io/cribl-as-code/api-reference/control-plane/control-plane-schemas/)
 - [](https://docs.cribl.io/cribl-as-code/api-reference/management-plane/)
 - [Schemas](https://docs.cribl.io/cribl-as-code/api-reference/management-plane/management-plane-schemas/)

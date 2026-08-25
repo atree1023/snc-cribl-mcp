@@ -9,10 +9,19 @@ All notable changes to snc-cribl-mcp will be documented in this file.
 - Added Git status and deployed/pending diff inspection for Stream worker groups and Edge fleets/subfleets.
 - Added dry-run-protected group/fleet commit, explicit-version deploy, combined commit/deploy, parent-first deploy-all, and configured-remote push workflows.
 - Added plan-digest drift checks, conflict/remote preflights, Leader deployment-metadata commits, partial-failure reporting, and rollout status reporting.
+- Added `get_config_deployment_job` for polling non-blocking commit, deployment, and Git push executions.
+
+### Fixed
+
+- Bounded large-change review responses to one 25-path preview while retaining complete changed-path and pending-diff digests.
+- Removed duplicate changed-path arrays, full reviewed plans, and raw SDK commit/deployment payloads from mutation results.
+- Isolated mutation jobs from the MCP event loop and serialized them per configured server so long deployments do not block status and diff tools.
+- Updated minimal group listing for the current SDK's counted response wrapper.
 
 ### Tests
 
 - Added focused unit coverage for Git state serialization, deployed diffs, plan drift, targeted and all-target workflows, Edge inheritance ordering, partial failures, push preflights, and MCP wrappers.
+- Added 107-file response-size regression coverage plus blocking-worker, polling, failure, and per-server job serialization tests.
 
 ## [0.3.0] - 2026-05-22
 

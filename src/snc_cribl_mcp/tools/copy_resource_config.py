@@ -31,7 +31,7 @@ def register(app: FastMCP, *, impl: CopyResourceConfigFunc) -> None:
             "readOnlyHint": False,
         },
     )
-    async def copy_resource_config(  # noqa: PLR0913
+    async def copy_resource_config(
         ctx: Context,
         resource_kind: ResourceKind,
         source_server: str,

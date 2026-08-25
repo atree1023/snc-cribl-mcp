@@ -32,6 +32,7 @@ Registered tools:
 - ``validate_system_settings``: validate global system settings
 - ``get_group_git_status``: inspect group/fleet Git and deployment status
 - ``get_group_git_diff``: inspect pending or deployed-baseline group/fleet diffs
+- ``get_config_deployment_job``: poll asynchronous commit, deploy, and push jobs
 - ``commit_group_config``: commit one group/fleet configuration
 - ``deploy_group_config``: deploy an explicit group/fleet commit
 - ``commit_and_deploy_group``: commit and deploy one group/fleet
@@ -78,6 +79,7 @@ from .operations.version_control import (
     deploy_group_config,
     push_config_git,
 )
+from .operations.version_control_jobs import VersionControlJobManager
 from .tools.copy_resource_config import register as register_copy_resource_config
 from .tools.edge_info import register as register_edge_info
 from .tools.get_config_objects import register as register_get_config_objects
@@ -114,6 +116,7 @@ app = FastMCP(
     name="snc-cribl-mcp",
     instructions=("Expose tools that query a customer-managed Cribl deployment for metadata."),
 )
+version_control_jobs = VersionControlJobManager()
 
 
 async def list_groups_impl(ctx: Context, server: str | None = None) -> dict[str, Any]:
@@ -213,6 +216,7 @@ def _register_capabilities() -> None:
         commit_deploy_impl=commit_and_deploy_group,
         commit_deploy_all_impl=commit_and_deploy_all,
         push_impl=push_config_git,
+        job_manager=version_control_jobs,
     )
     resources.register(app, deps=deps)
     prompts.register(app)
