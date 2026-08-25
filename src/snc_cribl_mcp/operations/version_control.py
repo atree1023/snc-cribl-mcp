@@ -18,7 +18,12 @@ from cribl_control_plane.errors import CriblControlPlaneError
 from cribl_control_plane.models.productscore import ProductsCore
 
 from ..client.cribl_client import ResolvedControlPlane, connect_to_server
-from .common import HTTP_NOT_FOUND
+from .common import (
+    HTTP_NOT_FOUND,
+    collect_paginated_sdk_response_items,
+    counted_sdk_response_count,
+    counted_sdk_response_items,
+)
 
 type CompareTo = Literal["deployed", "head"]
 type ProductScope = Literal["all", "edge", "stream"]
@@ -158,12 +163,24 @@ def _serialize_model(value: object) -> dict[str, Any]:
 
 def _serialize_counted_response(response: object) -> dict[str, Any]:
     """Serialize a counted SDK response without assuming generated model types."""
-    items_value = getattr(response, "items", None)
-    raw_items = cast("list[object] | tuple[object, ...]", items_value) if isinstance(items_value, list | tuple) else ()
+    raw_items = counted_sdk_response_items(response, context="version-control SDK response")
     items = [_serialize_model(item) for item in raw_items]
-    count = _optional_int(getattr(response, "count", None))
+    count = counted_sdk_response_count(response)
     return {
         "count": len(items) if count is None else count,
+        "items": items,
+    }
+
+
+async def _serialize_paginated_counted_response(response: object) -> dict[str, Any]:
+    """Serialize every page from a counted SDK list response."""
+    raw_items, count = await collect_paginated_sdk_response_items(
+        response,
+        context="version-control SDK response",
+    )
+    items = [_serialize_model(item) for item in raw_items]
+    return {
+        "count": len(items) if count is None else max(count, len(items)),
         "items": items,
     }
 
@@ -215,7 +232,7 @@ async def _list_targets(
             if exc.status_code == HTTP_NOT_FOUND:
                 continue
             raise
-        serialized = _serialize_counted_response(response)
+        serialized = await _serialize_paginated_counted_response(response)
         targets.extend(
             GroupTarget.from_payload(product, payload)
             for payload in cast("list[dict[str, Any]]", serialized["items"])

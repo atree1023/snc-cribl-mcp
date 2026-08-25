@@ -140,15 +140,15 @@ with CriblControlPlane(
 
     # List all sources
     sources = ccp_client.sources.list(server_url=group_url)
-    print(f"Found {len(sources.items or [])} sources")
+    print(f"Found {len(sources.result.items)} sources")
 
     # List all destinations
     destinations = ccp_client.destinations.list(server_url=group_url)
-    print(f"Found {len(destinations.items or [])} destinations")
+    print(f"Found {len(destinations.result.items)} destinations")
 
     # List all pipelines
     pipelines = ccp_client.pipelines.list(server_url=group_url)
-    print(f"Found {len(pipelines.items or [])} pipelines")
+    print(f"Found {len(pipelines.result.items)} pipelines")
 ```
 
 The same SDK client can also be used to make asynchronous requests by importing asyncio.
@@ -175,10 +175,14 @@ async def main():
 
         # List all sources
         sources = await ccp_client.sources.list_async(server_url=group_url)
-        print(f"Found {len(sources.items or [])} sources")
+        print(f"Found {len(sources.result.items)} sources")
 
 asyncio.run(main())
 ```
+
+SDK 0.11 paginated operations return a response wrapper whose counted payload is under `result`; call `response.next()` to retrieve additional pages. Some non-paginated endpoints still return counted models directly, so application code should normalize both shapes. All application list paths, including Pack inventories and version-control target discovery, must exhaust `next()` through the shared response helper.
+
+The project constrains `cribl-control-plane` to `>=0.11.0,<0.12`. Treat a generated SDK minor-line upgrade as a compatibility change: review its models and method signatures, run the full unit suite, and repeat the live safe-tool matrix before widening this range. The 0.11 `system.settings.cribl` model still rejects valid SSL-disabled 4.19.2 payloads that omit certificate fields, so system-settings workflows intentionally retain the SDK-owned direct HTTP transport.
 
 > [!NOTE]
 > Additional examples demonstrating various SDK features and use cases can be found in the [`examples`](https://github.com/criblio/cribl_control_plane_sdk_python/blob/master/./examples) directory.

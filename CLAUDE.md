@@ -74,6 +74,8 @@ uv run pyright                             # then type check
 - Pack tools support both leader-level and distributed use. When `group` is provided, resolve it against the requested `product` (`stream` or `edge`) and pass `server_url=f"{base}/m/{resolved_group_id}"` to the SDK Pack methods.
 - `get_pack` is the single Pack inspection surface: without `kind`, it returns a bounded summary of Pack metadata, sources, destinations, pipelines, routes, settings, and knowledge; with a concrete `kind`, `object_id`, and `detail`, it drills into a Pack section or object. Use `cursor` and `limit` only with concrete section/category kinds.
 - Prefer SDK Pack subresources for `sources`, `destinations`, `pipelines`, and `routes`; use read-only direct HTTP against `/p/{pack}/...` for Pack knowledge/settings categories that are missing from the installed SDK.
+- SDK 0.11 list responses can wrap counted payloads under `result`; exhaust `next()` through the shared pagination helper for top-level Packs, Pack subresources, nodes, groups, and version-control target discovery.
+- Keep the preview `cribl-control-plane` dependency on the validated `>=0.11.0,<0.12` range until the next generated minor line receives the same contract and live-tool validation pass.
 
 **Consolidated config object tooling:**
 
@@ -87,7 +89,7 @@ uv run pyright                             # then type check
 **Cross-leader mutation workflows:**
 
 - `sync_user` can create or replicate local users. Cribl user reads do not expose passwords, so creation requires an explicit `password`, a `password_env`, or one of the tool's `.env`/environment fallback names. Never return password values in tool responses.
-- `copy_resource_config`, `validate_resource_sync`, and `validate_config_objects` support item ID subset selection with `item_pattern` wildcard boolean expressions such as `oodp-* but not oodp-source-*`, `item_regex`, explicit exclude filters, and `case_sensitive`. Use `dry_run=true` on copy calls to confirm matched configs and planned create/update/append/skip actions before writing.
+- `copy_resource_config`, `validate_resource_sync`, and `validate_config_objects` support item ID subset selection with `item_pattern` wildcard boolean expressions such as `oodp-* but not oodp-source-*`, `item_regex`, explicit exclude filters, and `case_sensitive`. Copy calls default to `dry_run=true`; execute only by returning the exact `plan_sha256` as `expected_plan_sha256` with `dry_run=false`.
 - `replicate_group_config` and `validate_group_config` are the high-level group/fleet workflows. They cover group/fleet settings plus variables, breakers, lookups, destinations, pipelines, sources, and routes.
 - `replicate_system_settings` and `validate_system_settings` operate on global Cribl system settings from the Global Settings page. They intentionally use direct `/system/settings/conf` HTTP because the installed SDK can reject valid live payloads where disabled SSL settings omit certificate fields.
 - Version-control mutations always default to a dry-run. Execute only by returning the plan's exact `plan_sha256` as `expected_plan_sha256`; the implementation recomputes the plan and rejects state drift.

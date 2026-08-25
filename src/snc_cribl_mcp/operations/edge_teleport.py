@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import inspect
 import logging
 import re
 import string
-from collections.abc import Awaitable
 from time import time
 from typing import Any, cast
 from urllib.parse import quote
@@ -19,7 +17,7 @@ from cribl_control_plane.models.security import Security
 from fastmcp import Context
 
 from ..config import CriblConfig
-from .common import get_auth_headers, serialize_model
+from .common import collect_paginated_sdk_response_items, get_auth_headers, serialize_model
 
 logger = logging.getLogger("snc_cribl_mcp.operations.edge_teleport")
 
@@ -171,33 +169,12 @@ def _edge_node_summary(node: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _collect_paginated_items(response: object | None) -> tuple[list[dict[str, Any]], int | None]:
-    """Collect items from an SDK response that may expose a paginated wrapper."""
-    items: list[dict[str, Any]] = []
-    reported_count: int | None = None
-    current = response
-
-    while current is not None:
-        counted = getattr(current, "result", current)
-        if reported_count is None:
-            reported = getattr(counted, "count", None)
-            reported_count = reported if isinstance(reported, int) else None
-
-        raw_items = getattr(counted, "items", None)
-        if isinstance(raw_items, list | tuple):
-            typed_items = cast("list[object] | tuple[object, ...]", raw_items)
-            items.extend(_serialize_item(item) for item in typed_items)
-
-        next_func = getattr(current, "next", None)
-        if not callable(next_func):
-            break
-
-        maybe_next = next_func()
-        if inspect.isawaitable(maybe_next):
-            current = await cast("Awaitable[object | None]", maybe_next)
-        else:
-            current = cast("object | None", maybe_next)
-
-    return items, reported_count
+    """Serialize all pages through the shared strict SDK response normalizer."""
+    raw_items, reported_count = await collect_paginated_sdk_response_items(
+        response,
+        context="Edge node inventory SDK response",
+    )
+    return [_serialize_item(item) for item in raw_items], reported_count
 
 
 async def resolve_edge_node(

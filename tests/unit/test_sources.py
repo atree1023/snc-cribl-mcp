@@ -524,7 +524,7 @@ async def test_collect_product_sources_legacy_sdk_raises_runtime_error(mock_ctx:
         sources=SimpleNamespace(list_async=AsyncMock(return_value=resp_g1)),
     )
 
-    with pytest.raises(RuntimeError, match=r"requires cribl-control-plane>=0\.6\.0"):
+    with pytest.raises(RuntimeError, match=r"requires cribl-control-plane>=0\.11\.0,<0\.12"):
         await collect_product_sources(
             mock_client,  # type: ignore[arg-type]
             product=ProductsCore.STREAM,

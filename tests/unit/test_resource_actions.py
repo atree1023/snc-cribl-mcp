@@ -4,6 +4,7 @@ from __future__ import annotations
 
 # pyright: reportPrivateUsage=false
 import json
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -201,6 +202,18 @@ async def test_list_resource_destinations_uses_group_scope() -> None:
     kwargs = client.destinations.list_async.await_args.kwargs
     assert kwargs["timeout_ms"] == 1200
     assert kwargs["server_url"] == "https://cribl.example.com/api/v1/m/default"
+
+
+@pytest.mark.asyncio
+async def test_list_resource_reads_current_sdk_result_wrapper() -> None:
+    """Context-free list helpers should unwrap SDK 0.11 paginated results."""
+    client = MagicMock()
+    client.sdk_configuration = MagicMock(server_url="https://cribl.example.com/api/v1")
+    client.sources.list_async = AsyncMock(return_value=SimpleNamespace(result=_make_response({"id": "in_http"})))
+
+    items = await list_resource(client, "sources", timeout_ms=1200, group_id="default")
+
+    assert items == [{"id": "in_http"}]
 
 
 @pytest.mark.asyncio

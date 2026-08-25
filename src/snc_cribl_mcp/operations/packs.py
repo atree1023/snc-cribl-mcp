@@ -17,11 +17,16 @@ from pydantic import ValidationError
 from .common import (
     HTTP_NOT_FOUND,
     build_unavailable_result,
+    collect_paginated_sdk_response_items,
+    counted_sdk_response_count,
+    counted_sdk_response_items,
     extract_group_id,
     get_auth_headers,
     get_group_url,
+    is_counted_sdk_response,
     list_groups_minimal,
     serialize_model,
+    unwrap_sdk_response,
 )
 from .config_objects import ConfigObjectKind, extract_config_object_refs
 from .validation_errors import format_validation_error_response, parse_validation_error
@@ -54,7 +59,7 @@ type PackObjectKind = Literal[
     "sources",
 ]
 type PackApiCall = Callable[[], Awaitable[object]]
-type PackSerializer = Callable[[object], dict[str, Any]]
+type PackSerializer = Callable[[object], dict[str, Any] | Awaitable[dict[str, Any]]]
 
 _DEFAULT_OBJECT_LIMIT = 50
 _MAX_OBJECT_LIMIT = 250
@@ -175,23 +180,38 @@ class ResolvedPackGroupScope:
 
 def _serialize_counted_response(response: object) -> dict[str, Any]:
     """Serialize an SDK counted or single-object response into the MCP response shape."""
-    raw_items_value: object = getattr(response, "items", None)
-    raw_items: list[object] | None = None
-    if isinstance(raw_items_value, list):
-        raw_items = cast("list[object]", raw_items_value)
-    elif isinstance(raw_items_value, tuple):
-        raw_items = list(cast("tuple[object, ...]", raw_items_value))
-    if raw_items is None:
-        item = serialize_model(response)
+    if not is_counted_sdk_response(response):
+        item = serialize_model(unwrap_sdk_response(response))
         return {
             "status": "ok",
             "count": 1 if item else 0,
             "items": [item] if item else [],
         }
 
+    raw_items = counted_sdk_response_items(response, context="Pack SDK response")
     items = [serialize_model(item) for item in raw_items]
-    reported_count = getattr(response, "count", None)
+    reported_count = counted_sdk_response_count(response)
 
+    result: dict[str, Any] = {
+        "status": "ok",
+        "count": len(items),
+        "items": items,
+    }
+    if reported_count is not None:
+        result["reported_count"] = reported_count
+    return result
+
+
+async def _serialize_paginated_counted_response(response: object) -> dict[str, Any]:
+    """Serialize every page from a counted Pack list response."""
+    if not is_counted_sdk_response(response):
+        return _serialize_counted_response(response)
+
+    raw_items, reported_count = await collect_paginated_sdk_response_items(
+        response,
+        context="Pack SDK response",
+    )
+    items = [serialize_model(item) for item in raw_items]
     result: dict[str, Any] = {
         "status": "ok",
         "count": len(items),
@@ -204,7 +224,7 @@ def _serialize_counted_response(response: object) -> dict[str, Any]:
 
 def _serialize_single_response(response: object) -> dict[str, Any]:
     """Serialize an SDK single-object response into the MCP response shape."""
-    return {"status": "ok", **serialize_model(response)}
+    return {"status": "ok", **serialize_model(unwrap_sdk_response(response))}
 
 
 def _serialize_http_counted_payload(payload: object) -> dict[str, Any]:
@@ -469,7 +489,10 @@ async def _run_pack_api_call(
             "error_type": exc.__class__.__name__,
         }
 
-    return serializer(response)
+    serialized = serializer(response)
+    if isinstance(serialized, dict):
+        return serialized
+    return await serialized
 
 
 def _pack_base_url(client: CriblControlPlane, server_url: str | None) -> str:
@@ -569,7 +592,7 @@ async def _collect_pack_sdk_objects(
     if object_id is None:
         return await _run_pack_api_call(
             lambda: sdk.list_async(**kwargs),
-            serializer=_serialize_counted_response,
+            serializer=_serialize_paginated_counted_response,
             resource_type=f"packs.{section_kind}",
             server_url=server_url,
         )
@@ -892,7 +915,7 @@ async def collect_packs(
             with_=with_,
             **_pack_call_kwargs(timeout_ms=timeout_ms, server_url=server_url),
         ),
-        serializer=_serialize_counted_response,
+        serializer=_serialize_paginated_counted_response,
         resource_type="packs",
         server_url=server_url,
     )

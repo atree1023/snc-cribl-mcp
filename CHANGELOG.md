@@ -10,6 +10,7 @@ All notable changes to snc-cribl-mcp will be documented in this file.
 - Added dry-run-protected group/fleet commit, explicit-version deploy, combined commit/deploy, parent-first deploy-all, and configured-remote push workflows.
 - Added plan-digest drift checks, conflict/remote preflights, Leader deployment-metadata commits, partial-failure reporting, and rollout status reporting.
 - Added `get_config_deployment_job` for polling non-blocking commit, deployment, and Git push executions.
+- Added content-addressed dry-run plans and exact-plan confirmation to `copy_resource_config`; the exposed tool now defaults to `dry_run=true`.
 
 ### Fixed
 
@@ -17,11 +18,18 @@ All notable changes to snc-cribl-mcp will be documented in this file.
 - Removed duplicate changed-path arrays, full reviewed plans, and raw SDK commit/deployment payloads from mutation results.
 - Isolated mutation jobs from the MCP event loop and serialized them per configured server so long deployments do not block status and diff tools.
 - Updated minimal group listing for the current SDK's counted response wrapper.
+- Restored SDK 0.11 group, group-scoped object, Pack, leader-summary, and Git-status reads by normalizing `response.result` wrappers while rejecting unknown response shapes instead of returning silent empty results.
+- Applied SDK 0.11 pagination to Pack inventories and version-control target discovery, and consolidated node pagination on the shared strict response normalizer.
+- Documented the SDK 0.11 Pack `with_=collectors` expansion so callers can retrieve Pack collector counts without follow-up requests.
+- Constrained the Preview `cribl-control-plane` dependency to the live-validated `>=0.11.0,<0.12` compatibility line.
+- Preserved non-empty network error details and removed runtime-only status timestamps from config drift checks.
 
 ### Tests
 
 - Added focused unit coverage for Git state serialization, deployed diffs, plan drift, targeted and all-target workflows, Edge inheritance ordering, partial failures, push preflights, and MCP wrappers.
 - Added 107-file response-size regression coverage plus blocking-worker, polling, failure, and per-server job serialization tests.
+- Added SDK 0.11 wrapper regressions, copy-plan drift-gate coverage, and live plan/execute/validate/cleanup testing against two local Cribl 4.19.2 leaders.
+- Ran 58 safe MCP tool calls across both local leaders plus a temporary empty-Pack install/list/get/delete cleanup workflow.
 
 ## [0.3.0] - 2026-05-22
 

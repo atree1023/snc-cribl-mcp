@@ -38,6 +38,18 @@ class _Counted:
         self.count = len(items) if count is None else count
 
 
+class _Page:
+    """Small paginated SDK wrapper for group inventory tests."""
+
+    def __init__(self, *items: dict[str, Any], next_page: object | None = None) -> None:
+        self.result = _Counted(*items)
+        self._next_page = next_page
+
+    async def next(self) -> object | None:
+        """Return the configured next page."""
+        return self._next_page
+
+
 def _group_payload(
     group_id: str,
     *,
@@ -461,6 +473,40 @@ async def test_collect_status_omits_internal_search_groups(monkeypatch: pytest.M
 
     assert result["count"] == 1
     assert result["targets"][0]["target"]["id"] == "workers"
+
+
+@pytest.mark.asyncio
+async def test_collect_status_reads_current_sdk_group_result_wrapper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Git status inventory should not turn SDK 0.11 group wrappers into zero targets."""
+    workers = _group_payload("workers", product=ProductsCore.STREAM, local_changes=0)
+    harness = _Harness((ProductsCore.STREAM, workers))
+
+    async def _wrapped_groups(*, product: ProductsCore, **_: object) -> SimpleNamespace:
+        payloads = [payload for (candidate, _), payload in harness.states.items() if candidate == product]
+        return SimpleNamespace(result=_Counted(*payloads))
+
+    harness.client.groups.list_async = AsyncMock(side_effect=_wrapped_groups)
+    _install_harness(monkeypatch, harness)
+
+    result = await vc.collect_group_git_status("test", product="stream")
+
+    assert result["count"] == 1
+    assert result["targets"][0]["target"]["id"] == "workers"
+
+
+@pytest.mark.asyncio
+async def test_collect_status_exhausts_sdk_group_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Version-control target discovery should include groups from every SDK page."""
+    first = _group_payload("first", product=ProductsCore.STREAM, local_changes=0)
+    second = _group_payload("second", product=ProductsCore.STREAM, local_changes=0)
+    harness = _Harness((ProductsCore.STREAM, first), (ProductsCore.STREAM, second))
+    harness.client.groups.list_async = AsyncMock(return_value=_Page(first, next_page=_Page(second)))
+    _install_harness(monkeypatch, harness)
+
+    result = await vc.collect_group_git_status("test", product="stream")
+
+    assert result["count"] == 2
+    assert [entry["target"]["id"] for entry in result["targets"]] == ["first", "second"]
 
 
 @pytest.mark.asyncio

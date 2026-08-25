@@ -13,6 +13,7 @@ Collection Strategies:
 """
 
 import asyncio
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ logger = logging.getLogger("snc_cribl_mcp.operations.common")
 
 # HTTP status codes
 HTTP_NOT_FOUND = 404
+_MISSING = object()
 
 # Type aliases using Python 3.12+ syntax
 type GroupEntry = dict[str, Any]
@@ -105,6 +107,128 @@ def serialize_model(obj: object) -> dict[str, Any]:
     return {}
 
 
+def exception_detail(exc: BaseException) -> str:
+    """Return a non-empty, operator-facing exception description.
+
+    Some transport exceptions intentionally have an empty string representation.
+    Preserve useful messages when present and otherwise report the concrete error
+    type so network failures never collapse into a blank MCP error.
+    """
+    message = str(exc).strip()
+    return message or type(exc).__name__
+
+
+def _has_explicit_attribute(value: object, name: str) -> bool:
+    """Return whether an attribute exists without triggering dynamic mocks/proxies."""
+    try:
+        inspect.getattr_static(value, name)
+    except AttributeError:
+        return False
+    return True
+
+
+def unwrap_sdk_response(response: object) -> object:
+    """Return the payload carried by a generated SDK response wrapper.
+
+    Cribl Control Plane SDK 0.11 wraps paginated collections under ``result``;
+    older releases returned counted collections directly. This helper accepts
+    both shapes while avoiding dynamic ``result`` attributes exposed by mocks or
+    proxy objects.
+    """
+    result = getattr(response, "result", _MISSING)
+    if result is _MISSING or result is None:
+        return response
+    result_items = getattr(result, "items", _MISSING)
+    if _has_explicit_attribute(response, "result") or isinstance(result_items, list | tuple):
+        return result
+    return response
+
+
+def counted_sdk_response_items(response: object | None, *, context: str = "SDK response") -> list[object]:
+    """Extract items from direct and ``result``-wrapped counted responses.
+
+    A missing counted-list shape is an error rather than an empty collection.
+    This prevents SDK response drift and failed reads from being reported as a
+    successful zero-item result.
+    """
+    if response is None:
+        msg = f"{context} was empty; expected a counted items response."
+        raise RuntimeError(msg)
+
+    payload = unwrap_sdk_response(response)
+    raw_items = getattr(payload, "items", _MISSING)
+    if isinstance(raw_items, list | tuple):
+        return list(cast("list[object] | tuple[object, ...]", raw_items))
+    if raw_items is None and _has_explicit_attribute(payload, "items"):
+        return []
+
+    msg = (
+        f"{context} had unsupported shape '{type(response).__name__}' "
+        f"with payload '{type(payload).__name__}'; expected an items collection."
+    )
+    raise RuntimeError(msg)
+
+
+def counted_sdk_response_count(response: object | None) -> int | None:
+    """Return the count reported by a direct or wrapped SDK response."""
+    if response is None:
+        return None
+    payload = unwrap_sdk_response(response)
+    for name in ("total_count", "count"):
+        value = getattr(payload, name, None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def is_counted_sdk_response(response: object | None) -> bool:
+    """Return whether a response exposes a recognized counted-list shape."""
+    if response is None:
+        return False
+    try:
+        counted_sdk_response_items(response)
+    except RuntimeError:
+        return False
+    payload = unwrap_sdk_response(response)
+    return _has_explicit_attribute(payload, "count")
+
+
+async def collect_paginated_sdk_response_items(
+    response: object | None,
+    *,
+    context: str = "SDK response",
+) -> tuple[list[object], int | None]:
+    """Collect every page from a direct or ``result``-wrapped SDK response."""
+    if response is None:
+        counted_sdk_response_items(response, context=context)
+
+    items: list[object] = []
+    reported_count: int | None = None
+    current = response
+    page = 1
+    while current is not None:
+        items.extend(counted_sdk_response_items(current, context=f"{context} page {page}"))
+        current_count = counted_sdk_response_count(current)
+        if reported_count is None:
+            reported_count = current_count
+
+        if not _has_explicit_attribute(current, "next"):
+            break
+        next_func = getattr(current, "next", None)
+        if not callable(next_func):
+            break
+        maybe_next = next_func()
+        if inspect.isawaitable(maybe_next):
+            current = await cast("Awaitable[object | None]", maybe_next)
+        else:
+            current = cast("object | None", maybe_next)
+        page += 1
+
+    if page > 1 and (reported_count is None or reported_count < len(items)):
+        reported_count = len(items)
+    return items, reported_count
+
+
 async def list_groups_minimal(
     client: CriblControlPlane,
     *,
@@ -123,15 +247,11 @@ async def list_groups_minimal(
 
     """
     resp = await client.groups.list_async(product=product, timeout_ms=timeout_ms)
-    if resp is None:
-        return []
-    result: object = getattr(resp, "result", None)
-    items: object = getattr(result, "items", None) if result is not None else None
-    if not isinstance(items, list | tuple):
-        items = getattr(resp, "items", None)
-    if not isinstance(items, list | tuple):
-        return []
-    return [serialize_model(item) for item in cast("list[object] | tuple[object, ...]", items)]
+    items, _reported_count = await collect_paginated_sdk_response_items(
+        resp,
+        context=f"{product.value} groups response",
+    )
+    return [serialize_model(item) for item in items]
 
 
 def build_unavailable_result(*, is_grouped: bool = True) -> ProductResult:
@@ -292,19 +412,6 @@ def get_auth_headers(security: Security) -> dict[str, str]:
     return headers
 
 
-def _is_counted_sdk_response(resp: object) -> bool:
-    """Return true when an SDK response has counted-list shape."""
-    return isinstance(getattr(resp, "items", None), list | tuple) and hasattr(resp, "count")
-
-
-def _sdk_response_items(resp: object) -> list[object]:
-    """Return SDK response items when the response has counted-list shape."""
-    raw_items = getattr(resp, "items", None)
-    if isinstance(raw_items, list | tuple):
-        return list(cast("list[object] | tuple[object, ...]", raw_items))
-    return []
-
-
 async def collect_items_via_sdk(
     coll_ctx: CollectionContext,
     list_method: Callable[..., Awaitable[Any]],
@@ -354,10 +461,13 @@ async def collect_items_via_sdk(
                 coll_ctx.product,
                 coll_ctx.resource_type,
             )
-        msg = f"Cribl API error while listing {coll_ctx.product.value} groups for {coll_ctx.resource_type}: {exc}"
+        msg = (
+            f"Cribl API error while listing {coll_ctx.product.value} groups for {coll_ctx.resource_type}: "
+            f"{exception_detail(exc)}"
+        )
         raise RuntimeError(msg) from exc
     except httpx.HTTPError as exc:
-        msg = f"Network error while listing {coll_ctx.product.value} groups: {exc}"
+        msg = f"Network error while listing {coll_ctx.product.value} groups: {exception_detail(exc)}"
         raise RuntimeError(msg) from exc
 
     # Filter groups with valid IDs and fetch items in parallel
@@ -471,18 +581,27 @@ async def _collect_group_items_sdk(
                 f"{coll_ctx.product.value} group '{group_id}'; skipping.",
             )
             return build_group_entry(group_id, [])
-        msg = f"Cribl API error while listing {coll_ctx.resource_type} for {coll_ctx.product.value} group '{group_id}': {exc}"
+        msg = (
+            f"Cribl API error while listing {coll_ctx.resource_type} for {coll_ctx.product.value} group '{group_id}': "
+            f"{exception_detail(exc)}"
+        )
         raise RuntimeError(msg) from exc
     except httpx.HTTPError as exc:
-        msg = f"Network error while listing {coll_ctx.resource_type} for {coll_ctx.product.value} group '{group_id}': {exc}"
+        msg = (
+            f"Network error while listing {coll_ctx.resource_type} for {coll_ctx.product.value} group '{group_id}': "
+            f"{exception_detail(exc)}"
+        )
         raise RuntimeError(msg) from exc
 
-    if single_response and not _is_counted_sdk_response(resp):
-        item = serialize_model(resp)
+    if single_response and not is_counted_sdk_response(resp):
+        item = serialize_model(unwrap_sdk_response(resp))
         return build_group_entry(group_id, [item] if item else [])
 
-    items = [serialize_model(item) for item in _sdk_response_items(resp)]
-    reported = getattr(resp, "count", None)
+    raw_items, reported = await collect_paginated_sdk_response_items(
+        resp,
+        context=f"{coll_ctx.resource_type} response for {coll_ctx.product.value} group '{group_id}'",
+    )
+    items = [serialize_model(item) for item in raw_items]
     return build_group_entry(group_id, items, reported_count=reported)
 
 
@@ -545,10 +664,13 @@ async def collect_items_via_http(http_ctx: HttpCollectionContext) -> ProductResu
                 coll_ctx.product,
                 coll_ctx.resource_type,
             )
-        msg = f"Cribl API error while listing {coll_ctx.product.value} groups for {coll_ctx.resource_type}: {exc}"
+        msg = (
+            f"Cribl API error while listing {coll_ctx.product.value} groups for {coll_ctx.resource_type}: "
+            f"{exception_detail(exc)}"
+        )
         raise RuntimeError(msg) from exc
     except httpx.HTTPError as exc:
-        msg = f"Network error while listing {coll_ctx.product.value} groups: {exc}"
+        msg = f"Network error while listing {coll_ctx.product.value} groups: {exception_detail(exc)}"
         raise RuntimeError(msg) from exc
 
     # The SDK types async_client as AsyncHttpClient (Protocol) | None, but at runtime
@@ -639,7 +761,10 @@ async def _collect_group_items_http(
         resp.raise_for_status()
 
     except httpx.HTTPError as exc:
-        msg = f"Network error while listing {coll_ctx.resource_type} for {coll_ctx.product.value} group '{group_id}': {exc}"
+        msg = (
+            f"Network error while listing {coll_ctx.resource_type} for {coll_ctx.product.value} group '{group_id}': "
+            f"{exception_detail(exc)}"
+        )
         raise RuntimeError(msg) from exc
 
     try:
@@ -667,10 +792,16 @@ __all__ = [
     "build_unavailable_result",
     "collect_items_via_http",
     "collect_items_via_sdk",
+    "collect_paginated_sdk_response_items",
+    "counted_sdk_response_count",
+    "counted_sdk_response_items",
+    "exception_detail",
     "extract_group_id",
     "get_auth_headers",
     "get_group_url",
     "handle_product_unavailable",
+    "is_counted_sdk_response",
     "list_groups_minimal",
     "serialize_model",
+    "unwrap_sdk_response",
 ]

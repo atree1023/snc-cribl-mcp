@@ -2,7 +2,7 @@
 
 This module handles two types of sources:
 1. Regular sources from `/api/v1/m/{group_id}/system/inputs` (via SDK)
-2. Collector sources from `/api/v1/m/{group_id}/lib/jobs` (via SDK 0.6.0+)
+2. Collector sources from `/api/v1/m/{group_id}/lib/jobs` (via SDK 0.11)
 
 Collector sources are saved jobs of type ``collection`` that pull data from
 external systems like S3, REST APIs, databases, and other upstreams.
@@ -135,7 +135,7 @@ def _require_collectors_list_method(client: CriblControlPlane) -> CollectorListM
     if not callable(list_async):
         msg = (
             "Installed cribl-control-plane SDK does not expose client.collectors.list_async. "
-            "snc_cribl_mcp requires cribl-control-plane>=0.6.0."
+            "snc_cribl_mcp requires cribl-control-plane>=0.11.0,<0.12."
         )
         raise UnsupportedCollectorsSdkError(msg)
     return cast("CollectorListMethod", list_async)

@@ -84,7 +84,8 @@ async def test_copy_resource_config_tool_forwards_arguments(mock_ctx: Context) -
         overwrite=True,
         validate_after=True,
         append_routes=False,
-        dry_run=False,
+        dry_run=True,
+        expected_plan_sha256=None,
     )
 
 
@@ -160,7 +161,8 @@ async def test_copy_resource_config_tool_forwards_product_scoped_groups(mock_ctx
         overwrite=True,
         validate_after=True,
         append_routes=False,
-        dry_run=False,
+        dry_run=True,
+        expected_plan_sha256=None,
     )
 
 
@@ -202,4 +204,37 @@ async def test_copy_resource_config_tool_forwards_filters_and_dry_run(mock_ctx: 
         validate_after=True,
         append_routes=False,
         dry_run=True,
+        expected_plan_sha256=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_tool_requires_and_forwards_reviewed_plan(mock_ctx: Context) -> None:
+    """Execution should require and forward the exact dry-run plan digest."""
+    impl = AsyncMock(return_value={"copied_count": 1})
+    app = _FakeApp()
+    register_copy_resource_config(app, impl=impl)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="expected_plan_sha256 is required"):
+        await app.tools["copy_resource_config"](
+            mock_ctx,
+            resource_kind="pipelines",
+            source_server="source",
+            target_server="target",
+            source_group="default",
+            dry_run=False,
+        )
+    impl.assert_not_awaited()
+
+    await app.tools["copy_resource_config"](
+        mock_ctx,
+        resource_kind="pipelines",
+        source_server="source",
+        target_server="target",
+        source_group="default",
+        dry_run=False,
+        expected_plan_sha256="reviewed-plan",
+    )
+    assert impl.await_args is not None
+    assert impl.await_args.kwargs["dry_run"] is False
+    assert impl.await_args.kwargs["expected_plan_sha256"] == "reviewed-plan"

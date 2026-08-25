@@ -507,6 +507,32 @@ class TestCollectItemsViaSdk:
         assert result["total_count"] == 2
         assert len(result["groups"]) == 2
 
+    async def test_collects_items_from_current_sdk_result_wrappers(self) -> None:
+        """SDK 0.11 wrappers should expose both groups and per-group objects."""
+        coll_ctx, mock_client, _ = self._create_collection_context()
+        group = MagicMock()
+        group.model_dump.return_value = {"id": "group1"}
+        group_page = MagicMock(items=[group], count=1)
+        mock_client.groups.list_async = AsyncMock(return_value=MagicMock(result=group_page))
+
+        source = MagicMock()
+        source.model_dump.return_value = {"id": "src1", "type": "http"}
+        source_page = MagicMock(items=[source], count=1)
+        mock_list_method = AsyncMock(return_value=MagicMock(result=source_page))
+
+        result = await collect_items_via_sdk(coll_ctx, mock_list_method)
+
+        assert result["status"] == "ok"
+        assert result["total_count"] == 1
+        assert result["groups"] == [
+            {
+                "group_id": "group1",
+                "count": 1,
+                "items": [{"id": "src1", "type": "http"}],
+                "reported_count": 1,
+            }
+        ]
+
     async def test_handles_404_from_groups_endpoint(self) -> None:
         """Returns unavailable when groups endpoint returns 404."""
         coll_ctx, mock_client, mock_ctx = self._create_collection_context()
@@ -540,13 +566,13 @@ class TestCollectItemsViaSdk:
             await collect_items_via_sdk(coll_ctx, mock_list_method)
 
     async def test_raises_runtime_error_on_network_error(self) -> None:
-        """Raises RuntimeError on network errors."""
+        """Raises an informative RuntimeError when the SDK error message is empty."""
         coll_ctx, mock_client, _ = self._create_collection_context()
 
-        mock_client.groups.list_async = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+        mock_client.groups.list_async = AsyncMock(side_effect=httpx.ConnectError(""))
 
         mock_list_method = AsyncMock()
-        with pytest.raises(RuntimeError, match="Network error"):
+        with pytest.raises(RuntimeError, match=r"Network error.*ConnectError"):
             await collect_items_via_sdk(coll_ctx, mock_list_method)
 
     async def test_returns_empty_when_no_valid_groups(self) -> None:
@@ -686,8 +712,8 @@ class TestCollectItemsViaSdk:
             }
         ]
 
-    async def test_counted_response_with_malformed_items_returns_empty_group(self) -> None:
-        """Malformed counted-response item containers should be treated as empty."""
+    async def test_counted_response_with_malformed_items_raises(self) -> None:
+        """Malformed counted responses must not masquerade as empty groups."""
 
         class MalformedCountedResponse:
             items = "not-a-list"
@@ -699,17 +725,8 @@ class TestCollectItemsViaSdk:
         mock_client.groups.list_async = AsyncMock(return_value=MagicMock(items=[mock_group]))
         mock_list_method = AsyncMock(return_value=MalformedCountedResponse())
 
-        result = await collect_items_via_sdk(coll_ctx, mock_list_method)
-
-        assert result["status"] == "ok"
-        assert result["groups"] == [
-            {
-                "group_id": "group1",
-                "count": 0,
-                "items": [],
-                "reported_count": 1,
-            }
-        ]
+        with pytest.raises(RuntimeError, match="unsupported shape"):
+            await collect_items_via_sdk(coll_ctx, mock_list_method)
 
 
 class TestCollectItemsViaHttp:

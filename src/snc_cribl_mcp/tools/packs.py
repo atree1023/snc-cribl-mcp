@@ -136,7 +136,7 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
         name="list_packs",
         description=(
             "Return JSON describing installed Cribl Packs. Optionally include counts for Pack inputs and outputs "
-            'by passing with_="inputs", "outputs", or "inputs,outputs". '
+            'by passing with_="inputs", "outputs", "collectors", or a comma-separated combination. '
             f"{_PACK_SCOPE_DESCRIPTION}"
         ),
         annotations={

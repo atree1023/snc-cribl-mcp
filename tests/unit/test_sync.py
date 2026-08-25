@@ -272,6 +272,19 @@ def test_compare_items_raw_bypasses_resource_canonicalization() -> None:
     assert result["differing_paths"] == ["size"]
 
 
+def test_compare_items_ignores_runtime_status_but_not_config_drift() -> None:
+    """Config validation should exclude volatile runtime status metadata."""
+    source = {"id": "in_tcp", "port": 10060, "status": {"timestamp": 1}}
+    target = {"id": "in_tcp", "port": 10060, "status": {"timestamp": 2}}
+
+    assert sync_module._compare_items("sources", "in_tcp", source, target)["status"] == "in_sync"
+
+    target["port"] = 10061
+    result = sync_module._compare_items("sources", "in_tcp", source, target)
+    assert result["status"] == "different"
+    assert result["differing_paths"] == ["port"]
+
+
 @pytest.mark.asyncio
 async def test_maybe_get_item_returns_none_only_for_http_404(monkeypatch: pytest.MonkeyPatch) -> None:
     """Single-item lookup should translate HTTP 404 to None and re-raise other errors."""
@@ -637,6 +650,59 @@ async def test_copy_resource_config_dry_run_filters_and_reports_planned_actions(
 
 
 @pytest.mark.asyncio
+async def test_copy_resource_config_executes_only_exact_reviewed_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Copy execution should reject stale state and accept the exact dry-run digest."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_item = {"id": "pipe1", "conf": {"output": "default"}}
+    list_resource = AsyncMock(return_value=[source_item])
+    maybe_get_item = AsyncMock(side_effect=[None, None, None])
+    create_resource = AsyncMock(return_value=[source_item])
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "create_resource", create_resource)
+
+    plan = await sync_module.copy_resource_config(
+        "pipelines",
+        "source",
+        "target",
+        group_id="default",
+        dry_run=True,
+        validate_after=False,
+    )
+    assert len(plan["plan_sha256"]) == 64
+
+    with pytest.raises(ValueError, match="reviewed copy plan is stale"):
+        await sync_module.copy_resource_config(
+            "pipelines",
+            "source",
+            "target",
+            group_id="default",
+            dry_run=False,
+            validate_after=False,
+            expected_plan_sha256="stale",
+        )
+    create_resource.assert_not_awaited()
+
+    result = await sync_module.copy_resource_config(
+        "pipelines",
+        "source",
+        "target",
+        group_id="default",
+        dry_run=False,
+        validate_after=False,
+        expected_plan_sha256=plan["plan_sha256"],
+    )
+    assert result["executed_plan_sha256"] == plan["plan_sha256"]
+    assert result["items"] == [{"item_id": "pipe1", "action": "created"}]
+    create_resource.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_copy_resource_config_preserves_success_when_validation_lookup_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -655,8 +721,8 @@ async def test_copy_resource_config_preserves_success_when_validation_lookup_fai
     maybe_get_item = AsyncMock(
         side_effect=[
             None,
-            RuntimeError("validation lookup failed"),
             None,
+            RuntimeError("validation lookup failed"),
             source_items[1],
         ]
     )

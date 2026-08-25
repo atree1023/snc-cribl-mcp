@@ -1,7 +1,7 @@
 """Helpers for working with groups across Cribl products."""
 
 import logging
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 import httpx
 from cribl_control_plane import CriblControlPlane
@@ -11,20 +11,17 @@ from cribl_control_plane.models.productscore import ProductsCore
 from fastmcp import Context
 from pydantic import ValidationError
 
-from .common import HTTP_NOT_FOUND
+from .common import (
+    HTTP_NOT_FOUND,
+    collect_paginated_sdk_response_items,
+    exception_detail,
+)
 from .validation_errors import (
     format_validation_error_response,
     parse_validation_error,
 )
 
 logger = logging.getLogger("snc_cribl_mcp.operations.groups")
-
-
-class _GroupListResponse(Protocol):
-    """Protocol for the Cribl SDK group list response."""
-
-    items: list[ConfigGroup] | None
-    count: int | None
 
 
 def serialize_config_group(group: ConfigGroup) -> dict[str, Any]:
@@ -52,12 +49,9 @@ async def collect_product_groups(
 
     """
     try:
-        response = cast(
-            "_GroupListResponse",
-            await client.groups.list_async(
-                product=product,
-                timeout_ms=timeout_ms,
-            ),
+        response = await client.groups.list_async(
+            product=product,
+            timeout_ms=timeout_ms,
         )
     except ResponseValidationError as exc:
         # Handle Pydantic validation errors from SDK
@@ -83,20 +77,24 @@ async def collect_product_groups(
                 "items": [],
                 "message": "Endpoint returned HTTP 404 (Not Found).",
             }
-        msg = f"Cribl API error while listing {product.value} groups: {exc}"
+        msg = f"Cribl API error while listing {product.value} groups: {exception_detail(exc)}"
         raise RuntimeError(msg) from exc
     except httpx.HTTPError as exc:
-        msg = f"Network error while listing {product.value} groups: {exc}"
+        msg = f"Network error while listing {product.value} groups: {exception_detail(exc)}"
         raise RuntimeError(msg) from exc
 
-    items = [serialize_config_group(item) for item in response.items or []]
+    raw_items, reported_count = await collect_paginated_sdk_response_items(
+        response,
+        context=f"{product.value} groups response",
+    )
+    items = [serialize_config_group(cast("ConfigGroup", item)) for item in raw_items]
     result: dict[str, Any] = {
         "status": "ok",
         "count": len(items),
         "items": items,
     }
-    if response.count is not None:
-        result["reported_count"] = response.count
+    if reported_count is not None:
+        result["reported_count"] = reported_count
     return result
 
 

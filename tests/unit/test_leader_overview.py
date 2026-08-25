@@ -130,7 +130,7 @@ def _build_overview_client(config: CriblConfig, async_client: httpx.AsyncClient)
 
     client.groups.list_async = AsyncMock(side_effect=groups_list_async)
 
-    async def summary_async(product: object, timeout_ms: int) -> _Model:
+    async def summary_async(product: object, timeout_ms: int) -> _Page:
         product_value = getattr(product, "value", product)
         summary = (
             {
@@ -143,7 +143,7 @@ def _build_overview_client(config: CriblConfig, async_client: httpx.AsyncClient)
                 "workers": {"count": 3, "disconnectedCount": 0, "alive": 3},
             }
         )
-        return _Model({"count": 1, "items": [summary]})
+        return _Page([_Model(summary)], count=1)
 
     client.nodes.summaries.get_async = AsyncMock(side_effect=summary_async)
 

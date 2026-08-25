@@ -405,6 +405,29 @@ class TestCollectProductGroups:
         assert len(result["items"]) == 1
 
     @pytest.mark.asyncio
+    async def test_collect_groups_supports_current_sdk_result_wrapper(
+        self,
+        sample_config_group: dict[str, Any],
+    ) -> None:
+        """SDK 0.11 group responses should be read from the result payload."""
+        mock_client = MagicMock()
+        group = MagicMock()
+        group.model_dump.return_value = sample_config_group
+        mock_client.groups.list_async = AsyncMock(return_value=SimpleNamespace(result=SimpleNamespace(items=[group], count=1)))
+        mock_ctx = MagicMock(spec=Context)
+
+        result = await collect_product_groups(
+            mock_client,
+            product=ProductsCore.STREAM,
+            timeout_ms=10000,
+            ctx=mock_ctx,
+        )
+
+        assert result["status"] == "ok"
+        assert result["count"] == 1
+        assert result["items"] == [sample_config_group]
+
+    @pytest.mark.asyncio
     async def test_collect_groups_empty_items(self) -> None:
         """Test collecting groups when items list is None."""
         mock_client = MagicMock()

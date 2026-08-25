@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import logging
 from collections import Counter
@@ -22,7 +21,16 @@ from fastmcp import Context
 from pydantic import ValidationError
 
 from ..config import CriblConfig
-from .common import HTTP_NOT_FOUND, extract_group_id, get_auth_headers, get_group_url, serialize_model
+from .common import (
+    HTTP_NOT_FOUND,
+    collect_paginated_sdk_response_items,
+    counted_sdk_response_items,
+    extract_group_id,
+    get_auth_headers,
+    get_group_url,
+    serialize_model,
+    unwrap_sdk_response,
+)
 from .groups import collect_product_groups
 from .validation_errors import format_validation_error_response, parse_validation_error
 
@@ -94,33 +102,12 @@ def _as_dict(value: object) -> dict[str, Any] | None:
 
 
 async def _collect_paginated_items(response: object | None) -> tuple[list[dict[str, Any]], int | None]:
-    """Collect items from an SDK response that may expose a paginated wrapper."""
-    items: list[dict[str, Any]] = []
-    reported_count: int | None = None
-    current = response
-
-    while current is not None:
-        counted = getattr(current, "result", current)
-        if reported_count is None:
-            reported = getattr(counted, "count", None)
-            reported_count = reported if isinstance(reported, int) else None
-
-        raw_items = getattr(counted, "items", None)
-        if isinstance(raw_items, list | tuple):
-            typed_items = cast("list[object] | tuple[object, ...]", raw_items)
-            items.extend(_serialize_item(item) for item in typed_items)
-
-        next_func = getattr(current, "next", None)
-        if not callable(next_func):
-            break
-
-        maybe_next = next_func()
-        if inspect.isawaitable(maybe_next):
-            current = await cast("Awaitable[object | None]", maybe_next)
-        else:
-            current = cast("object | None", maybe_next)
-
-    return items, reported_count
+    """Serialize all pages through the shared strict SDK response normalizer."""
+    raw_items, reported_count = await collect_paginated_sdk_response_items(
+        response,
+        context="leader overview SDK response",
+    )
+    return [_serialize_item(item) for item in raw_items], reported_count
 
 
 def _status_validation_error(
@@ -389,7 +376,13 @@ async def _collect_system_info(
 
 def _summary_first_item(summary_response: object) -> dict[str, Any]:
     """Return the first item from a summary SDK response."""
-    data = serialize_model(summary_response)
+    try:
+        items = counted_sdk_response_items(summary_response, context="product summary response")
+    except RuntimeError:
+        items = []
+    if items:
+        return serialize_model(items[0])
+    data = serialize_model(unwrap_sdk_response(summary_response))
     first = _first_counted_item(data)
     return first or {}
 

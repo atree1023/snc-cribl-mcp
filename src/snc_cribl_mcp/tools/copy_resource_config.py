@@ -24,7 +24,8 @@ def register(app: FastMCP, *, impl: CopyResourceConfigFunc) -> None:
             "Copy groups, sources, destinations, pipelines, routes, breakers, lookups, or variables from one "
             "configured Cribl leader to another. Group-scoped resources support different source and target group selectors. "
             "Use item_pattern for wildcard boolean expressions such as 'oodp-* and not oodp-source-*' or 'oodp-* but not "
-            "oodp-source-*', item_regex for regular expressions, and dry_run=true to inspect planned actions without writing."
+            "oodp-source-*', item_regex for regular expressions. This mutation defaults to dry_run=true; pass the returned "
+            "plan_sha256 as expected_plan_sha256 with dry_run=false to execute the exact reviewed plan."
         ),
         annotations={
             "title": "Copy config between leaders",
@@ -49,10 +50,15 @@ def register(app: FastMCP, *, impl: CopyResourceConfigFunc) -> None:
         overwrite: bool = True,
         validate_after: bool = True,
         append_routes: bool = False,
-        dry_run: bool = False,
+        dry_run: bool = True,
+        expected_plan_sha256: str | None = None,
     ) -> dict[str, Any]:
         """Copy one config or a whole resource scope between leaders."""
         await ctx.info(f"Copying Cribl {resource_kind} from '{source_server}' to '{target_server}'.")
+
+        if not dry_run and expected_plan_sha256 is None:
+            msg = "expected_plan_sha256 is required when dry_run=false. Run copy_resource_config with dry_run=true first."
+            raise ValueError(msg)
 
         if resource_kind == "groups":
             if source_group is not None or target_group is not None:
@@ -82,6 +88,7 @@ def register(app: FastMCP, *, impl: CopyResourceConfigFunc) -> None:
             validate_after=validate_after,
             append_routes=append_routes,
             dry_run=dry_run,
+            expected_plan_sha256=expected_plan_sha256,
         )
 
 

@@ -21,7 +21,13 @@ from cribl_control_plane import CriblControlPlane
 from cribl_control_plane.models.productscore import ProductsCore
 from cribl_control_plane.models.security import Security
 
-from .common import get_auth_headers, get_group_url, serialize_model
+from .common import (
+    collect_paginated_sdk_response_items,
+    counted_sdk_response_items,
+    get_auth_headers,
+    get_group_url,
+    serialize_model,
+)
 
 type CrudAction = Literal["append", "create", "delete", "deploy", "get", "list", "update"]
 type JsonValue = dict[str, "JsonValue"] | list["JsonValue"] | str | int | float | bool | None
@@ -314,9 +320,9 @@ def _base_call_kwargs(
     return kwargs
 
 
-def _serialize_items(response: object) -> list[dict[str, Any]]:
+def _serialize_items(response: object, *, context: str = "SDK response") -> list[dict[str, Any]]:
     """Serialize a counted SDK response into plain dictionaries."""
-    raw_items = cast("list[object] | None", getattr(response, "items", None)) or []
+    raw_items = counted_sdk_response_items(response, context=context)
     return [serialize_model(item) for item in raw_items]
 
 
@@ -603,7 +609,11 @@ async def list_resource(
     component = _component(client, kind)
     method = getattr(component, _METHOD_NAME_BY_ACTION["list"])
     response = await method(**_base_call_kwargs(client, spec, timeout_ms=timeout_ms, product=product, group_id=group_id))
-    return _serialize_items(response)
+    raw_items, _reported_count = await collect_paginated_sdk_response_items(
+        response,
+        context=f"{kind} list response",
+    )
+    return [serialize_model(item) for item in raw_items]
 
 
 async def get_resource(
@@ -636,7 +646,7 @@ async def get_resource(
         id=item_id,
         **_base_call_kwargs(client, spec, timeout_ms=timeout_ms, product=product, group_id=group_id),
     )
-    items = _serialize_items(response)
+    items = _serialize_items(response, context=f"{kind} get response")
     if not items:
         msg = f"Resource '{kind}' with id '{item_id}' returned no items."
         raise RuntimeError(msg)
@@ -675,7 +685,7 @@ async def create_resource(
         **_base_call_kwargs(client, spec, timeout_ms=timeout_ms, product=product, group_id=group_id),
         **_build_create_kwargs(kind, item),
     )
-    return _serialize_items(response)
+    return _serialize_items(response, context=f"{kind} create response")
 
 
 async def update_resource(
@@ -712,7 +722,7 @@ async def update_resource(
         **_base_call_kwargs(client, spec, timeout_ms=timeout_ms, product=product, group_id=group_id),
         **_build_update_kwargs(kind, item_id, item),
     )
-    return _serialize_items(response)
+    return _serialize_items(response, context=f"{kind} update response")
 
 
 async def append_resource(
@@ -736,7 +746,7 @@ async def append_resource(
         **_base_call_kwargs(client, spec, timeout_ms=timeout_ms, group_id=group_id),
         **_build_append_kwargs(item_id, item),
     )
-    return _serialize_items(response)
+    return _serialize_items(response, context=f"{kind} append response")
 
 
 async def delete_resource(

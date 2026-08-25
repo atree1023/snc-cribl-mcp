@@ -37,6 +37,21 @@ def _single_response(payload: dict[str, Any]) -> MagicMock:
     return response
 
 
+class _Page:
+    """Small paginated SDK wrapper for multi-page Pack tests."""
+
+    def __init__(self, *items: dict[str, Any], next_page: object | None = None) -> None:
+        self.result = SimpleNamespace(
+            items=[_single_response(item) for item in items],
+            count=len(items),
+        )
+        self._next_page = next_page
+
+    async def next(self) -> object | None:
+        """Return the configured next page."""
+        return self._next_page
+
+
 def _json_response(url: str, payload: dict[str, Any], status_code: int = 200) -> httpx.Response:
     """Build an httpx JSON response with an attached request."""
     return httpx.Response(
@@ -269,6 +284,39 @@ async def test_collect_packs_forwards_with_parameter(mock_client: MagicMock) -> 
         "items": [{"id": "cribl-okta", "source": "git+repo"}],
         "reported_count": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_collect_packs_exhausts_sdk_pages_and_supports_collector_counts(mock_client: MagicMock) -> None:
+    """SDK 0.11 Pack wrappers should be exhausted and forward the collector expansion."""
+    second = _Page({"id": "second", "collectors": 2})
+    mock_client.packs.list_async = AsyncMock(return_value=_Page({"id": "first", "collectors": 1}, next_page=second))
+
+    result = await packs.collect_packs(mock_client, timeout_ms=1234, with_="collectors")
+
+    mock_client.packs.list_async.assert_awaited_once_with(with_="collectors", timeout_ms=1234)
+    assert result["count"] == 2
+    assert [item["id"] for item in result["items"]] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_get_pack_sdk_section_exhausts_all_pages(mock_client: MagicMock) -> None:
+    """SDK-backed Pack sections should not truncate after their first page."""
+    second = _Page({"id": "second", "type": "http"})
+    mock_client.packs.sources.list_async = AsyncMock(
+        return_value=_Page({"id": "first", "type": "system_metrics"}, next_page=second)
+    )
+
+    result = await packs.get_pack(
+        mock_client,
+        timeout_ms=1234,
+        pack_id="cribl-okta",
+        kind="sources",
+        security=Security(bearer_auth="test-token"),
+    )
+
+    assert result["objects"]["total_count"] == 2
+    assert [item["id"] for item in result["objects"]["items"]] == ["first", "second"]
 
 
 @pytest.mark.asyncio

@@ -58,6 +58,9 @@ Before writing code:
 - "On-prem", "onprem", and "customer managed" are equivalent terms
 - Distributed environments require `/m/{group_id}/` URL scoping
 - Pack management tools support distributed scoping with `product` plus `group`; resolve the group selector before calling SDK Pack methods with `server_url`.
+- SDK 0.11 paginated list responses carry counted collections under `response.result`; shared response helpers must accept wrapped and legacy direct counted shapes, exhaust `response.next()`, and reject unknown shapes instead of returning silent empty results.
+- Keep `cribl-control-plane` constrained to the validated `>=0.11.0,<0.12` line; the SDK is a Preview feature and generated minor releases can contain breaking model and response changes.
+- `copy_resource_config` defaults to `dry_run=true` and requires the returned `plan_sha256` as `expected_plan_sha256` for exposed execution. Its drift digest excludes runtime-only status metadata while preserving write-relevant config state.
 - Version-control mutations default to `dry_run=true` and require the returned `plan_sha256` as `expected_plan_sha256` for execution. Group/fleet commits and diffs are scoped under `/m/{group_id}`; deploy an immutable commit and then commit only `local/cribl/groups.yml` at Leader scope.
 - Mutation execution returns a process-local `job_id`; poll `get_config_deployment_job` for its bounded final result. Jobs run off the MCP event loop and are serialized per configured server so status/diff reads remain responsive.
 - Review plans return one capped changed-path preview and complete drift digests. Mutation results must not return full plans, diffs, path arrays, or raw SDK commit/deployment payloads.
@@ -89,7 +92,7 @@ docs/                      # SDK docs, schemas, examples
 
 **Prompts:** Summarize Cribl Configuration, Find Broken Sources, Analyze Pipeline, Troubleshoot Destination
 
-**Subset sync:** `copy_resource_config`, `validate_resource_sync`, and `validate_config_objects` support item ID filters with `item_pattern` wildcard boolean expressions such as `oodp-* but not oodp-source-*`, `item_regex`, exclude filters, and `case_sensitive`. Use `dry_run=true` on copy calls to inspect matched configs and planned actions before writing.
+**Subset sync:** `copy_resource_config`, `validate_resource_sync`, and `validate_config_objects` support item ID filters with `item_pattern` wildcard boolean expressions such as `oodp-* but not oodp-source-*`, `item_regex`, exclude filters, and `case_sensitive`. Copy calls default to `dry_run=true`; return the exact `plan_sha256` as `expected_plan_sha256` with `dry_run=false` to execute.
 
 ## Common Workflows
 

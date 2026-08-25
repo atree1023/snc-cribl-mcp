@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable, Iterable
@@ -15,7 +16,7 @@ from cribl_control_plane.models.productscore import ProductsCore
 from cribl_control_plane.models.security import Security
 
 from ..client.cribl_client import ResolvedControlPlane, connect_server_pair
-from .common import HTTP_NOT_FOUND
+from .common import HTTP_NOT_FOUND, exception_detail
 from .resource_actions import (
     ResourceKind,
     append_resource,
@@ -465,7 +466,9 @@ def _canonical_compare_payload(kind: CompareKind, item: dict[str, Any]) -> dict[
     """Return the payload shape used for sync comparisons."""
     if kind == "raw":
         return item
-    return canonicalize_resource_item(kind, item)
+    payload = canonicalize_resource_item(kind, item)
+    payload.pop("status", None)
+    return payload
 
 
 def _compare_items(
@@ -600,7 +603,7 @@ def _serialize_copy_error(exc: Exception) -> dict[str, Any]:
     """Project an exception into a stable, JSON-friendly error payload."""
     error: dict[str, Any] = {
         "type": type(exc).__name__,
-        "message": str(exc),
+        "message": exception_detail(exc),
     }
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int):
@@ -668,6 +671,23 @@ def _index_items(items: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         if item_id:
             indexed[item_id] = item
     return indexed
+
+
+def _copy_plan_digest(payload: object) -> str:
+    """Return a deterministic digest for a copy plan or config snapshot."""
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _copy_plan_snapshot(kind: ResourceKind, item: dict[str, Any]) -> dict[str, Any]:
+    """Return write-relevant config state for copy-plan drift detection."""
+    snapshot = canonicalize_resource_item(kind, item)
+    snapshot.pop("status", None)
+    if kind == "lookups":
+        for key in ("_content", "_content_type"):
+            if key in item:
+                snapshot[key] = item[key]
+    return snapshot
 
 
 async def validate_resource_sync(
@@ -839,8 +859,14 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
     validate_after: bool = True,
     append_routes: bool = False,
     dry_run: bool = False,
+    expected_plan_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Copy one or more configs from a source leader to a target leader."""
+    """Copy one or more configs from a source leader to a target leader.
+
+    Exposed callers should first request a dry-run and then return its
+    ``plan_sha256`` for execution. Internal aggregate workflows may omit the
+    digest while they retain their existing orchestration semantics.
+    """
     spec = get_resource_spec(kind)
     effective_target_group = target_group_id or group_id
     item_filter, item_selection = _build_item_filter(
@@ -858,21 +884,12 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
         resolved_source_group_id = group_id
         resolved_target_group_id = effective_target_group
         if spec.scope == "group":
-            source_group = await _resolve_group_selector(
-                source,
-                selector=group_id,
-                product=product,
-            )
-            target_group = await _resolve_group_selector(
-                target,
-                selector=effective_target_group,
-                product=product,
-            )
+            source_group = await _resolve_group_selector(source, selector=group_id, product=product)
+            target_group = await _resolve_group_selector(target, selector=effective_target_group, product=product)
             resolved_source_group_id = source_group.group_id
             resolved_target_group_id = target_group.group_id
 
         if item_id is not None:
-            source_items = {}
             source_item = await get_resource(
                 source.client,
                 kind,
@@ -883,7 +900,7 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
                 security=await _resolved_security(source),
                 hydrate_lookup_content=kind == "lookups",
             )
-            source_items[item_id] = source_item
+            source_items = {item_id: source_item}
         else:
             source_items = _filter_indexed_items(
                 _index_items(
@@ -900,9 +917,10 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
                 item_filter,
             )
 
-        item_results: list[dict[str, Any]] = []
+        inspections: list[tuple[str, dict[str, Any], dict[str, Any] | None, dict[str, Any]]] = []
+        plan_items: list[dict[str, Any]] = []
         for current_item_id, source_item in source_items.items():
-            attempted_action = "inspect_target"
+            target_item: dict[str, Any] | None = None
             try:
                 target_item = await _maybe_get_item(
                     target,
@@ -911,87 +929,127 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
                     product=product,
                     group_id=resolved_target_group_id,
                 )
-
-                if dry_run:
-                    if target_item is None:
-                        if spec.supports("create"):
-                            result = {
-                                "item_id": current_item_id,
-                                "action": "would_create",
-                            }
-                        elif kind == "routes" and spec.supports("update"):
-                            result = {
-                                "item_id": current_item_id,
-                                "action": "unsupported",
-                                "reason": "Routes require an existing target route set before they can be updated or appended.",
-                            }
-                        else:
-                            result = {
-                                "item_id": current_item_id,
-                                "action": "unsupported",
-                                "reason": f"Create is not supported for resource kind '{kind}'.",
-                            }
-                    elif not overwrite:
-                        result = {
-                            "item_id": current_item_id,
-                            "action": "would_skip",
-                            "reason": "Target item already exists and overwrite is disabled.",
-                        }
-                    elif kind == "routes" and append_routes:
-                        result = {
-                            "item_id": current_item_id,
-                            "action": "would_append",
-                        }
-                    else:
-                        result = {
-                            "item_id": current_item_id,
-                            "action": "would_update",
-                        }
-                    item_results.append(result)
-                    continue
-
                 if target_item is None:
                     if spec.supports("create"):
-                        attempted_action = "create"
-                        await create_resource(
-                            target.client,
-                            kind,
-                            item=source_item,
-                            timeout_ms=target.config.timeout_ms,
-                            product=product,
-                            group_id=resolved_target_group_id,
-                            security=await _resolved_security(target),
-                        )
-                        action = "created"
+                        plan_result = {"item_id": current_item_id, "action": "would_create"}
                     elif kind == "routes" and spec.supports("update"):
-                        item_results.append(
-                            {
-                                "item_id": current_item_id,
-                                "action": "unsupported",
-                                "reason": "Routes require an existing target route set before they can be updated or appended.",
-                            }
-                        )
-                        continue
-                    else:
-                        item_results.append(
-                            {
-                                "item_id": current_item_id,
-                                "action": "unsupported",
-                                "reason": f"Create is not supported for resource kind '{kind}'.",
-                            }
-                        )
-                        continue
-                elif not overwrite:
-                    item_results.append(
-                        {
+                        plan_result = {
                             "item_id": current_item_id,
-                            "action": "skipped",
-                            "reason": "Target item already exists and overwrite is disabled.",
+                            "action": "unsupported",
+                            "reason": "Routes require an existing target route set before they can be updated or appended.",
                         }
-                    )
-                    continue
+                    else:
+                        plan_result = {
+                            "item_id": current_item_id,
+                            "action": "unsupported",
+                            "reason": f"Create is not supported for resource kind '{kind}'.",
+                        }
+                elif not overwrite:
+                    plan_result = {
+                        "item_id": current_item_id,
+                        "action": "would_skip",
+                        "reason": "Target item already exists and overwrite is disabled.",
+                    }
                 elif kind == "routes" and append_routes:
-                    attempted_action = "append"
+                    plan_result = {"item_id": current_item_id, "action": "would_append"}
+                else:
+                    plan_result = {"item_id": current_item_id, "action": "would_update"}
+            except Exception as exc:  # noqa: BLE001 - include target read failures in the reviewed plan
+                plan_result = _build_failed_copy_result(
+                    current_item_id,
+                    attempted_action="inspect_target",
+                    exc=exc,
+                )
+
+            inspections.append((current_item_id, source_item, target_item, plan_result))
+            plan_items.append(
+                {
+                    **plan_result,
+                    "source_sha256": _copy_plan_digest(_copy_plan_snapshot(kind, source_item)),
+                    "target_sha256": (
+                        _copy_plan_digest(_copy_plan_snapshot(kind, target_item)) if target_item is not None else None
+                    ),
+                }
+            )
+
+        response_base: dict[str, Any] = {
+            "resource_kind": kind,
+            "scope": spec.scope,
+            "source_server": source.server_name,
+            "target_server": target.server_name,
+            "product": product.value if product else None,
+            "source_group_selector": group_id,
+            "target_group_selector": effective_target_group,
+            "group_id": resolved_source_group_id,
+            "target_group_id": resolved_target_group_id,
+            "source_group": source_group.as_dict() if source_group else None,
+            "target_group": target_group.as_dict() if target_group else None,
+            "item_selection": item_selection,
+            "matched_count": len(source_items),
+            "overwrite": overwrite,
+            "validate_after": validate_after,
+            "append_routes": append_routes,
+        }
+        stable_plan_items = sorted(plan_items, key=lambda result: str(result["item_id"]))
+        plan_sha256 = _copy_plan_digest({**response_base, "items": stable_plan_items})
+
+        if dry_run:
+            response: dict[str, Any] = {
+                **response_base,
+                "dry_run": True,
+                "plan_sha256": plan_sha256,
+                "copied_count": 0,
+                "created_count": 0,
+                "updated_count": 0,
+                "appended_count": 0,
+                "skipped_count": sum(result.get("action") == "would_skip" for result in plan_items),
+                "unsupported_count": sum(result.get("action") == "unsupported" for result in plan_items),
+                "failed_count": sum(result.get("action") == "failed" for result in plan_items),
+                "planned_count": sum(
+                    result.get("action") in {"would_append", "would_create", "would_update"} for result in plan_items
+                ),
+                "planned_created_count": sum(result.get("action") == "would_create" for result in plan_items),
+                "planned_updated_count": sum(result.get("action") == "would_update" for result in plan_items),
+                "planned_appended_count": sum(result.get("action") == "would_append" for result in plan_items),
+                "planned_skipped_count": sum(result.get("action") == "would_skip" for result in plan_items),
+                "items": [plan_result for _, _, _, plan_result in inspections],
+            }
+            warnings = _selection_warnings(item_selection, matched_count=len(source_items))
+            if warnings:
+                response["warnings"] = warnings
+            return response
+
+        if expected_plan_sha256 is not None and expected_plan_sha256 != plan_sha256:
+            msg = (
+                f"The reviewed copy plan is stale (expected {expected_plan_sha256}, current {plan_sha256}). "
+                "Review a new dry-run plan."
+            )
+            raise ValueError(msg)
+
+        item_results: list[dict[str, Any]] = []
+        for current_item_id, source_item, _target_item, plan_result in inspections:
+            planned_action = plan_result.get("action")
+            if planned_action in {"failed", "unsupported"}:
+                item_results.append(plan_result)
+                continue
+            if planned_action == "would_skip":
+                item_results.append({**plan_result, "action": "skipped"})
+                continue
+
+            attempted_action = str(planned_action).removeprefix("would_")
+            try:
+                if planned_action == "would_create":
+                    await create_resource(
+                        target.client,
+                        kind,
+                        item=source_item,
+                        timeout_ms=target.config.timeout_ms,
+                        product=product,
+                        group_id=resolved_target_group_id,
+                        security=await _resolved_security(target),
+                    )
+                    action = "created"
+                elif planned_action == "would_append":
                     await append_resource(
                         target.client,
                         kind,
@@ -1002,7 +1060,6 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
                     )
                     action = "appended"
                 else:
-                    attempted_action = "update"
                     await update_resource(
                         target.client,
                         kind,
@@ -1015,19 +1072,10 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
                     )
                     action = "updated"
             except Exception as exc:  # noqa: BLE001 - accumulate per-item failures in batch copy results
-                item_results.append(
-                    _build_failed_copy_result(
-                        current_item_id,
-                        attempted_action=attempted_action,
-                        exc=exc,
-                    )
-                )
+                item_results.append(_build_failed_copy_result(current_item_id, attempted_action=attempted_action, exc=exc))
                 continue
 
-            result: dict[str, Any] = {
-                "item_id": current_item_id,
-                "action": action,
-            }
+            result: dict[str, Any] = {"item_id": current_item_id, "action": action}
             if validate_after:
                 try:
                     result["validation"] = _compare_items(
@@ -1046,42 +1094,19 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
                     result["validation_error"] = _serialize_copy_error(exc)
             item_results.append(result)
 
-        response: dict[str, Any] = {
-            "resource_kind": kind,
-            "scope": spec.scope,
-            "source_server": source.server_name,
-            "target_server": target.server_name,
-            "product": product.value if product else None,
-            "source_group_selector": group_id,
-            "target_group_selector": effective_target_group,
-            "group_id": resolved_source_group_id,
-            "target_group_id": resolved_target_group_id,
-            "source_group": source_group.as_dict() if source_group else None,
-            "target_group": target_group.as_dict() if target_group else None,
-            "item_selection": item_selection,
-            "matched_count": len(source_items),
-            "dry_run": dry_run,
+        response = {
+            **response_base,
+            "dry_run": False,
+            "executed_plan_sha256": plan_sha256,
             "copied_count": sum(result.get("action") in {"appended", "created", "updated"} for result in item_results),
             "created_count": sum(result.get("action") == "created" for result in item_results),
             "updated_count": sum(result.get("action") == "updated" for result in item_results),
             "appended_count": sum(result.get("action") == "appended" for result in item_results),
-            "skipped_count": sum(result.get("action") in {"skipped", "would_skip"} for result in item_results),
+            "skipped_count": sum(result.get("action") == "skipped" for result in item_results),
             "unsupported_count": sum(result.get("action") == "unsupported" for result in item_results),
             "failed_count": sum(result.get("action") == "failed" for result in item_results),
             "items": item_results,
         }
-        if dry_run:
-            response.update(
-                {
-                    "planned_count": sum(
-                        result.get("action") in {"would_append", "would_create", "would_update"} for result in item_results
-                    ),
-                    "planned_created_count": sum(result.get("action") == "would_create" for result in item_results),
-                    "planned_updated_count": sum(result.get("action") == "would_update" for result in item_results),
-                    "planned_appended_count": sum(result.get("action") == "would_append" for result in item_results),
-                    "planned_skipped_count": sum(result.get("action") == "would_skip" for result in item_results),
-                }
-            )
         warnings = _selection_warnings(item_selection, matched_count=len(source_items))
         if warnings:
             response["warnings"] = warnings
