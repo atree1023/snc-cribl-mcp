@@ -202,8 +202,19 @@ class _Harness:
     ) -> _Counted:
         group_id = self._scope_group(server_url)
         if group_id is None:
-            msg = "Expected a group-scoped diff call."
-            raise AssertionError(msg)
+            if filename != "local/cribl/groups.yml":
+                msg = "Expected a group-scoped diff call or the guarded Leader metadata file."
+                raise AssertionError(msg)
+            files = []
+            if self.global_dirty:
+                files = [
+                    {
+                        **self._diff_file("groups"),
+                        "newName": "local/cribl/groups.yml",
+                        "oldName": "local/cribl/groups.yml",
+                    }
+                ]
+            return _Counted({"diffJson": files})
         self.diff_calls.append(
             {
                 "group": group_id,
@@ -818,12 +829,18 @@ async def test_commit_and_deploy_all_rechecks_descendants_and_deploys_parent_fir
     assert plan_by_id["child"]["inherited_deploy_from"] == "parent"
     assert plan_by_id["grandchild"]["action"] == "deploy_inherited"
     assert plan_by_id["grandchild"]["inherited_deploy_from"] == "parent"
+    progress: list[dict[str, Any]] = []
+
+    async def _progress(item: dict[str, Any]) -> None:
+        progress.append(item)
+
     result = await vc.commit_and_deploy_all(
         "test",
         message="Roll out inherited Edge settings",
         product="edge",
         dry_run=False,
         expected_plan_sha256=planned["plan"]["plan_sha256"],
+        progress_callback=_progress,
     )
 
     assert result["status"] == "completed"
@@ -836,6 +853,22 @@ async def test_commit_and_deploy_all_rechecks_descendants_and_deploys_parent_fir
     assert commit_by_id["grandchild"]["changes"]["changed_after_parent_commit"] is True
     assert result["leader_commit"]["status"] == "committed"
     assert all(item["control_plane_version_confirmed"] for item in result["deploy_results"])
+    assert [item["group"] for item in progress] == ["parent", "child", "grandchild"]
+    assert harness.push_count == 0
+
+
+@pytest.mark.asyncio
+async def test_leader_git_diff_exposes_only_deployment_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The read-only Leader diff should close the groups.yml blocker inspection loop."""
+    harness = _Harness()
+    harness.global_dirty = True
+    _install_harness(monkeypatch, harness)
+
+    result = await vc.collect_leader_git_diff("test", diff_line_limit=0)
+
+    assert result["scope"] == "leader"
+    assert result["filename"] == "local/cribl/groups.yml"
+    assert result["summary"]["paths"] == ["local/cribl/groups.yml"]
 
 
 @pytest.mark.asyncio

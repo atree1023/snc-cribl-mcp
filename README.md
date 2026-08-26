@@ -385,14 +385,20 @@ sandboxed MCP clients that cannot write files directly. The returned `manifest_p
 Identical writes are idempotent; replacing different content requires `overwrite=true`. A name without an extension gets
 `.yaml` automatically, while absolute/path-traversal escapes and non-YAML extensions are rejected.
 
+#### `delete_manifest`
+
+Deletes a validated manifest beneath `manifest_root` after rollout cleanup. Pass the prior `file_sha256` as
+`expected_file_sha256` to refuse deletion when the file changed after inspection. Durable plans, receipts, and job history
+are retained.
+
 #### `replicate_config_manifest`
 
 Plans or applies explicit group-scoped resources from one source leader to every target in a strict YAML manifest.
 
 - **Safe input:** Manifests are limited to the configured manifest root, 1 MiB, schema version 1, configured server names, explicit item IDs, and known fields. Duplicate YAML keys, aliases, inline config payloads, environment expansion, duplicate targets, and duplicate group/kind sections are rejected.
 - **Efficient fan-out:** Source objects are resolved and snapshotted once, then targets run concurrently (manifest `options.concurrency` by default, explicit tool override when supplied; maximum 10). Each target remains internally ordered as variables, breakers, lookups, destinations, pipelines, sources, then routes.
-- **Safe execution:** Dry-run returns `intent_sha256`, aggregate `plan_sha256`, and a `target_plan_sha256` for each leader. Execution requires the aggregate hash, revalidates each target independently, skips or aborts on drift, and never executes a target with preflight blockers.
-- **Returns:** Execution immediately returns a durable `job_id`. Progress counts item work across all targets and reports active target slots plus the effective concurrency. Its final bounded result includes an `apply_receipt_sha256`; successful item detail stays out of the aggregate response, while target failures can be retrieved with `get_config_deployment_job(job_id, target)`.
+- **Safe execution:** Dry-run returns `intent_sha256`, aggregate `plan_sha256`, a `target_plan_sha256` for each leader, bounded item identities for every action bucket, and the dependency-aware `apply_order`. Execution requires the aggregate hash, revalidates each target independently with a visible `revalidated` counter, skips or aborts on drift, and never executes a target with preflight blockers.
+- **Returns:** Execution immediately returns a durable `job_id`. Progress uses `unit: items`, counts item work across all targets, and reports active target slots plus the effective concurrency. Drift skips produce `partial_skip` and `skipped_targets`, distinct from real failures. The final bounded result includes an `apply_receipt_sha256`; target detail is retrieved with `get_config_deployment_job(job_id, target)`.
 
 #### `validate_config_manifest`
 
@@ -401,13 +407,19 @@ credential references, and volatile metadata are counted but non-blocking; funct
 the affected target. Per-target summaries split `create`, `update`, `noop`, and `unsupported`. Difference detail is pageable
 with `offset` and `limit`; use `target` to inspect one leader and `detail_scope="all"` to page every item, including noops.
 
+#### `check_manifest_receipt_validity`
+
+Checks whether an apply receipt still matches the current manifest and each guarded group/fleet pending diff without
+committing or deploying. Provide exactly one of `apply_job_id` or `apply_receipt_sha256`; use `target` for one leader.
+
 #### `commit_and_deploy_manifest`
 
 Commits and deploys a prior manifest application across its successful target leaders.
 
 - **Receipt gate:** Requires either the replication `apply_job_id` or `apply_receipt_sha256`. Every group diff must still match the durable post-apply receipt before planning and again before execution.
 - **Scope:** Commits only manifest groups. For Edge, affected descendants are included and processed parent-first so inherited changes are committed and deployed safely.
-- **Review contract:** Dry-run and execution use a separate commit/deploy `plan_sha256`, keeping replication approval distinct from deployment approval. Targets run concurrently, while each leader's hierarchy remains serialized.
+- **Review contract:** Dry-run and execution use a separate commit/deploy `plan_sha256`, keeping replication approval distinct from deployment approval. Plans expose ordered per-fleet actions, `push_action`, and Leader blocker paths. Targets run concurrently, while each leader's hierarchy remains serialized.
+- **Progress and outcomes:** Progress uses `unit: fleets` and reports the current leader, product, fleet, and phase while preserving parent-before-child order. `on_drift="skip"` applies to receipt, group/fleet, and Leader `groups.yml` blockers; skipped leaders produce `partial_skip`, not `partial_failure`. `push=false` is carried through both plan and execution and is guarded against an unexpected inner push request.
 
 #### `get_group_git_status`
 
@@ -422,11 +434,16 @@ Shows the configuration diff for one Stream worker group or Edge fleet/subfleet.
 - **Baselines:** `compare_to="deployed"` validates the complete pending deployment against the active `configVersion`; `compare_to="head"` shows only uncommitted changes.
 - **Returns:** A bounded diff plus a digest of the complete pending diff. Use `filename` to inspect one file or `diff_line_limit=0` for the full diff.
 
+#### `get_leader_git_diff`
+
+Shows the Leader-scoped `local/cribl/groups.yml` diff that records deployed group/fleet versions. Use it when a plan is
+blocked by pre-existing Leader deployment metadata; group-scoped diff tools intentionally cannot expose this file.
+
 #### `get_config_deployment_job`
 
 Polls an asynchronous manifest replication, commit, deploy, or Git push execution.
 
-- **With `job_id`:** Returns queued/running/completed/failed/interrupted state, aggregate progress, and the bounded final result when available. Add `target` for durable per-target detail; a known target that has not started returns `status: pending` rather than an error.
+- **With `job_id`:** Returns queued/running/completed/failed/interrupted state, aggregate progress, and the bounded final result when available. Generic pollers must inspect `progress.unit`: replication uses `items`, while manifest commit/deploy uses `fleets`. Add `target` for durable per-target detail; a known target that has not started returns `status: pending` rather than an error.
 - **Without `job_id`:** Lists recent jobs without embedding every final result.
 - **Lifetime:** Jobs and resumable request metadata are retained in SQLite across MCP process restarts. A previously running job is restored as `interrupted`; pass it as `resume_job_id` with the exact original parameters to retry unfinished targets.
 

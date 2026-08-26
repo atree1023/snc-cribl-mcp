@@ -158,7 +158,7 @@ class ManifestStateStore:
     def get_receipt(self, *, receipt_sha256: str | None = None, job_id: str | None = None) -> dict[str, Any]:
         """Return one apply receipt by digest or apply job id."""
         if (receipt_sha256 is None) == (job_id is None):
-            msg = "Provide exactly one of receipt_sha256 or job_id."
+            msg = "Provide exactly one of apply_receipt_sha256 or apply_job_id."
             raise ValueError(msg)
         connection = self._ensure_connection()
         with self._lock:

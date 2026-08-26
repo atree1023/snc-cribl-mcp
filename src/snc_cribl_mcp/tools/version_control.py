@@ -27,6 +27,7 @@ def register(  # noqa: C901
     *,
     status_impl: VersionControlFunc,
     diff_impl: VersionControlFunc,
+    leader_diff_impl: VersionControlFunc,
     commit_impl: VersionControlFunc,
     deploy_impl: VersionControlFunc,
     commit_deploy_impl: VersionControlFunc,
@@ -127,11 +128,34 @@ def register(  # noqa: C901
         )
 
     @app.tool(
+        name="get_leader_git_diff",
+        description=(
+            "Get the Leader-scoped local/cribl/groups.yml diff that records deployed group and fleet versions. "
+            "Use this when a commit/deploy plan reports pre-existing Leader deployment-metadata changes; group-scoped "
+            "diffs intentionally cannot inspect this file. Set diff_line_limit=0 for the complete diff."
+        ),
+        annotations={
+            "title": "Get Leader deployment metadata diff",
+            "readOnlyHint": True,
+            "idempotentHint": True,
+        },
+    )
+    async def get_leader_git_diff(
+        ctx: Context,
+        server: str | None = None,
+        diff_line_limit: int = 1000,
+    ) -> dict[str, Any]:
+        """Get the only Leader file mutated by deployment workflows."""
+        await ctx.info("Getting the Cribl Leader deployment-metadata diff.")
+        return await leader_diff_impl(server, diff_line_limit=diff_line_limit)
+
+    @app.tool(
         name="get_config_deployment_job",
         description=(
             "Get the current state and bounded result of an asynchronous Cribl replication, commit, deploy, or Git "
             "push job. Pass target with job_id for one target's durable detail; targets not started yet return a "
-            "pending detail instead of an error. Manifest replication progress is item-based across all targets. "
+            "pending detail instead of an error. Pollers must inspect progress.unit: manifest replication uses items, "
+            "while commit/deploy uses fleets and includes current leader/fleet detail. "
             "Pass the job_id returned by a mutation execution for its final result, or omit job_id to list recent "
             "jobs. Job state, progress, target detail, and resumable request metadata survive MCP process restarts."
         ),

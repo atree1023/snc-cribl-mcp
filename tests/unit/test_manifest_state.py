@@ -37,7 +37,7 @@ def test_plans_and_receipts_survive_store_restart(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="belongs to operation"):
         restored.get_plan("plan-1", operation="commit_and_deploy_manifest")
-    with pytest.raises(ValueError, match="exactly one"):
+    with pytest.raises(ValueError, match="apply_receipt_sha256 or apply_job_id"):
         restored.get_receipt()
     with pytest.raises(ValueError, match="Unknown"):
         restored.get_plan("missing")

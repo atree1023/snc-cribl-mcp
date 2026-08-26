@@ -31,11 +31,14 @@ Registered tools:
 - ``replicate_system_settings``: replicate global system settings
 - ``validate_system_settings``: validate global system settings
 - ``write_manifest``: validate and persist strict YAML manifest content
+- ``delete_manifest``: safely remove a manifest after rollout cleanup
 - ``replicate_config_manifest``: apply one strict YAML manifest to many leaders
 - ``validate_config_manifest``: semantically validate one manifest across many leaders
+- ``check_manifest_receipt_validity``: preflight a durable apply receipt without mutation
 - ``commit_and_deploy_manifest``: receipt-gated commit/deploy for manifest changes
 - ``get_group_git_status``: inspect group/fleet Git and deployment status
 - ``get_group_git_diff``: inspect pending or deployed-baseline group/fleet diffs
+- ``get_leader_git_diff``: inspect Leader deployment-metadata changes
 - ``get_config_deployment_job``: poll asynchronous commit, deploy, and push jobs
 - ``commit_group_config``: commit one group/fleet configuration
 - ``deploy_group_config``: deploy an explicit group/fleet commit
@@ -79,6 +82,7 @@ from .operations.variables import collect_product_variables
 from .operations.version_control import (
     collect_group_git_diff,
     collect_group_git_status,
+    collect_leader_git_diff,
     commit_and_deploy_all,
     commit_and_deploy_group,
     commit_group_config,
@@ -227,6 +231,7 @@ def _register_capabilities() -> None:
         app,
         status_impl=collect_group_git_status,
         diff_impl=collect_group_git_diff,
+        leader_diff_impl=collect_leader_git_diff,
         commit_impl=commit_group_config,
         deploy_impl=deploy_group_config,
         commit_deploy_impl=commit_and_deploy_group,

@@ -817,6 +817,7 @@ async def validate_resource_sync(
                 {
                     "resource_kind": kind,
                     "scope": spec.scope,
+                    "config_scope": "effective" if spec.scope == "group" else "leader",
                     "source_server": source.server_name,
                     "target_server": target.server_name,
                     "product": product.value if product else None,
@@ -867,6 +868,7 @@ async def validate_resource_sync(
         response: dict[str, Any] = {
             "resource_kind": kind,
             "scope": spec.scope,
+            "config_scope": "effective" if spec.scope == "group" else "leader",
             "source_server": source.server_name,
             "target_server": target.server_name,
             "product": product.value if product else None,

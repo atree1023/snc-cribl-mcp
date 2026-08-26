@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -27,6 +28,7 @@ from .common import (
 
 type CompareTo = Literal["deployed", "head"]
 type ProductScope = Literal["all", "edge", "stream"]
+type FleetProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 _PRODUCTS: tuple[ProductsCore, ...] = (ProductsCore.STREAM, ProductsCore.EDGE)
 _GROUP_GIT_FIELDS = "git.commit,git.localChanges"
@@ -978,6 +980,35 @@ async def collect_group_git_diff(
         }
 
 
+async def collect_leader_git_diff(
+    server: str | None,
+    *,
+    diff_line_limit: int = 1000,
+) -> dict[str, Any]:
+    """Return the Leader-scoped deployment-metadata diff that group-scoped reads cannot expose."""
+    if diff_line_limit < 0:
+        msg = "diff_line_limit must be zero or greater."
+        raise ValueError(msg)
+    async with connect_to_server(server) as resolved:
+        status = await _global_status(resolved)
+        response = await resolved.client.versions.commits.diff_async(
+            filename=_LEADER_METADATA_PATH,
+            diff_line_limit=diff_line_limit,
+            timeout_ms=resolved.config.timeout_ms,
+        )
+        payload = _serialize_counted_response(response)
+        files = _diff_files(payload)
+        return {
+            "server": resolved.server_name,
+            "scope": "leader",
+            "filename": _LEADER_METADATA_PATH,
+            "git": status,
+            "diff_sha256": _canonical_digest(files),
+            "summary": _diff_summary(payload, files={_LEADER_METADATA_PATH}),
+            "diff": payload,
+        }
+
+
 async def _build_group_plan(
     resolved: ResolvedControlPlane,
     target: GroupTarget,
@@ -1032,6 +1063,7 @@ async def _build_group_plan(
         "git": _compact_git_status(git_status, include_change_metadata=False),
         "changes": _plan_change_summary(git_status, pending_diff, files=files),
         "leader_git": _compact_git_status(leader_status),
+        "leader_blocked_paths": _leader_metadata_paths(leader_status),
         "git_integration": git_info,
         "edge_ancestors": edge_ancestors,
         "blocked_reasons": blocked_reasons,
@@ -1495,6 +1527,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
     dry_run: bool = True,
     expected_plan_sha256: str | None = None,
     groups: list[str] | None = None,
+    progress_callback: FleetProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Plan or commit and deploy all selected groups in safe dependency order."""
     normalized_message = _validate_message(message)
@@ -1518,6 +1551,22 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
         edge_targets = {target.group_id: target for target in targets if target.product == ProductsCore.EDGE}
         blocked_edge_commits: set[str] = set()
         committed_edge_ids: set[str] = set()
+        reported_targets: set[tuple[ProductsCore, str]] = set()
+
+        async def _report_target(target: GroupTarget, *, phase: str, status: str) -> None:
+            key = (target.product, target.group_id)
+            if progress_callback is None or key in reported_targets:
+                return
+            reported_targets.add(key)
+            await progress_callback(
+                {
+                    "product": target.product.value,
+                    "group": target.group_id,
+                    "phase": phase,
+                    "status": status,
+                }
+            )
+
         initial_target_plans = {
             (target.product, target.group_id): target_plan
             for target, target_plan in zip(
@@ -1542,6 +1591,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
                         "blocked_by": blocked_by,
                     }
                 )
+                await _report_target(planned_target, phase="commit", status="skipped_dependency")
                 continue
             try:
                 target = await _get_target(
@@ -1600,6 +1650,8 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
                         },
                     }
                 )
+                if (target.product, target.group_id) not in deploy_candidates:
+                    await _report_target(target, phase="commit", status=action)
             except Exception as exc:  # noqa: BLE001 - all-target workflow reports per-target failures
                 error = {
                     "phase": "commit",
@@ -1610,6 +1662,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
                 commit_results.append({"target": _target_ref(planned_target), "status": "failed", **error})
                 if planned_target.product == ProductsCore.EDGE:
                     blocked_edge_commits.add(planned_target.group_id)
+                await _report_target(planned_target, phase="commit", status="failed")
                 if stop_on_error:
                     break
 
@@ -1643,6 +1696,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
                             "blocked_by": blocked_by,
                         }
                     )
+                    await _report_target(target, phase="deploy", status="skipped_dependency")
                     continue
                 try:
                     await _deploy_version(resolved, target, version)
@@ -1652,6 +1706,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
                     deploy_results.append({"status": "failed", "version": version, **error})
                     if target.product == ProductsCore.EDGE:
                         blocked_edge_deployments.add(target.group_id)
+                    await _report_target(target, phase="deploy", status="failed")
                     if stop_on_error:
                         break
                     continue
@@ -1678,6 +1733,11 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
                     errors.append(error)
                     deployment_result["verification_error"] = error["error"]
                 deploy_results.append(deployment_result)
+                await _report_target(
+                    target,
+                    phase="verify" if deployment_result.get("verification_error") is not None else "deploy",
+                    status="failed" if deployment_result.get("verification_error") is not None else "deployed",
+                )
                 if deployment_result.get("verification_error") is not None and stop_on_error:
                     break
 
@@ -1700,6 +1760,9 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
                 pushed = True
             except Exception as exc:  # noqa: BLE001 - commits/deployments already occurred
                 errors.append({"phase": "push", "error": _error_payload(exc)})
+
+        for target in targets:
+            await _report_target(target, phase="workflow", status="not_started")
 
         status = "completed" if not errors else "partial_failure" if commit_results or deploy_results else "failed"
         return {
@@ -1782,6 +1845,7 @@ __all__ = [
     "ProductScope",
     "collect_group_git_diff",
     "collect_group_git_status",
+    "collect_leader_git_diff",
     "commit_and_deploy_all",
     "commit_and_deploy_group",
     "commit_group_config",

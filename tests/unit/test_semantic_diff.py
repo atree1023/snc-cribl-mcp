@@ -214,7 +214,11 @@ def test_semantic_validation_from_sync_result_handles_items_without_payloads() -
     assert result["semantic_counts"] == {
         "functionally_equivalent": 1,
         "functional_difference": 0,
-        "missing_or_unavailable": 1,
+        "missing_on_source": 0,
+        "missing_on_target": 0,
+        "missing": 0,
+        "not_evaluated": 1,
+        "unavailable": 0,
     }
     assert result["items"][0]["semantic_status"] == "functionally_equivalent"
     assert result["items"][1] == {

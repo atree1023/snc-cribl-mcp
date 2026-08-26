@@ -399,6 +399,7 @@ async def test_validate_resource_sync_collection_reports_differences(monkeypatch
     )
 
     assert result["in_sync"] is False
+    assert result["config_scope"] == "effective"
     assert result["counts"] == {
         "source": 2,
         "target": 2,

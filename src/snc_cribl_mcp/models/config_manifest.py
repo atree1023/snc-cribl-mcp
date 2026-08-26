@@ -349,6 +349,20 @@ def write_config_manifest(name: str, content: str, *, overwrite: bool = False) -
     return loaded, status
 
 
+def delete_config_manifest(manifest_path: str, *, expected_file_sha256: str | None = None) -> LoadedConfigManifest:
+    """Delete one validated manifest beneath the configured safe root.
+
+    When supplied, ``expected_file_sha256`` prevents deleting a file that changed
+    since the caller last inspected it.
+    """
+    loaded = load_config_manifest(manifest_path)
+    if expected_file_sha256 is not None and expected_file_sha256.strip() != loaded.file_sha256:
+        msg = "The manifest file changed after inspection; reload it before deleting."
+        raise ValueError(msg)
+    loaded.path.unlink()
+    return loaded
+
+
 __all__ = [
     "ConfigManifest",
     "DriftPolicy",
@@ -358,6 +372,7 @@ __all__ = [
     "ManifestOptions",
     "ManifestProduct",
     "ManifestSource",
+    "delete_config_manifest",
     "load_config_manifest",
     "write_config_manifest",
 ]

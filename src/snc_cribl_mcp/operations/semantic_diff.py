@@ -235,6 +235,16 @@ def semantic_validation_from_sync_result(kind: ConfigObjectKind, sync_result: di
         if isinstance(item, dict)
     ]
     warnings = _semantic_warnings(sync_result)
+    missing_on_source = sum(item["semantic_status"] == "missing_on_source" for item in items)
+    missing_on_target = sum(item["semantic_status"] == "missing_on_target" for item in items)
+    not_evaluated = sum(item["semantic_status"] == "not_evaluated" for item in items)
+    classified_statuses = {
+        "functionally_equivalent",
+        "functional_difference",
+        "missing_on_source",
+        "missing_on_target",
+        "not_evaluated",
+    }
     result: dict[str, Any] = {
         **{key: value for key, value in sync_result.items() if key not in {"in_sync", "items", "counts", "warnings"}},
         "semantic_evaluation_complete": not _sync_response_was_truncated(sync_result),
@@ -242,9 +252,11 @@ def semantic_validation_from_sync_result(kind: ConfigObjectKind, sync_result: di
         "semantic_counts": {
             "functionally_equivalent": sum(item["semantic_status"] == "functionally_equivalent" for item in items),
             "functional_difference": sum(item["semantic_status"] == "functional_difference" for item in items),
-            "missing_or_unavailable": sum(
-                item["semantic_status"] not in {"functionally_equivalent", "functional_difference"} for item in items
-            ),
+            "missing_on_source": missing_on_source,
+            "missing_on_target": missing_on_target,
+            "missing": missing_on_source + missing_on_target,
+            "not_evaluated": not_evaluated,
+            "unavailable": sum(item["semantic_status"] not in classified_statuses for item in items),
         },
         "items": items,
     }

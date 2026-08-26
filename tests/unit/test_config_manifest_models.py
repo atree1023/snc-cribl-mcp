@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 import snc_cribl_mcp.models.config_manifest as manifest_module
-from snc_cribl_mcp.models.config_manifest import load_config_manifest, write_config_manifest
+from snc_cribl_mcp.models.config_manifest import delete_config_manifest, load_config_manifest, write_config_manifest
 
 
 @pytest.fixture
@@ -178,3 +178,23 @@ options: {concurrency: 2}
     with pytest.raises(ValidationError):
         write_config_manifest("invalid.yaml", "schema: 1\n")
     assert not (manifest_root / "invalid.yaml").exists()
+
+
+def test_delete_manifest_is_rooted_and_can_guard_the_file_digest(manifest_root: Path) -> None:
+    """Cleanup should refuse stale or out-of-root targets before deleting a manifest."""
+    content = """
+schema: 1
+wave: cleanup
+source: {server: golden.oak, product: edge}
+content: [{group: default, kind: destinations, items: [out]}]
+targets: [golden.oak.new]
+""".strip()
+    loaded, _status = write_config_manifest("cleanup.yaml", content)
+
+    with pytest.raises(ValueError, match="changed after inspection"):
+        delete_config_manifest("cleanup.yaml", expected_file_sha256="stale")
+    assert loaded.path.exists()
+
+    deleted = delete_config_manifest("cleanup.yaml", expected_file_sha256=loaded.file_sha256)
+    assert deleted.relative_path == "cleanup.yaml"
+    assert not loaded.path.exists()

@@ -4,13 +4,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from fastmcp import Context, FastMCP
 
-from ..models.config_manifest import DriftPolicy, load_config_manifest, write_config_manifest
+from ..models.config_manifest import DriftPolicy, delete_config_manifest, load_config_manifest, write_config_manifest
 from ..operations.config_manifest import (
     ValidationDetailScope,
+    check_manifest_receipt_validity,
     execute_config_manifest_replication,
     execute_manifest_commit_deploy,
     plan_config_manifest_replication,
@@ -38,7 +39,7 @@ def _require_plan_hash(expected_plan_sha256: str | None) -> str:
     return expected_plan_sha256.strip()
 
 
-def register(  # noqa: C901
+def register(  # noqa: C901, PLR0915
     app: FastMCP,
     *,
     job_manager: VersionControlJobManager,
@@ -84,6 +85,37 @@ def register(  # noqa: C901
             "target_count": len(loaded.manifest.targets),
             "item_count": item_count,
             "concurrency": loaded.manifest.options.concurrency,
+        }
+
+    @app.tool(
+        name="delete_manifest",
+        description=(
+            "Delete one validated YAML manifest beneath the configured manifest root after rollout cleanup. "
+            "Pass the file_sha256 returned by write_manifest as expected_file_sha256 to prevent deleting a file "
+            "that changed since it was inspected. This does not delete durable plans, receipts, or job history."
+        ),
+        annotations={
+            "title": "Delete configuration manifest",
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": False,
+        },
+    )
+    async def delete_manifest(
+        ctx: Context,
+        manifest_path: str,
+        *,
+        expected_file_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        """Safely remove a manifest from the configured root."""
+        await ctx.info("Deleting a validated Cribl configuration manifest.")
+        loaded = delete_config_manifest(manifest_path, expected_file_sha256=expected_file_sha256)
+        return {
+            "status": "deleted",
+            "manifest_path": loaded.relative_path,
+            "resolved_path": str(loaded.path),
+            "deleted_file_sha256": loaded.file_sha256,
+            "manifest_sha256": loaded.manifest_sha256,
         }
 
     @app.tool(
@@ -167,6 +199,11 @@ def register(  # noqa: C901
                 "target_total": len(loaded.manifest.targets),
                 "targets_completed": 0,
                 "targets_failed": 0,
+                "targets_skipped": 0,
+                "revalidation_total": len(loaded.manifest.targets),
+                "revalidated": 0,
+                "revalidation_running": 0,
+                "revalidation_failed": 0,
                 "concurrency": effective_concurrency,
                 "phase": "queued",
             },
@@ -206,6 +243,39 @@ def register(  # noqa: C901
             offset=offset,
             limit=limit,
             detail_scope=detail_scope,
+        )
+
+    @app.tool(
+        name="check_manifest_receipt_validity",
+        description=(
+            "Read-only preflight that checks whether a replicate_config_manifest apply receipt still matches the "
+            "current manifest and every guarded group/fleet diff. Use it immediately before commit/deploy to detect "
+            "UI edits or other post-apply changes. Provide exactly one of apply_job_id or apply_receipt_sha256."
+        ),
+        annotations={
+            "title": "Check manifest receipt validity",
+            "readOnlyHint": True,
+            "idempotentHint": True,
+        },
+    )
+    async def check_manifest_receipt_validity_tool(
+        ctx: Context,
+        manifest_path: str,
+        *,
+        apply_job_id: str | None = None,
+        apply_receipt_sha256: str | None = None,
+        concurrency: int | None = None,
+        target: str | None = None,
+    ) -> dict[str, Any]:
+        """Check a durable manifest apply receipt without committing or deploying."""
+        await ctx.info("Checking whether a manifest apply receipt is still valid.")
+        return await check_manifest_receipt_validity(
+            manifest_path,
+            apply_job_id=apply_job_id,
+            apply_receipt_sha256=apply_receipt_sha256,
+            state_store=state_store,
+            concurrency=concurrency,
+            target=target,
         )
 
     @app.tool(
@@ -255,6 +325,13 @@ def register(  # noqa: C901
 
         plan_hash = _require_plan_hash(expected_plan_sha256)
         loaded = load_config_manifest(manifest_path)
+        stored_plan = state_store.get_plan(plan_hash, operation="commit_and_deploy_manifest")
+        stored_targets = cast("list[dict[str, Any]]", stored_plan.get("targets", []))
+        fleet_total = 0
+        for target_plan in stored_targets:
+            summary = target_plan.get("summary")
+            if isinstance(summary, dict):
+                fleet_total += int(cast("dict[str, Any]", summary).get("target_count", 0))
         effective_concurrency = resolve_manifest_concurrency(loaded.manifest, concurrency)
         resume_details = job_manager.target_details(resume_job_id) if resume_job_id is not None else None
         request = {
@@ -292,11 +369,16 @@ def register(  # noqa: C901
             request=request,
             resume_of=resume_job_id,
             initial_progress={
-                "unit": "targets",
-                "total": len(loaded.manifest.targets),
+                "unit": "fleets",
+                "total": fleet_total,
                 "completed": 0,
                 "failed": 0,
+                "skipped": 0,
                 "running": 0,
+                "leader_total": len(loaded.manifest.targets),
+                "leaders_completed": 0,
+                "leaders_failed": 0,
+                "leaders_skipped": 0,
                 "concurrency": effective_concurrency,
                 "phase": "queued",
             },

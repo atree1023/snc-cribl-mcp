@@ -113,10 +113,19 @@ async def test_replication_plan_and_execution_emit_durable_receipt(monkeypatch: 
     monkeypatch.setattr(operations, "_source_snapshot", AsyncMock(return_value=snapshot))
 
     async def _target_plan(target: str, **_kwargs: object) -> dict[str, Any]:
+        await asyncio.sleep(0)
         return {
             "server": target,
             "git": {},
-            "items": [{"action": "update"}],
+            "items": [
+                {
+                    "group": "fleet",
+                    "group_id": "fleet",
+                    "kind": "destinations",
+                    "item_id": "out",
+                    "action": "update",
+                }
+            ],
             "blocked_reasons": [],
             "target_plan_sha256": f"plan-{target}",
         }
@@ -156,9 +165,11 @@ async def test_replication_plan_and_execution_emit_durable_receipt(monkeypatch: 
 
     assert result["status"] == "completed"
     assert peak_active == 2
-    assert result["summary"] == {"target_count": 2, "completed": 2, "failed_or_skipped": 0}
+    assert result["summary"] == {"target_count": 2, "completed": 2, "skipped": 0, "failed": 0}
+    assert plan["targets"][0]["action_items"]["update"]["items"][0]["item_id"] == "out"
+    assert plan["apply_order"][0]["sequence"] == 1
     assert set(context.details) == {"leader-a", "leader-b"}
-    assert any(item["phase"] == "revalidating" and item["running"] == 2 for item in context.progress)
+    assert any(item["phase"] == "revalidating" and item["revalidation_running"] == 2 for item in context.progress)
     assert context.progress[-1] == {
         "unit": "items",
         "total": 2,
@@ -169,9 +180,14 @@ async def test_replication_plan_and_execution_emit_durable_receipt(monkeypatch: 
         "target_total": 2,
         "targets_completed": 2,
         "targets_failed": 0,
+        "targets_skipped": 0,
         "concurrency": 2,
         "phase": "applying",
         "source_running": 0,
+        "revalidation_total": 2,
+        "revalidated": 2,
+        "revalidation_running": 0,
+        "revalidation_failed": 0,
     }
     receipt = state.get_receipt(receipt_sha256=str(result["apply_receipt_sha256"]))
     assert receipt["job_id"] == "job-1"
@@ -212,7 +228,9 @@ async def test_replication_drift_can_skip_or_abort(monkeypatch: pytest.MonkeyPat
         job_context=context,  # type: ignore[arg-type]
         on_drift="skip",
     )
-    assert skipped["status"] == "partial_failure"
+    assert skipped["status"] == "partial_skip"
+    assert skipped["skipped_targets"] == ["leader-a"]
+    assert skipped["failed_targets"] == []
     assert context.details["leader-a"]["status"] == "skipped_drift"
 
     with pytest.raises(ValueError, match="aborted"):
@@ -374,13 +392,25 @@ async def test_commit_deploy_plan_and_execution_are_receipt_gated(monkeypatch: p
                 "plan": {
                     "plan_sha256": f"inner-{server}",
                     "blocked_reasons": [],
-                    "targets": [{"action": "commit_and_deploy"}],
+                    "push_action": "noop",
+                    "leader_blocked_paths": [],
+                    "targets": [
+                        {
+                            "action": "commit_and_deploy",
+                            "target": {"product": "edge", "id": "fleet"},
+                        }
+                    ],
                 },
             }
+        progress_callback = _kwargs.get("progress_callback")
+        if progress_callback is not None:
+            await cast("Callable[[dict[str, Any]], Awaitable[None]]", progress_callback)(
+                {"product": "edge", "group": "fleet", "phase": "deploy", "status": "deployed"}
+            )
         return {
             "status": "completed",
             "summary": {"target_count": 1},
-            "push": {"status": "not_requested"},
+            "push": {"requested": False, "status": "not_requested"},
             "errors": [],
         }
 
@@ -404,6 +434,9 @@ async def test_commit_deploy_plan_and_execution_are_receipt_gated(monkeypatch: p
     )
 
     assert result["status"] == "completed"
+    assert result["push_requested"] is False
+    assert context.progress[-1]["unit"] == "fleets"
+    assert context.progress[-1]["completed"] == 2
     assert set(context.details) == {"leader-a", "leader-b"}
     assert all(detail["status"] == "completed" for detail in context.details.values())
 
@@ -416,3 +449,123 @@ async def test_commit_deploy_plan_and_execution_are_receipt_gated(monkeypatch: p
             state_store=state,
             job_context=_JobContext(),  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.asyncio
+async def test_commit_deploy_honors_skip_for_leader_level_blockers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reviewed Leader groups.yml blocker should skip its leader, not fail the aggregate job."""
+    loaded = _loaded_manifest(targets=["leader-a"])
+    state = ManifestStateStore()
+    receipt = {
+        "receipt_sha256": "receipt",
+        "job_id": "apply-job",
+        "manifest_path": "wave.yaml",
+        "manifest_sha256": "manifest",
+        "intent_sha256": "intent",
+        "targets": {"leader-a": {"status": "applied", "groups": {"fleet": {"pending_diff_sha256": "a"}}}},
+    }
+    state.save_receipt(
+        receipt_sha256="receipt",
+        job_id="apply-job",
+        intent_sha256="intent",
+        manifest_path="wave.yaml",
+        created_at="now",
+        payload=receipt,
+    )
+
+    def _load(_path: str) -> LoadedConfigManifest:
+        return loaded
+
+    monkeypatch.setattr(operations, "load_config_manifest", _load)
+    monkeypatch.setattr(operations, "_receipt_drift", AsyncMock(return_value=[]))
+    execution_calls = 0
+
+    async def _commit(_server: str, *, dry_run: bool, **_kwargs: object) -> dict[str, Any]:
+        nonlocal execution_calls
+        if not dry_run:
+            execution_calls += 1
+        return {
+            "status": "planned",
+            "plan": {
+                "plan_sha256": "blocked-inner",
+                "push_action": "noop",
+                "leader_blocked_paths": ["local/cribl/groups.yml"],
+                "blocked_reasons": ["Leader groups.yml already has uncommitted changes."],
+                "targets": [
+                    {
+                        "action": "commit_and_deploy",
+                        "target": {"product": "edge", "id": "fleet"},
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(operations, "commit_and_deploy_all", _commit)
+    plan = await operations.plan_manifest_commit_deploy(
+        "wave.yaml",
+        apply_job_id="apply-job",
+        apply_receipt_sha256=None,
+        message="blocked rollout",
+        push=False,
+        state_store=state,
+    )
+    context = _JobContext()
+    result = await operations.execute_manifest_commit_deploy(
+        "wave.yaml",
+        expected_plan_sha256=str(plan["plan_sha256"]),
+        message="blocked rollout",
+        push=False,
+        state_store=state,
+        job_context=context,  # type: ignore[arg-type]
+        on_drift="skip",
+    )
+
+    assert result["status"] == "partial_skip"
+    assert result["skipped_targets"] == ["leader-a"]
+    assert result["failed_targets"] == []
+    assert context.details["leader-a"]["status"] == "skipped_drift"
+    assert execution_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_check_manifest_receipt_validity_reports_stale_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Operators should be able to detect a stale receipt before creating a commit/deploy plan."""
+    loaded = _loaded_manifest(targets=["leader-a"])
+    state = ManifestStateStore()
+    receipt = {
+        "receipt_sha256": "receipt",
+        "job_id": "apply-job",
+        "manifest_path": "wave.yaml",
+        "manifest_sha256": "manifest",
+        "intent_sha256": "intent",
+        "targets": {"leader-a": {"status": "applied", "groups": {"fleet": {"pending_diff_sha256": "a"}}}},
+    }
+    state.save_receipt(
+        receipt_sha256="receipt",
+        job_id="apply-job",
+        intent_sha256="intent",
+        manifest_path="wave.yaml",
+        created_at="now",
+        payload=receipt,
+    )
+
+    def _load(_path: str) -> LoadedConfigManifest:
+        return loaded
+
+    monkeypatch.setattr(operations, "load_config_manifest", _load)
+    monkeypatch.setattr(
+        operations,
+        "_receipt_drift",
+        AsyncMock(return_value=["Group/fleet 'fleet' changed after manifest replication."]),
+    )
+
+    result = await operations.check_manifest_receipt_validity(
+        "wave.yaml",
+        apply_job_id="apply-job",
+        apply_receipt_sha256=None,
+        state_store=state,
+    )
+
+    assert result["status"] == "stale"
+    assert result["summary"] == {"target_count": 1, "valid": 0, "stale": 1, "error": 0}
+    assert result["targets"][0]["status"] == "stale"

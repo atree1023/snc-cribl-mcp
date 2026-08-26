@@ -26,7 +26,9 @@ def register(app: FastMCP, *, impl: ValidateResourceSyncFunc) -> None:
             "two configured Cribl leaders. "
             "Expected environment identity differences such as hostnames, endpoint lists, generated IDs, and volatile metadata "
             "are reported but do not count as functional drift. Supports item_pattern wildcard boolean expressions, item_regex "
-            "regular expressions, and exclude filters for validating a subset in one call."
+            "regular expressions, and exclude filters for validating a subset in one call. Group-scoped reads use Cribl's "
+            "effective configuration view (including inherited parent-fleet objects), reported as config_scope='effective'. "
+            "Semantic counts keep truly missing objects separate from response-limited not_evaluated objects."
         ),
         annotations={
             "title": "Validate config objects semantically",

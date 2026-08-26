@@ -64,11 +64,13 @@ async def test_read_tools_forward_status_and_diff_arguments(mock_ctx: Context) -
     """Read-only wrappers should preserve product scope and diff controls."""
     status_impl = AsyncMock(return_value={"targets": []})
     diff_impl = AsyncMock(return_value={"diff": {}})
+    leader_diff_impl = AsyncMock(return_value={"scope": "leader"})
     app = _FakeApp()
     register(
         app,  # type: ignore[arg-type]
         status_impl=status_impl,
         diff_impl=diff_impl,
+        leader_diff_impl=leader_diff_impl,
         commit_impl=AsyncMock(),
         deploy_impl=AsyncMock(),
         commit_deploy_impl=AsyncMock(),
@@ -87,9 +89,11 @@ async def test_read_tools_forward_status_and_diff_arguments(mock_ctx: Context) -
         filename="local/edge/inputs.yml",
         diff_line_limit=0,
     )
+    leader_diff = await app.tools["get_leader_git_diff"](mock_ctx, server="prod", diff_line_limit=0)
 
     assert status == {"targets": []}
     assert diff == {"diff": {}}
+    assert leader_diff == {"scope": "leader"}
     status_impl.assert_awaited_once_with("prod", product="edge", group="Fleet One")
     diff_impl.assert_awaited_once_with(
         "prod",
@@ -99,6 +103,7 @@ async def test_read_tools_forward_status_and_diff_arguments(mock_ctx: Context) -
         filename="local/edge/inputs.yml",
         diff_line_limit=0,
     )
+    leader_diff_impl.assert_awaited_once_with("prod", diff_line_limit=0)
     assert app.annotations["get_group_git_status"] == {
         "title": "Get group and fleet Git status",
         "readOnlyHint": True,
@@ -120,6 +125,7 @@ async def test_mutation_tools_forward_review_and_workflow_arguments(mock_ctx: Co
         app,  # type: ignore[arg-type]
         status_impl=AsyncMock(),
         diff_impl=AsyncMock(),
+        leader_diff_impl=AsyncMock(),
         commit_impl=commit_impl,
         deploy_impl=deploy_impl,
         commit_deploy_impl=commit_deploy_impl,
@@ -259,6 +265,7 @@ async def test_mutation_dry_run_returns_plan_inline_without_creating_job(mock_ct
         app,  # type: ignore[arg-type]
         status_impl=AsyncMock(),
         diff_impl=AsyncMock(),
+        leader_diff_impl=AsyncMock(),
         commit_impl=commit_impl,
         deploy_impl=AsyncMock(),
         commit_deploy_impl=AsyncMock(),

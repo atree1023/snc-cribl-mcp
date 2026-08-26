@@ -117,12 +117,16 @@ async def test_manifest_tools_register_plan_validate_and_submit(monkeypatch: pyt
     assert validation == {"status": "in_sync"}
     assert deploy_plan["plan_sha256"] == "deploy-plan"
     assert set(app.tools) == {
+        "check_manifest_receipt_validity",
+        "delete_manifest",
         "replicate_config_manifest",
         "validate_config_manifest",
         "commit_and_deploy_manifest",
         "write_manifest",
     }
     assert app.annotations["validate_config_manifest"]["readOnlyHint"] is True  # type: ignore[index]
+    assert app.annotations["check_manifest_receipt_validity"]["readOnlyHint"] is True  # type: ignore[index]
+    assert app.annotations["delete_manifest"]["destructiveHint"] is True  # type: ignore[index]
 
     with pytest.raises(ValueError, match="expected_plan_sha256"):
         await app.tools["replicate_config_manifest"](ctx, "wave.yaml", dry_run=False)
