@@ -617,6 +617,35 @@ def _deployment_order(targets: list[GroupTarget]) -> list[GroupTarget]:
     return [*stream_targets, *edge_order]
 
 
+def _manifest_target_closure(targets: list[GroupTarget], groups: list[str] | None) -> list[GroupTarget]:
+    """Select requested targets plus Edge descendants affected through inheritance."""
+    if groups is None:
+        return targets
+    if not groups:
+        msg = "groups must contain at least one group or fleet selector."
+        raise ValueError(msg)
+
+    selected = {_resolve_target_from_list(targets, selector).group_id for selector in groups}
+    by_id = {target.group_id: target for target in targets}
+
+    def _is_selected_or_descendant(target: GroupTarget) -> bool:
+        if target.group_id in selected:
+            return True
+        if target.product != ProductsCore.EDGE:
+            return False
+        seen = {target.group_id}
+        parent_id = target.inherits
+        while parent_id is not None and parent_id not in seen:
+            if parent_id in selected:
+                return True
+            seen.add(parent_id)
+            parent = by_id.get(parent_id)
+            parent_id = parent.inherits if parent is not None else None
+        return False
+
+    return [target for target in targets if _is_selected_or_descendant(target)]
+
+
 def _blocked_edge_ancestor(
     target: GroupTarget,
     *,
@@ -1382,9 +1411,11 @@ async def _build_all_plan(
     effective: bool,
     push: bool,
     stop_on_error: bool,
+    groups: list[str] | None = None,
 ) -> tuple[dict[str, Any], list[GroupTarget]]:
     """Build a deterministic plan for every selected deployment target."""
-    targets = _deployment_order(await _list_targets(resolved, _selected_products(product)))
+    all_targets = await _list_targets(resolved, _selected_products(product))
+    targets = _deployment_order(_manifest_target_closure(all_targets, groups))
     leader_status = await _global_status(resolved)
     git_info = await _git_info(resolved) if push else None
     blocked_reasons: list[str] = []
@@ -1444,6 +1475,7 @@ async def _build_all_plan(
         "push": push,
         "push_action": push_action,
         "stop_on_error": stop_on_error,
+        "requested_groups": sorted(groups) if groups is not None else None,
         "leader_git": _compact_git_status(leader_status),
         "git_integration": git_info,
         "targets": target_plans,
@@ -1462,6 +1494,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
     stop_on_error: bool = True,
     dry_run: bool = True,
     expected_plan_sha256: str | None = None,
+    groups: list[str] | None = None,
 ) -> dict[str, Any]:
     """Plan or commit and deploy all selected groups in safe dependency order."""
     normalized_message = _validate_message(message)
@@ -1473,6 +1506,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
             effective=effective,
             push=push,
             stop_on_error=stop_on_error,
+            groups=groups,
         )
         if dry_run:
             return {"status": "planned", "dry_run": True, "plan": plan}

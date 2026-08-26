@@ -7,6 +7,9 @@ oauth_token_url = "https://login.cribl.cloud/oauth/token"
 oauth_audience = "https://api.cribl.cloud"
 # Optional shared macOS Keychain service name for on-prem passwords.
 # keychain_name = "shared-cribl-login"
+# Safe root for strict multi-leader YAML manifests. Relative paths are resolved
+# from the repository root. SNC_CRIBL_MANIFEST_ROOT can override this value.
+manifest_root = "manifests"
 
 
 # Begin list of on-prem or cloud servers.

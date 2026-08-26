@@ -129,9 +129,10 @@ def register(  # noqa: C901
     @app.tool(
         name="get_config_deployment_job",
         description=(
-            "Get the current state and bounded result of an asynchronous Cribl commit, deploy, or Git push job. "
+            "Get the current state and bounded result of an asynchronous Cribl replication, commit, deploy, or Git "
+            "push job. Pass target with job_id for one target's durable detail. "
             "Pass the job_id returned by a mutation execution for its final result, or omit job_id to list recent "
-            "jobs. Job state is retained in this MCP server process and is cleared when the server restarts."
+            "jobs. Job state, progress, target detail, and resumable request metadata survive MCP process restarts."
         ),
         annotations={
             "title": "Get configuration deployment job",
@@ -143,10 +144,11 @@ def register(  # noqa: C901
         ctx: Context,
         job_id: str | None = None,
         limit: int = 20,
+        target: str | None = None,
     ) -> dict[str, Any]:
         """Get one deployment job or list recent jobs."""
         await ctx.info("Getting Cribl configuration deployment job status.")
-        return await job_manager.get(job_id=job_id, limit=limit)
+        return await job_manager.get(job_id=job_id, limit=limit, target=target)
 
     @app.tool(
         name="commit_group_config",

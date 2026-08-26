@@ -30,6 +30,9 @@ Registered tools:
 - ``validate_group_config``: validate a whole worker group or Edge fleet
 - ``replicate_system_settings``: replicate global system settings
 - ``validate_system_settings``: validate global system settings
+- ``replicate_config_manifest``: apply one strict YAML manifest to many leaders
+- ``validate_config_manifest``: semantically validate one manifest across many leaders
+- ``commit_and_deploy_manifest``: receipt-gated commit/deploy for manifest changes
 - ``get_group_git_status``: inspect group/fleet Git and deployment status
 - ``get_group_git_diff``: inspect pending or deployed-baseline group/fleet diffs
 - ``get_config_deployment_job``: poll asynchronous commit, deploy, and push jobs
@@ -40,6 +43,7 @@ Registered tools:
 - ``push_config_git``: push committed Cribl configuration to its Git remote
 """
 
+import atexit
 import logging
 import os
 import signal
@@ -54,7 +58,7 @@ from fastmcp import Context, FastMCP
 from . import prompts, resources
 from .client.cribl_client import create_control_plane
 from .client.token_manager import TokenManager, get_token_manager
-from .config import CriblConfig
+from .config import CriblConfig, state_database_path
 from .operations.breakers import collect_product_breakers
 from .operations.destinations import collect_product_destinations
 from .operations.edge_teleport import collect_edge_info
@@ -62,6 +66,7 @@ from .operations.group_sync import replicate_group_config, validate_group_config
 from .operations.groups import collect_product_groups, serialize_config_group
 from .operations.leader_overview import collect_leader_overview
 from .operations.lookups import collect_product_lookups
+from .operations.manifest_state import ManifestStateStore
 from .operations.packs import collect_packs
 from .operations.pipelines import collect_product_pipelines
 from .operations.routes import collect_product_routes
@@ -80,6 +85,7 @@ from .operations.version_control import (
     push_config_git,
 )
 from .operations.version_control_jobs import VersionControlJobManager
+from .tools.config_manifest import register as register_config_manifest_tools
 from .tools.copy_resource_config import register as register_copy_resource_config
 from .tools.edge_info import register as register_edge_info
 from .tools.get_config_objects import register as register_get_config_objects
@@ -116,7 +122,11 @@ app = FastMCP(
     name="snc-cribl-mcp",
     instructions=("Expose tools that query a customer-managed Cribl deployment for metadata."),
 )
-version_control_jobs = VersionControlJobManager()
+_STATE_DATABASE_PATH = state_database_path()
+version_control_jobs = VersionControlJobManager(database_path=_STATE_DATABASE_PATH)
+manifest_state = ManifestStateStore(_STATE_DATABASE_PATH)
+atexit.register(version_control_jobs.close)
+atexit.register(manifest_state.close)
 
 
 async def list_groups_impl(ctx: Context, server: str | None = None) -> dict[str, Any]:
@@ -206,6 +216,11 @@ def _register_capabilities() -> None:
         app,
         replicate_impl=replicate_system_settings,
         validate_impl=validate_system_settings_sync,
+    )
+    register_config_manifest_tools(
+        app,
+        job_manager=version_control_jobs,
+        state_store=manifest_state,
     )
     register_version_control_tools(
         app,

@@ -1,0 +1,22 @@
+# Copy this file and replace the group and item IDs with real configured objects.
+schema: 1
+wave: example
+source:
+  server: golden.oak
+  product: edge
+content:
+  - group: default
+    kind: variables
+    items:
+      - example-variable
+  - group: default
+    kind: destinations
+    items:
+      - example-destination
+targets:
+  - golden.oak.new
+options:
+  overwrite: true
+  append_routes: false
+  concurrency: 5
+  on_drift: skip

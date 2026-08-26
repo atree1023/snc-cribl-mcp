@@ -60,6 +60,8 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Create or replicate local users, using explicit or environment-sourced passwords because Cribl does not return passwords from the API.
   - Replicate and validate complete Stream worker groups or Edge fleets, including group/fleet settings, variables, event breakers, lookups, destinations, pipelines, sources, and routes.
   - Replicate and validate global system settings from the Global Settings page.
+  - Plan, apply, and semantically validate one strict YAML manifest across many configured leaders with bounded parallelism.
+  - Snapshot each manifest source item once, emit per-target drift hashes, and require a durable apply receipt before commit/deploy.
 - **Git-Safe Commit and Deployment Workflows**:
   - Inspect Git status and compare the current configuration with either the deployed version or the current group/fleet commit.
   - Commit or deploy one Stream worker group, Edge fleet, or subfleet, including controlled deployment of an existing commit for rollback.
@@ -67,6 +69,7 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Push committed configuration to the Leader's configured Git remote with conflict, behind-branch, and drift preflights.
   - Preview every mutation as a dry-run plan and execute only with the matching plan digest.
   - Run reviewed mutations as non-blocking jobs so status and diff tools remain responsive during long deployments.
+  - Persist jobs, progress, per-target failure detail, plans, and receipts in SQLite so interrupted manifest work can resume after restart.
   - Keep review and execution responses bounded with one capped changed-path preview, complete drift digests, and compact final results.
 - **Typed Pipeline Models**: 41 Pydantic models for pipeline function configurations (eval, mask, sampling, regex_extract, etc.) with full type safety.
 - **Typed Collector Models**: 9 Pydantic models for collector source configurations (S3, REST, database, Splunk, Azure Blob, GCS, filesystem, script, health check) with full type safety.
@@ -116,6 +119,8 @@ verify_ssl = true
 timeout_ms = 10_000
 oauth_token_url = "https://login.cribl.cloud/oauth/token"
 oauth_audience = "https://api.cribl.cloud"
+# Optional; defaults to the manifests/ directory in this checkout.
+manifest_root = "manifests"
 # Optional for on-prem; defaults to snc-cribl-mcp:<server-name>.
 # keychain_name = "shared-cribl-login"
 
@@ -158,6 +163,9 @@ When a tool call omits a server name, the first non-`[defaults]` section in `con
 `cribl01.fra0` selects a leader with a section or URL containing `fra` or `fra0`.
 
 Logging is still controlled via the `LOG_LEVEL` environment variable (default: `INFO`).
+Manifest job state defaults to `.snc-cribl-mcp/state.sqlite3`; set `SNC_CRIBL_STATE_DATABASE` to use another durable
+SQLite path. Set `SNC_CRIBL_MANIFEST_ROOT` to override `[defaults].manifest_root`. Manifests never expand environment
+variables and may only be loaded from the configured root.
 
 **Configuration Options:**
 
@@ -168,6 +176,7 @@ Logging is still controlled via the `LOG_LEVEL` environment variable (default: `
 | `[defaults]` | `oauth_token_url` | OAuth token URL for Cribl.Cloud                            | No       |
 | `[defaults]` | `oauth_audience`  | OAuth audience for Cribl.Cloud                             | No       |
 | `[defaults]` | `keychain_name`   | Shared macOS Keychain service name for on-prem passwords   | No       |
+| `[defaults]` | `manifest_root`   | Safe root for YAML configuration manifests                 | No       |
 | `[server]`   | `url`             | Base URL of your Cribl deployment (auto-appends `/api/v1`) | Yes      |
 | `[server]`   | `username`        | On-prem username; defaults to local macOS user             | No\*     |
 | `[server]`   | `password`        | On-prem password; defaults to Keychain/env lookup          | No\*     |
@@ -196,7 +205,7 @@ uv run python -m snc_cribl_mcp.server
 
 ### Available MCP Tools
 
-The server exposes thirty-two MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://variables`, `cribl://packs`):
+The server exposes thirty-six MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://variables`, `cribl://packs`):
 
 #### `get_leader_overview`
 
@@ -368,6 +377,29 @@ Validates global Cribl system settings between two configured leaders.
 
 - **Returns:** JSON with an in-sync flag and differing setting paths. Use `include_payloads=true` when the raw source and target setting payloads are needed.
 
+#### `replicate_config_manifest`
+
+Plans or applies explicit group-scoped resources from one source leader to every target in a strict YAML manifest.
+
+- **Safe input:** Manifests are limited to the configured manifest root, 1 MiB, schema version 1, configured server names, explicit item IDs, and known fields. Duplicate YAML keys, aliases, inline config payloads, environment expansion, duplicate targets, and duplicate group/kind sections are rejected.
+- **Efficient fan-out:** Source objects are resolved and snapshotted once, then targets run concurrently (default 5, maximum 10). Each target remains internally ordered as variables, breakers, lookups, destinations, pipelines, sources, then routes.
+- **Safe execution:** Dry-run returns `intent_sha256`, aggregate `plan_sha256`, and a `target_plan_sha256` for each leader. Execution requires the aggregate hash, revalidates each target independently, skips or aborts on drift, and never executes a target with preflight blockers.
+- **Returns:** Execution immediately returns a durable `job_id`. Its final bounded result includes an `apply_receipt_sha256`; successful item detail stays out of the aggregate response, while target failures can be retrieved with `get_config_deployment_job(job_id, target)`.
+
+#### `validate_config_manifest`
+
+Semantically validates every manifest item across all targets in parallel. Hostnames, endpoints, generated identities,
+credential references, and volatile metadata are counted but non-blocking; functional differences and missing items fail
+the affected target. Per-target difference detail is capped.
+
+#### `commit_and_deploy_manifest`
+
+Commits and deploys a prior manifest application across its successful target leaders.
+
+- **Receipt gate:** Requires either the replication `apply_job_id` or `apply_receipt_sha256`. Every group diff must still match the durable post-apply receipt before planning and again before execution.
+- **Scope:** Commits only manifest groups. For Edge, affected descendants are included and processed parent-first so inherited changes are committed and deployed safely.
+- **Review contract:** Dry-run and execution use a separate commit/deploy `plan_sha256`, keeping replication approval distinct from deployment approval. Targets run concurrently, while each leader's hierarchy remains serialized.
+
 #### `get_group_git_status`
 
 Reports Git and deployment state for one or all Stream worker groups and Edge fleets/subfleets.
@@ -383,11 +415,11 @@ Shows the configuration diff for one Stream worker group or Edge fleet/subfleet.
 
 #### `get_config_deployment_job`
 
-Polls an asynchronous commit, deploy, or Git push execution.
+Polls an asynchronous manifest replication, commit, deploy, or Git push execution.
 
-- **With `job_id`:** Returns queued/running/completed/failed state and the bounded final result when available.
+- **With `job_id`:** Returns queued/running/completed/failed/interrupted state, aggregate progress, and the bounded final result when available. Add `target` for durable per-target detail.
 - **Without `job_id`:** Lists recent jobs without embedding every final result.
-- **Lifetime:** Jobs are retained in memory by the current MCP server process and are cleared when it restarts.
+- **Lifetime:** Jobs and resumable request metadata are retained in SQLite across MCP process restarts. A previously running job is restored as `interrupted`; pass it as `resume_job_id` with the exact original parameters to retry unfinished targets.
 
 #### `commit_group_config`
 
@@ -409,7 +441,7 @@ Commits all selected targets before deploying them. Edge parents are processed b
 
 Pushes already committed Leader configuration to the configured remote. Preflight rejects a missing remote, unresolved conflicts, or a local branch behind its remote.
 
-All five version-control mutation tools default to `dry_run=true`. Review the plan and diff, then pass the returned `plan_sha256` as `expected_plan_sha256` with `dry_run=false`. The execution call returns an accepted `job_id` immediately; poll `get_config_deployment_job` for completion. Mutations are serialized per configured server while read-only tools remain responsive. `copy_resource_config` uses the same review-and-confirm contract but executes synchronously.
+All version-control and manifest mutation tools default to `dry_run=true`. Review the plan and diff, then pass the returned `plan_sha256` as `expected_plan_sha256` with `dry_run=false`. The execution call returns an accepted `job_id` immediately; poll `get_config_deployment_job` for completion. Mutations are serialized per configured server while read-only tools remain responsive. `copy_resource_config` uses the same review-and-confirm contract but executes synchronously.
 
 Plans contain a single 25-path preview plus digests over the complete path set and pending diff. Final results omit full plans, diffs, deployment objects, and changed-path arrays; they retain the executed plan digest, action/status, pre-commit-diff line counts, file counts, deployed versions, rollout aggregates, push status, and recovery details. Use `get_group_git_diff` for file-level drill-down. A successful deployment confirms the Leader's active `configVersion`; use the returned rollout counts or a later status call to confirm that every worker or Edge node has converged. The installed Cribl SDK does not expose a failed-node aggregate, so `rollout.failed` remains `null` unless a future API response provides it.
 

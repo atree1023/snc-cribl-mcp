@@ -23,5 +23,6 @@ config.toml
 docs/cribl-openapi-spec.yml
 
 .clawpatch/
+.snc-cribl-mcp/
 
 TODO.md

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
+from contextlib import closing
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -150,3 +153,49 @@ async def test_job_registry_validates_queries_and_prunes_completed_history() -> 
         await manager.get(job_id=str(first["job_id"]))
     with pytest.raises(ValueError, match="between 1 and 100"):
         await manager.get(limit=0)
+
+
+@pytest.mark.asyncio
+async def test_durable_jobs_restore_progress_details_and_interrupted_request(tmp_path: Path) -> None:
+    """Restart recovery should preserve request/detail state and mark active jobs resumable."""
+    database = tmp_path / "jobs.sqlite3"
+    manager = VersionControlJobManager(database_path=database)
+
+    async def _runner(context: object) -> dict[str, Any]:
+        context.update_progress({"total": 2, "completed": 1, "failed": 0, "running": 1})  # type: ignore[attr-defined]
+        context.set_target_detail("leader-a", {"status": "applied"})  # type: ignore[attr-defined]
+        return {"status": "partial_failure"}
+
+    accepted = await manager.submit_aggregate(
+        operation="replicate_config_manifest",
+        servers=("leader-a", "leader-b"),
+        expected_plan_sha256="plan",
+        runner=_runner,  # type: ignore[arg-type]
+        request={"manifest_path": "wave.yaml"},
+    )
+    completed = await _wait_for_terminal(manager, str(accepted["job_id"]))
+    assert completed["servers"] == ["leader-a", "leader-b"]
+    detail = await manager.get(job_id=str(accepted["job_id"]), target="leader-a")
+    assert detail["target_detail"] == {"status": "applied"}
+
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute(
+            "UPDATE config_jobs SET status = 'running', completed_at = NULL WHERE job_id = ?",
+            (accepted["job_id"],),
+        )
+    restored = VersionControlJobManager(database_path=database)
+    interrupted = await restored.get(job_id=str(accepted["job_id"]))
+    assert interrupted["status"] == "interrupted"
+    assert interrupted["error"]["type"] == "ProcessRestart"
+    assert restored.resume_request(str(accepted["job_id"]), operation="replicate_config_manifest") == {
+        "manifest_path": "wave.yaml"
+    }
+    assert restored.target_details(str(accepted["job_id"]))["leader-a"] == {"status": "applied"}
+
+    with pytest.raises(ValueError, match="belongs to operation"):
+        restored.resume_request(str(accepted["job_id"]), operation="commit_and_deploy_manifest")
+    with pytest.raises(ValueError, match="target requires job_id"):
+        await restored.get(target="leader-a")
+
+    manager.close()
+    restored.close()

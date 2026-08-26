@@ -839,6 +839,45 @@ async def test_commit_and_deploy_all_rechecks_descendants_and_deploys_parent_fir
 
 
 @pytest.mark.asyncio
+async def test_commit_and_deploy_all_manifest_scope_includes_only_requested_edge_descendants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manifest scope should include an affected subtree without committing unrelated fleets."""
+    parent = _group_payload("parent", product=ProductsCore.EDGE, local_changes=1)
+    child = _group_payload("child", product=ProductsCore.EDGE, local_changes=0, inherits="parent")
+    unrelated = _group_payload("unrelated", product=ProductsCore.EDGE, local_changes=1)
+    harness = _Harness(
+        (ProductsCore.EDGE, unrelated),
+        (ProductsCore.EDGE, child),
+        (ProductsCore.EDGE, parent),
+    )
+    harness.inherit_versions_on_commit = {"parent": ["child"]}
+    _install_harness(monkeypatch, harness)
+
+    planned = await vc.commit_and_deploy_all(
+        "test",
+        message="Deploy one manifest subtree",
+        product="edge",
+        groups=["parent"],
+    )
+    assert [item["target"]["id"] for item in planned["plan"]["targets"]] == ["parent", "child"]
+    assert planned["plan"]["requested_groups"] == ["parent"]
+
+    result = await vc.commit_and_deploy_all(
+        "test",
+        message="Deploy one manifest subtree",
+        product="edge",
+        groups=["parent"],
+        dry_run=False,
+        expected_plan_sha256=planned["plan"]["plan_sha256"],
+    )
+    assert result["status"] == "completed"
+    assert harness.commit_order == ["parent"]
+    assert harness.deploy_order == ["parent", "child"]
+    assert "unrelated" not in harness.commit_order
+
+
+@pytest.mark.asyncio
 async def test_commit_and_deploy_all_uses_precommit_diff_line_counts_across_targets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

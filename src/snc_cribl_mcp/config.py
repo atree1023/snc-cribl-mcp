@@ -449,6 +449,30 @@ def clear_config_cache() -> None:
     _load_configs.cache_clear()
 
 
+def configured_server_names() -> tuple[str, ...]:
+    """Return configured server names without resolving credentials."""
+    _, servers = _load_config_sections()
+    return tuple(servers)
+
+
+def config_manifest_root() -> Path:
+    """Return the only directory from which configuration manifests may be loaded."""
+    configured = os.getenv("SNC_CRIBL_MANIFEST_ROOT")
+    if configured is None:
+        defaults, _ = _load_config_sections()
+        configured = _non_empty_string(defaults.get("manifest_root"))
+    root = Path(configured).expanduser() if configured else CONFIG_PATH.parent / "manifests"
+    return root.resolve()
+
+
+def state_database_path() -> Path:
+    """Return the durable SQLite database path used by mutation jobs and receipts."""
+    configured = os.getenv("SNC_CRIBL_STATE_DATABASE")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (CONFIG_PATH.parent / ".snc-cribl-mcp" / "state.sqlite3").resolve()
+
+
 class CriblConfig(BaseModel):
     """Configuration values required to interact with a Cribl deployment."""
 
@@ -567,4 +591,11 @@ class CriblConfig(BaseModel):
         return _load_config(matches[0])
 
 
-__all__ = ["CONFIG_PATH", "CriblConfig", "clear_config_cache"]
+__all__ = [
+    "CONFIG_PATH",
+    "CriblConfig",
+    "clear_config_cache",
+    "config_manifest_root",
+    "configured_server_names",
+    "state_database_path",
+]
