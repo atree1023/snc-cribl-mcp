@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from typing import Any, Literal, cast
 
 type ConfigObjectKind = Literal[
@@ -143,6 +144,7 @@ def _selector_matches(item: dict[str, Any], selector: str | None) -> bool:
     if selector is None:
         return True
     needle = selector.casefold()
+    wildcard = any(character in selector for character in "*?[")
     haystack = [
         _optional_str(item.get("id")),
         _optional_str(item.get("groupId")),
@@ -150,6 +152,8 @@ def _selector_matches(item: dict[str, Any], selector: str | None) -> bool:
         _optional_str(item.get("type")),
         _optional_str(item.get("description")),
     ]
+    if wildcard:
+        return any(fnmatchcase(value.casefold(), needle) for value in haystack if value)
     return any(needle in value.casefold() for value in haystack if value)
 
 

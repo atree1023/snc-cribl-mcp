@@ -641,6 +641,7 @@ async def _maybe_get_item(
     item_id: str,
     product: ProductsCore | None = None,
     group_id: str | None = None,
+    hydrate_lookup_content: bool = False,
 ) -> dict[str, Any] | None:
     """Fetch one item and return ``None`` on HTTP 404."""
     try:
@@ -652,6 +653,7 @@ async def _maybe_get_item(
             product=product,
             group_id=group_id,
             security=await _resolved_security(resolved),
+            hydrate_lookup_content=hydrate_lookup_content,
         )
     except CriblControlPlaneError as exc:
         if exc.status_code == HTTP_NOT_FOUND:
@@ -1076,23 +1078,46 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
                 continue
 
             result: dict[str, Any] = {"item_id": current_item_id, "action": action}
-            if validate_after:
-                try:
+            item_results.append(result)
+
+        successful_results = [result for result in item_results if result.get("action") in {"appended", "created", "updated"}]
+        if validate_after and successful_results:
+            try:
+                if item_id is not None:
+                    persisted_target = await _maybe_get_item(
+                        target,
+                        kind,
+                        item_id=item_id,
+                        product=product,
+                        group_id=resolved_target_group_id,
+                        hydrate_lookup_content=kind == "lookups",
+                    )
+                    target_validation_items = {item_id: persisted_target} if persisted_target is not None else {}
+                else:
+                    target_validation_items = _index_items(
+                        await list_resource(
+                            target.client,
+                            kind,
+                            timeout_ms=target.config.timeout_ms,
+                            product=product,
+                            group_id=resolved_target_group_id,
+                            security=await _resolved_security(target),
+                            hydrate_lookup_content=kind == "lookups",
+                        )
+                    )
+            except Exception as exc:  # noqa: BLE001 - preserve successful writes even if validation lookup fails
+                validation_error = _serialize_copy_error(exc)
+                for result in successful_results:
+                    result["validation_error"] = validation_error
+            else:
+                for result in successful_results:
+                    current_item_id = str(result["item_id"])
                     result["validation"] = _compare_items(
                         kind,
                         current_item_id,
-                        source_item,
-                        await _maybe_get_item(
-                            target,
-                            kind,
-                            item_id=current_item_id,
-                            product=product,
-                            group_id=resolved_target_group_id,
-                        ),
+                        source_items.get(current_item_id),
+                        target_validation_items.get(current_item_id),
                     )
-                except Exception as exc:  # noqa: BLE001 - preserve successful writes even if validation lookup fails
-                    result["validation_error"] = _serialize_copy_error(exc)
-            item_results.append(result)
 
         response = {
             **response_base,

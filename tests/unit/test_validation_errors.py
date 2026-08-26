@@ -714,6 +714,55 @@ class TestFormatValidationErrorResponse:
         # Primary message should be from first error
         assert result["message"] is not None
 
+    def test_collapses_repeated_schema_errors_without_repeating_large_values(self) -> None:
+        """The same schema drift across many nodes should produce one compact counted error."""
+        validation_errors = [
+            ValidationErrorDetails(
+                object_index=index,
+                object_type="aws",
+                field_path="aws.enabled",
+                error_type="bool_type",
+                error_message="Input should be a valid boolean",
+                input_value={"tags": {"environment": "test"}},
+                raw_location=("body", "items", index, "aws", "enabled"),
+            )
+            for index in range(13)
+        ]
+        body = json.dumps(
+            {
+                "items": [
+                    {
+                        "id": f"node-{index}",
+                        "type": "edge",
+                        "aws": {"enabled": "unknown", "tags": {"instance": f"node-{index}"}},
+                    }
+                    for index in range(13)
+                ]
+            }
+        )
+
+        result = format_validation_error_response(
+            resource_type="nodes",
+            product="edge",
+            group_id="(product)",
+            body=body,
+            validation_errors=validation_errors,
+        )
+
+        assert result["error_count"] == 13
+        assert result["unique_error_count"] == 1
+        assert result["message"] == ("13 node records failed SDK validation for 'aws.enabled': Input should be a valid boolean")
+        assert result["errors"] == [
+            {
+                "message": "13 node records failed SDK validation for 'aws.enabled': Input should be a valid boolean",
+                "object_id": None,
+                "object_type": "edge",
+                "field": "aws.enabled",
+                "error_type": "bool_type",
+                "occurrence_count": 13,
+            }
+        ]
+
     def test_includes_actual_value_and_help(self) -> None:
         """Includes actual_value and help text when field value is found."""
         validation_errors = [

@@ -130,6 +130,32 @@ def _status_validation_error(
     )
 
 
+def _counted_items_from_validation_body(body: str | None) -> tuple[list[dict[str, Any]], int | None] | None:
+    """Recover raw counted items when an SDK response model rejects valid API data."""
+    if not body:
+        return None
+    try:
+        raw_payload = cast("object", json.loads(body))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(raw_payload, dict):
+        return None
+    payload = cast("dict[str, object]", raw_payload)
+
+    counted_value = payload.get("result", payload)
+    if not isinstance(counted_value, dict):
+        return None
+    counted = cast("dict[str, object]", counted_value)
+    raw_items_value = counted.get("items")
+    if not isinstance(raw_items_value, list):
+        return None
+
+    raw_items = cast("list[object]", raw_items_value)
+    items = [cast("dict[str, Any]", item) for item in raw_items if isinstance(item, dict)]
+    reported_count = _as_int(counted.get("count"))
+    return items, reported_count
+
+
 def _compact_runtime_status(item: dict[str, Any]) -> dict[str, Any]:
     """Return a compact Source/Destination runtime status item."""
     status_body = _as_dict(item.get("status")) or {}
@@ -456,6 +482,62 @@ def _version_from_node(item: dict[str, Any]) -> str | None:
     return _as_str(cribl.get("version"))
 
 
+def _group_from_node(item: dict[str, Any]) -> str | None:
+    """Extract a group/fleet identifier across raw and generated SDK node shapes."""
+    for key in ("group", "groupId", "group_id", "fleet", "fleetId", "fleet_id"):
+        value = _as_str(item.get(key))
+        if value is not None:
+            return value
+
+    info = _as_dict(item.get("info"))
+    cribl = _as_dict(info.get("cribl")) if info is not None else None
+    if cribl is not None:
+        for key in ("group", "groupId", "group_id", "fleet", "fleetId", "fleet_id"):
+            value = _as_str(cribl.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _node_inventory_result(
+    items: list[dict[str, Any]],
+    reported_count: int | None,
+    *,
+    schema_validation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build node inventory from serialized SDK items or recovered raw response items."""
+    by_group: Counter[str] = Counter()
+    versions: Counter[str] = Counter()
+    statuses: Counter[str] = Counter()
+    for item in items:
+        group_id = _group_from_node(item)
+        if group_id is not None:
+            by_group[group_id] += 1
+        version = _version_from_node(item)
+        if version is not None:
+            versions[version] += 1
+        status = _as_str(item.get("status"))
+        if status is not None:
+            statuses[status] += 1
+
+    result: dict[str, Any] = {
+        "status": "ok_with_warnings" if schema_validation is not None else "ok",
+        "count": len(items),
+        "by_group": dict(sorted(by_group.items())),
+        "versions": dict(sorted(versions.items())),
+        "statuses": dict(sorted(statuses.items())),
+    }
+    if reported_count is not None:
+        result["reported_count"] = reported_count
+    if schema_validation is not None:
+        result["schema_validation"] = {
+            key: schema_validation[key]
+            for key in ("message", "error_count", "unique_error_count", "errors")
+            if key in schema_validation
+        }
+    return result
+
+
 async def _collect_node_inventory(
     client: CriblControlPlane,
     *,
@@ -474,7 +556,12 @@ async def _collect_node_inventory(
         items, reported_count = await _collect_paginated_items(response)
     except ResponseValidationError as exc:
         await ctx.error(f"SDK validation error for {product.value} nodes: {exc}")
-        return _status_validation_error(exc=exc, resource_type="nodes", product=product, group_id="(product)")
+        validation = _status_validation_error(exc=exc, resource_type="nodes", product=product, group_id="(product)")
+        recovered = _counted_items_from_validation_body(exc.body)
+        if recovered is None:
+            return validation
+        items, reported_count = recovered
+        return _node_inventory_result(items, reported_count, schema_validation=validation)
     except CriblControlPlaneError as exc:
         if exc.status_code == HTTP_NOT_FOUND:
             return _unavailable_result(f"Nodes endpoint returned HTTP 404 for {product.value}.")
@@ -482,41 +569,35 @@ async def _collect_node_inventory(
     except httpx.HTTPError as exc:
         return _error_result(f"Network error while fetching {product.value} nodes: {exc}")
 
-    by_group: Counter[str] = Counter()
-    versions: Counter[str] = Counter()
-    statuses: Counter[str] = Counter()
-    for item in items:
-        group_id = _as_str(item.get("group"))
-        if group_id is not None:
-            by_group[group_id] += 1
-        version = _version_from_node(item)
-        if version is not None:
-            versions[version] += 1
-        status = _as_str(item.get("status"))
-        if status is not None:
-            statuses[status] += 1
+    return _node_inventory_result(items, reported_count)
 
-    result: dict[str, Any] = {
-        "status": "ok",
-        "count": len(items),
-        "by_group": dict(sorted(by_group.items())),
-        "versions": dict(sorted(versions.items())),
-        "statuses": dict(sorted(statuses.items())),
-    }
-    if reported_count is not None:
-        result["reported_count"] = reported_count
-    return result
+
+def _reported_group_node_count(group: dict[str, Any]) -> int:
+    """Return the API-reported node count across alias and field-name serialization."""
+    for key in ("workerCount", "worker_count"):
+        count = _as_int(group.get(key))
+        if count is not None:
+            return count
+    workers = _as_dict(group.get("workers"))
+    if workers is not None:
+        count = _as_int(workers.get("count"))
+        if count is not None:
+            return count
+    return 0
 
 
 def _active_group_count(group: dict[str, Any], node_inventory: dict[str, Any]) -> int:
     """Return the best available node count for a group/fleet."""
     group_id = extract_group_id(group)
     by_group = _as_dict(node_inventory.get("by_group"))
-    if by_group is not None and group_id is not None:
-        node_count = _as_int(by_group.get(group_id))
-        if node_count is not None:
-            return node_count
-    return _as_int(group.get("workerCount")) or 0
+    if by_group is not None:
+        selectors = {value.casefold() for value in (group_id, _as_str(group.get("name"))) if value is not None}
+        for reported_group, raw_count in by_group.items():
+            if reported_group.casefold() in selectors:
+                node_count = _as_int(raw_count)
+                if node_count is not None:
+                    return node_count
+    return _reported_group_node_count(group)
 
 
 async def _build_active_group_report(
@@ -548,14 +629,19 @@ async def _build_active_group_report(
     report: dict[str, Any] = {
         "id": group_id,
         "node_count": node_count,
-        "reported_worker_count": group.get("workerCount"),
+        "reported_worker_count": _reported_group_node_count(group),
         "sources": source_statuses,
         "destinations": destination_statuses,
     }
-    for key in ("name", "description", "type", "configVersion"):
-        value = group.get(key)
+    for output_key, input_keys in (
+        ("name", ("name",)),
+        ("description", ("description",)),
+        ("type", ("type",)),
+        ("configVersion", ("configVersion", "config_version")),
+    ):
+        value = next((group.get(key) for key in input_keys if group.get(key) is not None), None)
         if value is not None:
-            report[key] = value
+            report[output_key] = value
     return report
 
 

@@ -135,6 +135,8 @@ Follow this checklist:
 
 - Caught in `collect_items_via_sdk()` and `collect_items_via_http()`
 - Returns structured dict with `status: "validation_error"`, affected object info
+- Repeated field/cause pairs are collapsed into one entry with `occurrence_count`
+- Leader overview can recover raw counted node items while retaining compact schema warnings
 - Never raises to caller; always returns gracefully
 
 **Authentication errors:**

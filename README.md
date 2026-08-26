@@ -70,7 +70,7 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Keep review and execution responses bounded with one capped changed-path preview, complete drift digests, and compact final results.
 - **Typed Pipeline Models**: 41 Pydantic models for pipeline function configurations (eval, mask, sampling, regex_extract, etc.) with full type safety.
 - **Typed Collector Models**: 9 Pydantic models for collector source configurations (S3, REST, database, Splunk, Azure Blob, GCS, filesystem, script, health check) with full type safety.
-- **Graceful Error Handling**: SDK validation errors return structured, user-friendly responses with actionable guidance instead of crashing.
+- **Graceful Error Handling**: SDK validation errors return structured, user-friendly responses with actionable guidance instead of crashing. Repeated errors with the same field and cause are collapsed into one counted entry.
 - **Robust Authentication**: Automatic token management and refresh for customer-managed deployments.
 - **FastMCP Integration**: Built with [FastMCP 3.x](https://gofastmcp.com) for easy integration with Claude and other AI assistants.
 - **Quality Assurance**: Comprehensive unit test coverage with full typing support.
@@ -310,7 +310,7 @@ Uninstalls an installed Pack by Pack ID.
 
 Queries supported config objects through one bounded read tool: groups, sources, destinations, pipelines, routes, breakers, lookups, and variables.
 
-- **Returns:** Compact summaries by default, including product, group, ID, type, enabled state, optional dependency references, truncation state, and a cursor for follow-up calls. Use `detail="full"` with filters such as `selector`, `product`, and `group_id` to retrieve selected payloads without flooding the MCP response.
+- **Returns:** Compact summaries by default, including product, group, ID, type, enabled state, optional dependency references, truncation state, and a cursor for follow-up calls. Use `detail="full"` with filters such as `selector`, `product`, and `group_id` to retrieve selected payloads without flooding the MCP response. `selector` is case-insensitive; values containing `*`, `?`, or character classes use shell-style wildcard matching, while other values use substring matching.
 
 #### `validate_config_objects`
 
@@ -326,6 +326,7 @@ Copies groups, sources, destinations, pipelines, routes, breakers, lookups, or v
 - **Returns:** Dry-run plans describe would-create, would-update, would-append, skip, unsupported, and failed actions and include a content-addressed `plan_sha256`. Execution results report the matching `executed_plan_sha256` plus created, updated, appended, skipped, unsupported, and failed items. For group-scoped resources, both responses include the requested selectors and resolved group IDs.
 - **Safe execution:** The tool defaults to `dry_run=true`. Review the plan, then pass its exact `plan_sha256` as `expected_plan_sha256` with `dry_run=false`. Source or target config drift causes execution to stop before any write.
 - **Subset matching:** Use `item_pattern` for wildcard boolean selectors like `oodp-* but not oodp-source-*`, `item_regex` for regex selectors, and the explicit exclude filters to plan or copy only selected IDs.
+- **Post-copy validation:** Batch copies re-list the target scope after all writes and compare the same list representation used by `validate_resource_sync` and `validate_config_objects`, avoiding false drift from list-versus-detail response differences.
 
 #### `validate_resource_sync`
 

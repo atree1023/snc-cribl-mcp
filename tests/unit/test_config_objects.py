@@ -113,6 +113,37 @@ def test_shape_config_object_response_filters_selector_and_returns_full_payload(
     assert response["objects"][0]["payload"]["host"] == "cribl-ldr.phx.example.com"
 
 
+def test_shape_config_object_response_treats_selector_wildcards_as_globs() -> None:
+    """Wildcard selectors should match object fields instead of being treated literally."""
+    product_results = {
+        "edge": {
+            "status": "ok",
+            "groups": [
+                {
+                    "group_id": "linux",
+                    "items": [
+                        {"id": "source-sysinfo-one", "type": "system_metrics"},
+                        {"id": "source-sysinfo-two", "type": "system_metrics"},
+                        {"id": "source-journald-one", "type": "journald"},
+                    ],
+                }
+            ],
+        }
+    }
+
+    response = shape_config_object_response(
+        kind="sources",
+        product_results=product_results,
+        selector="SOURCE-SYSINFO-*",
+    )
+
+    assert response["total_count"] == 2
+    assert [item["id"] for item in response["objects"]] == [
+        "source-sysinfo-one",
+        "source-sysinfo-two",
+    ]
+
+
 def test_shape_config_object_response_extracts_route_dependencies() -> None:
     """Route references should expose dependent pipelines and destinations."""
     product_results = {

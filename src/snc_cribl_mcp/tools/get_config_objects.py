@@ -97,7 +97,8 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
         description=(
             "Query Cribl config objects with bounded results. Supports groups, sources, destinations, "
             "pipelines, routes, breakers, lookups, and variables. Returns compact summaries by default; use filters "
-            "and detail='full' for selected payloads."
+            "and detail='full' for selected payloads. The selector is case-insensitive and supports shell-style "
+            "wildcards such as 'source-sysinfo-*'; without wildcards it performs a substring match."
         ),
         annotations={
             "title": "Get config objects",

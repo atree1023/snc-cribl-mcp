@@ -716,16 +716,9 @@ async def test_copy_resource_config_preserves_success_when_validation_lookup_fai
         {"id": "pipe1", "conf": {"output": "default"}},
         {"id": "pipe2", "conf": {"output": "default"}},
     ]
-    list_resource = AsyncMock(return_value=source_items)
+    list_resource = AsyncMock(side_effect=[source_items, RuntimeError("validation lookup failed")])
     create_resource = AsyncMock(side_effect=[[source_items[0]], [source_items[1]]])
-    maybe_get_item = AsyncMock(
-        side_effect=[
-            None,
-            None,
-            RuntimeError("validation lookup failed"),
-            source_items[1],
-        ]
-    )
+    maybe_get_item = AsyncMock(side_effect=[None, None])
 
     monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
     monkeypatch.setattr(sync_module, "list_resource", list_resource)
@@ -749,8 +742,62 @@ async def test_copy_resource_config_preserves_success_when_validation_lookup_fai
             "message": "validation lookup failed",
         },
     }
-    assert result["items"][1]["action"] == "created"
-    assert result["items"][1]["validation"]["status"] == "in_sync"
+    assert result["items"][1] == {
+        "item_id": "pipe2",
+        "action": "created",
+        "validation_error": {
+            "type": "RuntimeError",
+            "message": "validation lookup failed",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_validates_batch_with_same_list_shape_as_sync_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batch validate_after should compare list-to-list shapes, not a source list to a target get."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_item = {
+        "id": "source-sysinfo-one",
+        "type": "system_metrics",
+        "notifications": [{"id": "runtime-only-list-shape"}],
+    }
+    persisted_list_item = dict(source_item)
+    list_resource = AsyncMock(side_effect=[[source_item], [persisted_list_item]])
+    maybe_get_item = AsyncMock(return_value=None)
+    create_resource = AsyncMock(return_value=[source_item])
+
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "create_resource", create_resource)
+
+    result = await sync_module.copy_resource_config(
+        "sources",
+        "golden.oak",
+        "golden.oak.new",
+        group_id="linux",
+        item_pattern="source-sysinfo-*",
+    )
+
+    assert result["items"] == [
+        {
+            "item_id": "source-sysinfo-one",
+            "action": "created",
+            "validation": {
+                "item_id": "source-sysinfo-one",
+                "status": "in_sync",
+                "differing_paths": [],
+            },
+        }
+    ]
+    assert list_resource.await_count == 2
+    maybe_get_item.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -420,9 +420,16 @@ def format_validation_error_response(
         A dictionary with the error response.
 
     """
-    error_details: list[dict[str, Any]] = []
-    primary_message: str | None = None
-
+    occurrences: list[
+        tuple[
+            ValidationErrorDetails,
+            ParsedErrorLocation,
+            str | None,
+            str | None,
+            JsonValue,
+            str,
+        ]
+    ] = []
     for error in validation_errors:
         # Parse the error location
         loc = _parse_error_location(error.raw_location)
@@ -450,6 +457,43 @@ def format_validation_error_response(
             error_type=error.error_type,
         )
         user_message = _build_user_friendly_message(msg_ctx)
+        occurrences.append((error, loc, object_id, object_type, field_value, user_message))
+
+    grouped: dict[
+        tuple[str, str, str, str | None],
+        list[
+            tuple[
+                ValidationErrorDetails,
+                ParsedErrorLocation,
+                str | None,
+                str | None,
+                JsonValue,
+                str,
+            ]
+        ],
+    ] = {}
+    for occurrence in occurrences:
+        error, loc, _object_id, _object_type, _field_value, _user_message = occurrence
+        signature = (
+            error.field_path,
+            error.error_type,
+            error.error_message,
+            loc.object_type_field,
+        )
+        grouped.setdefault(signature, []).append(occurrence)
+
+    error_details: list[dict[str, Any]] = []
+    primary_message: str | None = None
+    for matching_occurrences in grouped.values():
+        error, loc, object_id, object_type, field_value, user_message = matching_occurrences[0]
+        occurrence_count = len(matching_occurrences)
+
+        if occurrence_count > 1:
+            field_name = error.field_path or "$"
+            resource_label = resource_type.removesuffix("s")
+            user_message = (
+                f"{occurrence_count} {resource_label} records failed SDK validation for '{field_name}': {error.error_message}"
+            )
 
         if primary_message is None:
             primary_message = user_message
@@ -460,9 +504,13 @@ def format_validation_error_response(
             "object_id": object_id,
             "object_type": object_type,
             "field": error.field_path,
+            "error_type": error.error_type,
         }
 
-        if field_value is not None:
+        if occurrence_count > 1:
+            error_entry["object_id"] = None
+            error_entry["occurrence_count"] = occurrence_count
+        elif field_value is not None:
             error_entry["actual_value"] = _format_json_value(_redact_sensitive_values(field_value))
             error_entry["help"] = (
                 "The value shown above was returned by the Cribl API but does not match "
@@ -478,6 +526,8 @@ def format_validation_error_response(
         "product": product,
         "group_id": group_id,
         "resource_type": resource_type,
+        "error_count": len(validation_errors),
+        "unique_error_count": len(error_details),
         "errors": error_details,
         "resolution": (
             "This error occurs when the Cribl API returns data that doesn't match the SDK's "

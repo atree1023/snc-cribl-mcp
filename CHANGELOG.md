@@ -23,6 +23,10 @@ All notable changes to snc-cribl-mcp will be documented in this file.
 - Documented the SDK 0.11 Pack `with_=collectors` expansion so callers can retrieve Pack collector counts without follow-up requests.
 - Constrained the Preview `cribl-control-plane` dependency to the live-validated `>=0.11.0,<0.12` compatibility line.
 - Preserved non-empty network error details and removed runtime-only status timestamps from config drift checks.
+- Collapsed repeated SDK schema failures into counted error entries so one invalid field across many nodes no longer repeats large `actual_value` payloads.
+- Recovered raw node inventory for leader overview when the generated SDK rejects otherwise usable node responses, and recognized SDK snake_case group counts and name-based fleet associations.
+- Made `get_config_objects.selector` honor case-insensitive shell wildcards instead of treating `*`, `?`, and character classes as literal text.
+- Aligned batch `copy_resource_config(validate_after=true)` with collection validation by comparing source and target list representations after writes.
 
 ### Tests
 
@@ -30,6 +34,7 @@ All notable changes to snc-cribl-mcp will be documented in this file.
 - Added 107-file response-size regression coverage plus blocking-worker, polling, failure, and per-server job serialization tests.
 - Added SDK 0.11 wrapper regressions, copy-plan drift-gate coverage, and live plan/execute/validate/cleanup testing against two local Cribl 4.19.2 leaders.
 - Ran 58 safe MCP tool calls across both local leaders plus a temporary empty-Pack install/list/get/delete cleanup workflow.
+- Added regressions for all four Issue #20 findings and completed a temporary disabled-source plan/copy/inline-validate/standalone-validate/delete workflow across both local leaders.
 
 ## [0.3.0] - 2026-05-22
 

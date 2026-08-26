@@ -1,5 +1,8 @@
 """Unit tests for leader overview operation and MCP tool wrapper."""
 
+# pyright: reportPrivateUsage=false
+
+import json
 from collections.abc import Awaitable, Callable, Sequence
 from types import SimpleNamespace
 from typing import Any
@@ -7,12 +10,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from cribl_control_plane.errors import CriblControlPlaneError
+from cribl_control_plane.errors import CriblControlPlaneError, ResponseValidationError
 from cribl_control_plane.models.productscore import ProductsCore
 from cribl_control_plane.models.security import Security
 from fastmcp import Context
+from pydantic import TypeAdapter, ValidationError
 
 from snc_cribl_mcp.config import CriblConfig
+from snc_cribl_mcp.operations import leader_overview as leader_overview_module
 from snc_cribl_mcp.operations.leader_overview import collect_leader_overview
 from snc_cribl_mcp.tools.leader_overview import register as register_leader_overview
 
@@ -224,6 +229,69 @@ async def test_collect_leader_overview_success(config: CriblConfig, mock_ctx: Co
     edge = result["products"]["edge"]
     assert edge["groups_with_nodes"][0]["id"] == "fleet-a"
     assert edge["groups_with_nodes"][0]["destinations"]["health_counts"] == {"yellow": 1}
+
+
+def test_active_group_count_accepts_sdk_snake_case_and_group_name_matches() -> None:
+    """Generated SDK field names and node group names should both identify active fleets."""
+    group = {"id": "fleet-linux", "name": "Linux", "worker_count": 8}
+
+    assert leader_overview_module._active_group_count(group, {"by_group": {}}) == 8
+    assert leader_overview_module._active_group_count(group, {"by_group": {"linux": 9}}) == 9
+
+
+@pytest.mark.asyncio
+async def test_node_inventory_recovers_raw_items_after_sdk_schema_validation_error(mock_ctx: Context) -> None:
+    """Valid node data should remain usable when an optional SDK field has schema drift."""
+    with pytest.raises(ValidationError) as caught:
+        TypeAdapter(bool).validate_python("unknown")
+    validation_cause = caught.value
+
+    body = json.dumps(
+        {
+            "count": 2,
+            "items": [
+                {
+                    "id": "edge-one",
+                    "groupId": "fleet-a",
+                    "status": "healthy",
+                    "info": {"cribl": {"version": "4.19.2"}},
+                },
+                {
+                    "id": "edge-two",
+                    "status": "healthy",
+                    "info": {"cribl": {"group": "fleet-b", "version": "4.19.2"}},
+                },
+            ],
+        }
+    )
+    raw_response = httpx.Response(
+        200,
+        request=httpx.Request("GET", "https://cribl.example/api/v1/products/edge/workers"),
+        text=body,
+    )
+    validation_error = ResponseValidationError(
+        "Node response failed generated model validation",
+        raw_response,
+        validation_cause,
+        body=body,
+    )
+    validation_error.__cause__ = validation_cause
+    client = MagicMock()
+    client.nodes.list_async = AsyncMock(side_effect=validation_error)
+
+    result = await leader_overview_module._collect_node_inventory(
+        client,
+        product=ProductsCore.EDGE,
+        timeout_ms=10_000,
+        ctx=mock_ctx,
+    )
+
+    assert result["status"] == "ok_with_warnings"
+    assert result["count"] == 2
+    assert result["reported_count"] == 2
+    assert result["by_group"] == {"fleet-a": 1, "fleet-b": 1}
+    assert result["versions"] == {"4.19.2": 2}
+    assert result["schema_validation"]["error_count"] == 1
 
 
 @pytest.mark.asyncio
