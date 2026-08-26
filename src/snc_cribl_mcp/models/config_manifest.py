@@ -247,10 +247,8 @@ def _resolve_manifest_path(manifest_path: str) -> tuple[Path, str]:
     return candidate, relative.as_posix()
 
 
-def load_config_manifest(manifest_path: str) -> LoadedConfigManifest:
-    """Safely load and strictly validate one configuration manifest."""
-    path, relative_path = _resolve_manifest_path(manifest_path)
-    raw = path.read_bytes()
+def _parse_manifest_bytes(raw: bytes) -> ConfigManifest:
+    """Strictly parse and validate UTF-8 manifest bytes."""
     if len(raw) > _MAX_MANIFEST_BYTES:
         msg = f"Manifest exceeds the {_MAX_MANIFEST_BYTES}-byte limit."
         raise ValueError(msg)
@@ -278,7 +276,11 @@ def load_config_manifest(manifest_path: str) -> LoadedConfigManifest:
     if _yaml_depth(parsed_mapping) > _MAX_YAML_DEPTH:
         msg = f"Manifest nesting exceeds the maximum depth of {_MAX_YAML_DEPTH}."
         raise ValueError(msg)
-    manifest = ConfigManifest.model_validate(parsed_mapping)
+    return ConfigManifest.model_validate(parsed_mapping)
+
+
+def _loaded_manifest(*, manifest: ConfigManifest, path: Path, relative_path: str, raw: bytes) -> LoadedConfigManifest:
+    """Build stable file and intent metadata for a validated manifest."""
     return LoadedConfigManifest(
         manifest=manifest,
         path=path,
@@ -286,6 +288,65 @@ def load_config_manifest(manifest_path: str) -> LoadedConfigManifest:
         file_sha256=hashlib.sha256(raw).hexdigest(),
         manifest_sha256=_canonical_digest(manifest.canonical_payload()),
     )
+
+
+def load_config_manifest(manifest_path: str) -> LoadedConfigManifest:
+    """Safely load and strictly validate one configuration manifest."""
+    path, relative_path = _resolve_manifest_path(manifest_path)
+    raw = path.read_bytes()
+    manifest = _parse_manifest_bytes(raw)
+    return _loaded_manifest(manifest=manifest, path=path, relative_path=relative_path, raw=raw)
+
+
+def write_config_manifest(name: str, content: str, *, overwrite: bool = False) -> tuple[LoadedConfigManifest, str]:
+    """Validate and persist one manifest beneath the configured safe root.
+
+    Identical existing content is idempotent. Replacing different content requires
+    an explicit ``overwrite=true`` request.
+    """
+    try:
+        raw = content.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        msg = "Manifest content must be UTF-8 encodable."
+        raise ValueError(msg) from exc
+    manifest = _parse_manifest_bytes(raw)
+
+    requested = Path(_non_empty(name)).expanduser()
+    if not requested.suffix:
+        requested = requested.with_suffix(".yaml")
+    root = config_manifest_root()
+    candidate = (requested if requested.is_absolute() else root / requested).resolve()
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError as exc:
+        msg = f"Manifest path must be within configured root '{root}'."
+        raise ValueError(msg) from exc
+    if candidate.suffix.casefold() not in {".yaml", ".yml"}:
+        msg = "Manifest name must end in .yaml or .yml."
+        raise ValueError(msg)
+    if candidate.exists() and not candidate.is_file():
+        msg = f"Manifest path '{relative}' is not a regular file."
+        raise ValueError(msg)
+
+    status = "created"
+    if candidate.is_file():
+        if candidate.read_bytes() == raw:
+            status = "unchanged"
+        elif not overwrite:
+            msg = f"Manifest '{relative}' already exists with different content; pass overwrite=true to replace it."
+            raise FileExistsError(msg)
+        else:
+            status = "updated"
+    if status != "unchanged":
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_bytes(raw)
+    loaded = _loaded_manifest(
+        manifest=manifest,
+        path=candidate,
+        relative_path=relative.as_posix(),
+        raw=raw,
+    )
+    return loaded, status
 
 
 __all__ = [
@@ -298,4 +359,5 @@ __all__ = [
     "ManifestProduct",
     "ManifestSource",
     "load_config_manifest",
+    "write_config_manifest",
 ]

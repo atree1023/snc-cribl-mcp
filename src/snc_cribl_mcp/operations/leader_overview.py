@@ -37,6 +37,9 @@ from .validation_errors import format_validation_error_response, parse_validatio
 logger = logging.getLogger("snc_cribl_mcp.operations.leader_overview")
 
 STATUS_PAGE_LIMIT = 500
+STATUS_RETRY_ATTEMPTS = 3
+STATUS_RETRY_BASE_DELAY_SECONDS = 0.2
+TRANSIENT_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 SYSTEM_INFO_TOP_FIELDS = ("version", "cribl_version", "criblVersion", "build", "distMode", "hostname", "guid")
 SYSTEM_INFO_NODE_FIELDS = ("hostname", "node", "platform", "release", "architecture")
 SYSTEM_INFO_CRIBL_FIELDS = ("version", "distMode", "guid", "group", "startTime", "installType")
@@ -66,6 +69,45 @@ def _error_result(message: str, *, status_code: int | None = None) -> dict[str, 
 def _unavailable_result(message: str) -> dict[str, Any]:
     """Return a compact unavailable result."""
     return {"status": "unavailable", "message": message}
+
+
+def _exception_text(exc: Exception) -> str:
+    """Return a useful exception description even when ``str(exc)`` is empty."""
+    return str(exc).strip() or type(exc).__name__
+
+
+def _transient_error_result(
+    message: str,
+    *,
+    exc: Exception,
+    attempts: int,
+    status_code: int | None = None,
+) -> dict[str, Any]:
+    """Return a structured retry-exhausted result distinct from a permanent error."""
+    result: dict[str, Any] = {
+        "status": "transient_error",
+        "message": f"{message} after {attempts} attempts: {_exception_text(exc)}",
+        "error_type": type(exc).__name__,
+        "transient": True,
+        "retryable": True,
+        "attempts": attempts,
+    }
+    if status_code is not None:
+        result["status_code"] = status_code
+    return result
+
+
+def _http_error_status_code(exc: httpx.HTTPError) -> int | None:
+    """Extract an HTTP response code when a network exception carries one."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code
+    return None
+
+
+def _http_error_is_transient(exc: httpx.HTTPError) -> bool:
+    """Treat transport failures and retryable HTTP status errors as transient."""
+    status_code = _http_error_status_code(exc)
+    return status_code is None or status_code in TRANSIENT_STATUS_CODES
 
 
 def _as_int(value: object) -> int | None:
@@ -200,7 +242,7 @@ def _runtime_status_response(items: list[dict[str, Any]], reported_count: int | 
     return result
 
 
-async def _collect_group_statuses(
+async def _collect_group_statuses(  # noqa: C901, PLR0911
     overview_ctx: ProductOverviewContext,
     *,
     group_id: str,
@@ -208,35 +250,70 @@ async def _collect_group_statuses(
     list_method: StatusListMethod,
 ) -> dict[str, Any]:
     """Collect source or destination runtime statuses for one group/fleet."""
-    try:
-        response = await list_method(
-            metrics=False,
-            offset=0,
-            limit=STATUS_PAGE_LIMIT,
-            server_url=get_group_url(overview_ctx.client, group_id),
-            timeout_ms=overview_ctx.timeout_ms,
-        )
-        items, reported_count = await _collect_paginated_items(response)
-    except ResponseValidationError as exc:
-        await overview_ctx.ctx.error(
-            f"SDK validation error for {resource_type} status in {overview_ctx.product.value} group '{group_id}': {exc}",
-        )
-        return _status_validation_error(
-            exc=exc,
-            resource_type=resource_type,
-            product=overview_ctx.product,
-            group_id=group_id,
-        )
-    except CriblControlPlaneError as exc:
-        if exc.status_code == HTTP_NOT_FOUND:
-            message = f"{resource_type.capitalize()} status endpoint returned HTTP 404 for group '{group_id}'."
-            await overview_ctx.ctx.warning(message)
-            return _unavailable_result(message)
-        return _error_result(f"Cribl API error while listing {resource_type} status for group '{group_id}': {exc}")
-    except httpx.HTTPError as exc:
-        return _error_result(f"Network error while listing {resource_type} status for group '{group_id}': {exc}")
+    for attempt in range(1, STATUS_RETRY_ATTEMPTS + 1):
+        try:
+            response = await list_method(
+                metrics=False,
+                offset=0,
+                limit=STATUS_PAGE_LIMIT,
+                server_url=get_group_url(overview_ctx.client, group_id),
+                timeout_ms=overview_ctx.timeout_ms,
+            )
+            items, reported_count = await _collect_paginated_items(response)
+        except ResponseValidationError as exc:
+            await overview_ctx.ctx.error(
+                f"SDK validation error for {resource_type} status in {overview_ctx.product.value} "
+                f"group '{group_id}': {_exception_text(exc)}",
+            )
+            return _status_validation_error(
+                exc=exc,
+                resource_type=resource_type,
+                product=overview_ctx.product,
+                group_id=group_id,
+            )
+        except CriblControlPlaneError as exc:
+            if exc.status_code == HTTP_NOT_FOUND:
+                message = f"{resource_type.capitalize()} status endpoint returned HTTP 404 for group '{group_id}'."
+                await overview_ctx.ctx.warning(message)
+                return _unavailable_result(message)
+            if exc.status_code not in TRANSIENT_STATUS_CODES:
+                return _error_result(
+                    f"Cribl API error while listing {resource_type} status for group '{group_id}': {_exception_text(exc)}",
+                    status_code=exc.status_code,
+                )
+            if attempt == STATUS_RETRY_ATTEMPTS:
+                return _transient_error_result(
+                    f"Transient Cribl API error while listing {resource_type} status for group '{group_id}'",
+                    exc=exc,
+                    attempts=attempt,
+                    status_code=exc.status_code,
+                )
+        except httpx.HTTPError as exc:
+            status_code = _http_error_status_code(exc)
+            if not _http_error_is_transient(exc):
+                return _error_result(
+                    f"Network HTTP error while listing {resource_type} status for group '{group_id}': {_exception_text(exc)}",
+                    status_code=status_code,
+                )
+            if attempt == STATUS_RETRY_ATTEMPTS:
+                return _transient_error_result(
+                    f"Transient network error while listing {resource_type} status for group '{group_id}'",
+                    exc=exc,
+                    attempts=attempt,
+                    status_code=status_code,
+                )
+        else:
+            return _runtime_status_response(items, reported_count)
 
-    return _runtime_status_response(items, reported_count)
+        delay = STATUS_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+        await overview_ctx.ctx.warning(
+            f"Transient {resource_type} status failure for group '{group_id}' on attempt "
+            f"{attempt}/{STATUS_RETRY_ATTEMPTS}; retrying in {delay:.1f}s.",
+        )
+        await asyncio.sleep(delay)
+
+    msg = "Unreachable status retry state."
+    raise RuntimeError(msg)
 
 
 async def _collect_health(client: CriblControlPlane, *, timeout_ms: int) -> dict[str, Any]:

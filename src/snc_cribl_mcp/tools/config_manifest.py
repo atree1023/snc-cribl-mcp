@@ -8,12 +8,14 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
-from ..models.config_manifest import DriftPolicy, load_config_manifest
+from ..models.config_manifest import DriftPolicy, load_config_manifest, write_config_manifest
 from ..operations.config_manifest import (
+    ValidationDetailScope,
     execute_config_manifest_replication,
     execute_manifest_commit_deploy,
     plan_config_manifest_replication,
     plan_manifest_commit_deploy,
+    resolve_manifest_concurrency,
 )
 from ..operations.config_manifest import (
     validate_config_manifest as validate_manifest_impl,
@@ -43,6 +45,46 @@ def register(  # noqa: C901
     state_store: ManifestStateStore,
 ) -> None:
     """Register strict multi-leader manifest tools."""
+
+    @app.tool(
+        name="write_manifest",
+        description=(
+            "Validate schema-1 YAML manifest content and write it beneath the configured manifest root so sandboxed "
+            "MCP clients can author manifests without direct filesystem access. A missing extension becomes .yaml. "
+            "Identical writes are idempotent; replacing different content requires overwrite=true. Returns the "
+            "relative manifest_path used by the replication, validation, and commit/deploy tools."
+        ),
+        annotations={
+            "title": "Write configuration manifest",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+    )
+    async def write_manifest(
+        ctx: Context,
+        name: str,
+        content: str,
+        *,
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        """Validate and persist a configuration manifest in the safe root."""
+        await ctx.info("Validating and writing a multi-leader Cribl configuration manifest.")
+        loaded, status = write_config_manifest(name, content, overwrite=overwrite)
+        item_count = sum(len(entry.items) for entry in loaded.manifest.content)
+        return {
+            "status": status,
+            "manifest_path": loaded.relative_path,
+            "resolved_path": str(loaded.path),
+            "file_sha256": loaded.file_sha256,
+            "manifest_sha256": loaded.manifest_sha256,
+            "wave": loaded.manifest.wave,
+            "source_server": loaded.manifest.source.server,
+            "product": loaded.manifest.source.product,
+            "target_count": len(loaded.manifest.targets),
+            "item_count": item_count,
+            "concurrency": loaded.manifest.options.concurrency,
+        }
 
     @app.tool(
         name="replicate_config_manifest",
@@ -83,6 +125,7 @@ def register(  # noqa: C901
 
         plan_hash = _require_plan_hash(expected_plan_sha256)
         loaded = load_config_manifest(manifest_path)
+        effective_concurrency = resolve_manifest_concurrency(loaded.manifest, concurrency)
         resume_details = job_manager.target_details(resume_job_id) if resume_job_id is not None else None
         request = {
             "manifest_path": loaded.relative_path,
@@ -114,6 +157,19 @@ def register(  # noqa: C901
             runner=_runner,
             request=request,
             resume_of=resume_job_id,
+            initial_progress={
+                "unit": "items",
+                "total": sum(len(entry.items) for entry in loaded.manifest.content) * len(loaded.manifest.targets),
+                "completed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "running": 0,
+                "target_total": len(loaded.manifest.targets),
+                "targets_completed": 0,
+                "targets_failed": 0,
+                "concurrency": effective_concurrency,
+                "phase": "queued",
+            },
         )
 
     @app.tool(
@@ -121,7 +177,9 @@ def register(  # noqa: C901
         description=(
             "Validate every explicit item in a YAML configuration manifest against all targets in parallel. "
             "Functional differences and missing objects are blocking; expected leader identity, endpoint, credential "
-            "reference, and volatile metadata differences are reported separately and do not fail validation."
+            "reference, and volatile metadata differences are reported separately and do not fail validation. "
+            "Use offset/limit to page bounded detail, target to inspect one leader, and detail_scope='all' to include "
+            "noop items. Summary counts split create, update, noop, and unsupported actions."
         ),
         annotations={
             "title": "Validate configuration manifest",
@@ -134,10 +192,21 @@ def register(  # noqa: C901
         manifest_path: str,
         *,
         concurrency: int | None = None,
+        target: str | None = None,
+        offset: int = 0,
+        limit: int = 25,
+        detail_scope: ValidationDetailScope = "differences",
     ) -> dict[str, Any]:
         """Validate a configuration manifest across all targets."""
         await ctx.info("Validating a multi-leader Cribl configuration manifest.")
-        return await validate_manifest_impl(manifest_path, concurrency=concurrency)
+        return await validate_manifest_impl(
+            manifest_path,
+            concurrency=concurrency,
+            target=target,
+            offset=offset,
+            limit=limit,
+            detail_scope=detail_scope,
+        )
 
     @app.tool(
         name="commit_and_deploy_manifest",
@@ -186,6 +255,7 @@ def register(  # noqa: C901
 
         plan_hash = _require_plan_hash(expected_plan_sha256)
         loaded = load_config_manifest(manifest_path)
+        effective_concurrency = resolve_manifest_concurrency(loaded.manifest, concurrency)
         resume_details = job_manager.target_details(resume_job_id) if resume_job_id is not None else None
         request = {
             "manifest_path": loaded.relative_path,
@@ -221,6 +291,15 @@ def register(  # noqa: C901
             runner=_runner,
             request=request,
             resume_of=resume_job_id,
+            initial_progress={
+                "unit": "targets",
+                "total": len(loaded.manifest.targets),
+                "completed": 0,
+                "failed": 0,
+                "running": 0,
+                "concurrency": effective_concurrency,
+                "phase": "queued",
+            },
         )
 
 

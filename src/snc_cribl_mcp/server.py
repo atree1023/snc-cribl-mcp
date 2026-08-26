@@ -30,6 +30,7 @@ Registered tools:
 - ``validate_group_config``: validate a whole worker group or Edge fleet
 - ``replicate_system_settings``: replicate global system settings
 - ``validate_system_settings``: validate global system settings
+- ``write_manifest``: validate and persist strict YAML manifest content
 - ``replicate_config_manifest``: apply one strict YAML manifest to many leaders
 - ``validate_config_manifest``: semantically validate one manifest across many leaders
 - ``commit_and_deploy_manifest``: receipt-gated commit/deploy for manifest changes

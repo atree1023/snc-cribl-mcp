@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 import snc_cribl_mcp.models.config_manifest as manifest_module
-from snc_cribl_mcp.models.config_manifest import load_config_manifest
+from snc_cribl_mcp.models.config_manifest import load_config_manifest, write_config_manifest
 
 
 @pytest.fixture
@@ -147,3 +147,34 @@ targets: [golden.oak]
     )
     with pytest.raises(ValidationError):
         load_config_manifest(path.name)
+
+
+def test_write_manifest_validates_paths_and_requires_explicit_overwrite(manifest_root: Path) -> None:
+    """Sandboxed authors should get schema validation before a safely rooted write."""
+    content = """
+schema: 1
+wave: write-test
+source: {server: golden.oak, product: edge}
+content: [{group: default, kind: destinations, items: [out]}]
+targets: [golden.oak.new]
+options: {concurrency: 2}
+""".strip()
+
+    loaded, status = write_config_manifest("nested/wave", content)
+    assert status == "created"
+    assert loaded.relative_path == "nested/wave.yaml"
+    assert loaded.path.read_text(encoding="utf-8") == content
+    assert write_config_manifest("nested/wave.yaml", content)[1] == "unchanged"
+
+    changed = content.replace("write-test", "changed")
+    with pytest.raises(FileExistsError, match="overwrite=true"):
+        write_config_manifest("nested/wave.yaml", changed)
+    replaced, status = write_config_manifest("nested/wave.yaml", changed, overwrite=True)
+    assert status == "updated"
+    assert replaced.manifest.wave == "changed"
+
+    with pytest.raises(ValueError, match="within configured root"):
+        write_config_manifest("../escape.yaml", content)
+    with pytest.raises(ValidationError):
+        write_config_manifest("invalid.yaml", "schema: 1\n")
+    assert not (manifest_root / "invalid.yaml").exists()

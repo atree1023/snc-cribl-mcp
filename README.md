@@ -60,6 +60,7 @@ The server handles authentication with bearer tokens, manages token refresh auto
   - Create or replicate local users, using explicit or environment-sourced passwords because Cribl does not return passwords from the API.
   - Replicate and validate complete Stream worker groups or Edge fleets, including group/fleet settings, variables, event breakers, lookups, destinations, pipelines, sources, and routes.
   - Replicate and validate global system settings from the Global Settings page.
+  - Validate and persist agent-generated manifests beneath the configured safe root without direct filesystem access.
   - Plan, apply, and semantically validate one strict YAML manifest across many configured leaders with bounded parallelism.
   - Snapshot each manifest source item once, emit per-target drift hashes, and require a durable apply receipt before commit/deploy.
 - **Git-Safe Commit and Deployment Workflows**:
@@ -205,13 +206,13 @@ uv run python -m snc_cribl_mcp.server
 
 ### Available MCP Tools
 
-The server exposes thirty-six MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://variables`, `cribl://packs`):
+The server exposes thirty-seven MCP tools, and also mirrors the read-oriented data as MCP resources (e.g., `cribl://groups`, `cribl://sources`, `cribl://destinations`, `cribl://pipelines`, `cribl://routes`, `cribl://breakers`, `cribl://lookups`, `cribl://variables`, `cribl://packs`):
 
 #### `get_leader_overview`
 
 Returns a compact operational overview for a configured Cribl leader.
 
-- **Returns:** JSON containing leader health, Cribl version, Stream/Edge aggregate node counts, active worker groups and Edge fleets with node counts, and source/destination runtime health summaries for groups or fleets with nodes.
+- **Returns:** JSON containing leader health, Cribl version, Stream/Edge aggregate node counts, active worker groups and Edge fleets with node counts, and source/destination runtime health summaries for groups or fleets with nodes. Transient per-group network failures are retried with bounded backoff; exhaustion returns `transient_error`, retry metadata, and a non-empty exception type instead of a permanent `error` with a blank message.
 
 #### `get_edge_info`
 
@@ -377,20 +378,28 @@ Validates global Cribl system settings between two configured leaders.
 
 - **Returns:** JSON with an in-sync flag and differing setting paths. Use `include_payloads=true` when the raw source and target setting payloads are needed.
 
+#### `write_manifest`
+
+Validates agent-generated YAML against the strict schema and writes it beneath `manifest_root`, closing the workflow for
+sandboxed MCP clients that cannot write files directly. The returned `manifest_path` feeds the other manifest tools.
+Identical writes are idempotent; replacing different content requires `overwrite=true`. A name without an extension gets
+`.yaml` automatically, while absolute/path-traversal escapes and non-YAML extensions are rejected.
+
 #### `replicate_config_manifest`
 
 Plans or applies explicit group-scoped resources from one source leader to every target in a strict YAML manifest.
 
 - **Safe input:** Manifests are limited to the configured manifest root, 1 MiB, schema version 1, configured server names, explicit item IDs, and known fields. Duplicate YAML keys, aliases, inline config payloads, environment expansion, duplicate targets, and duplicate group/kind sections are rejected.
-- **Efficient fan-out:** Source objects are resolved and snapshotted once, then targets run concurrently (default 5, maximum 10). Each target remains internally ordered as variables, breakers, lookups, destinations, pipelines, sources, then routes.
+- **Efficient fan-out:** Source objects are resolved and snapshotted once, then targets run concurrently (manifest `options.concurrency` by default, explicit tool override when supplied; maximum 10). Each target remains internally ordered as variables, breakers, lookups, destinations, pipelines, sources, then routes.
 - **Safe execution:** Dry-run returns `intent_sha256`, aggregate `plan_sha256`, and a `target_plan_sha256` for each leader. Execution requires the aggregate hash, revalidates each target independently, skips or aborts on drift, and never executes a target with preflight blockers.
-- **Returns:** Execution immediately returns a durable `job_id`. Its final bounded result includes an `apply_receipt_sha256`; successful item detail stays out of the aggregate response, while target failures can be retrieved with `get_config_deployment_job(job_id, target)`.
+- **Returns:** Execution immediately returns a durable `job_id`. Progress counts item work across all targets and reports active target slots plus the effective concurrency. Its final bounded result includes an `apply_receipt_sha256`; successful item detail stays out of the aggregate response, while target failures can be retrieved with `get_config_deployment_job(job_id, target)`.
 
 #### `validate_config_manifest`
 
 Semantically validates every manifest item across all targets in parallel. Hostnames, endpoints, generated identities,
 credential references, and volatile metadata are counted but non-blocking; functional differences and missing items fail
-the affected target. Per-target difference detail is capped.
+the affected target. Per-target summaries split `create`, `update`, `noop`, and `unsupported`. Difference detail is pageable
+with `offset` and `limit`; use `target` to inspect one leader and `detail_scope="all"` to page every item, including noops.
 
 #### `commit_and_deploy_manifest`
 
@@ -417,7 +426,7 @@ Shows the configuration diff for one Stream worker group or Edge fleet/subfleet.
 
 Polls an asynchronous manifest replication, commit, deploy, or Git push execution.
 
-- **With `job_id`:** Returns queued/running/completed/failed/interrupted state, aggregate progress, and the bounded final result when available. Add `target` for durable per-target detail.
+- **With `job_id`:** Returns queued/running/completed/failed/interrupted state, aggregate progress, and the bounded final result when available. Add `target` for durable per-target detail; a known target that has not started returns `status: pending` rather than an error.
 - **Without `job_id`:** Lists recent jobs without embedding every final result.
 - **Lifetime:** Jobs and resumable request metadata are retained in SQLite across MCP process restarts. A previously running job is restored as `interrupted`; pass it as `resume_job_id` with the exact original parameters to retry unfinished targets.
 

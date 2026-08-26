@@ -50,8 +50,16 @@ async def test_blocking_mutation_runs_off_event_loop_and_returns_bounded_result(
     assert accepted["poll_with"] == "get_config_deployment_job"
     assert await asyncio.to_thread(started.wait, 1)
     running = await asyncio.wait_for(manager.get(job_id=str(accepted["job_id"])), timeout=0.1)
+    pending_target = await manager.get(job_id=str(accepted["job_id"]), target="prod")
     recent = await manager.get()
     assert running["status"] == "running"
+    assert pending_target["target_detail"] == {
+        "server": "prod",
+        "status": "pending",
+        "message": "Target detail is not available yet.",
+    }
+    with pytest.raises(ValueError, match="does not include target"):
+        await manager.get(job_id=str(accepted["job_id"]), target="other")
     assert "result" not in recent["jobs"][0]
 
     release.set()

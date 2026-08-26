@@ -97,8 +97,18 @@ class _JobRecord:
         if target is not None:
             detail = self.target_details.get(target)
             if detail is None:
-                msg = f"Job '{self.job_id}' has no detail for target '{target}'."
-                raise ValueError(msg)
+                if target not in self.servers:
+                    msg = f"Job '{self.job_id}' does not include target '{target}'."
+                    raise ValueError(msg)
+                detail = {
+                    "server": target,
+                    "status": "pending" if self.status in {"queued", "running"} else "unavailable",
+                    "message": (
+                        "Target detail is not available yet."
+                        if self.status in {"queued", "running"}
+                        else "The job ended before target detail was recorded."
+                    ),
+                }
             snapshot["target"] = target
             snapshot["target_detail"] = detail
         elif include_result and self.result is not None:
@@ -341,6 +351,7 @@ class VersionControlJobManager:
         runner: ContextJobRunner,
         request: dict[str, Any] | None = None,
         resume_of: str | None = None,
+        initial_progress: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Queue a durable aggregate mutation serialized across every target server."""
         self._ensure_database()
@@ -369,7 +380,17 @@ class VersionControlJobManager:
             submitted_at=submitted_at,
             request=request,
             resume_of=resume_of,
-            progress={"total": len(normalized_servers), "completed": 0, "failed": 0, "running": 0},
+            progress=(
+                dict(initial_progress)
+                if initial_progress is not None
+                else {
+                    "unit": "targets",
+                    "total": len(normalized_servers),
+                    "completed": 0,
+                    "failed": 0,
+                    "running": 0,
+                }
+            ),
         )
         with self._state_lock:
             self._jobs[job_id] = record
@@ -387,6 +408,7 @@ class VersionControlJobManager:
             "expected_plan_sha256": expected_plan_sha256,
             "submitted_at": submitted_at,
             "resume_of": resume_of,
+            "progress": dict(record.progress or {}),
             "poll_with": "get_config_deployment_job",
         }
 
@@ -407,7 +429,8 @@ class VersionControlJobManager:
             raise ValueError(msg)
         if job_id is not None:
             record = self._require_record(job_id.strip())
-            return record.as_dict(include_result=target is None, target=target)
+            normalized_target = target.strip() if target is not None else None
+            return record.as_dict(include_result=normalized_target is None, target=normalized_target)
 
         records = [self._jobs[candidate] for candidate in reversed(self._job_order) if candidate in self._jobs][
             :_MAX_JOB_LIMIT
@@ -440,7 +463,6 @@ class VersionControlJobManager:
             with self._state_lock:
                 record.status = "running"
                 record.started_at = _now()
-                record.progress = {**(record.progress or {}), "running": 1}
                 self._persist(record)
             context = JobContext(self, record.job_id)
 
@@ -460,7 +482,12 @@ class VersionControlJobManager:
             finally:
                 with self._state_lock:
                     record.completed_at = _now()
-                    record.progress = {**(record.progress or {}), "running": 0}
+                    if record.progress is not None:
+                        record.progress = {**record.progress, "phase": record.status}
+                        if "running" in record.progress:
+                            record.progress["running"] = 0
+                        if "source_running" in record.progress:
+                            record.progress["source_running"] = 0
                     self._persist(record)
 
     def _require_record(self, job_id: str) -> _JobRecord:

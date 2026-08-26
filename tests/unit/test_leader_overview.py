@@ -5,7 +5,7 @@
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -229,6 +229,75 @@ async def test_collect_leader_overview_success(config: CriblConfig, mock_ctx: Co
     edge = result["products"]["edge"]
     assert edge["groups_with_nodes"][0]["id"] == "fleet-a"
     assert edge["groups_with_nodes"][0]["destinations"]["health_counts"] == {"yellow": 1}
+
+
+@pytest.mark.asyncio
+async def test_group_runtime_status_retries_transient_network_errors(
+    mock_ctx: Context,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-group status reads should recover with bounded exponential backoff."""
+    client = MagicMock()
+    client.sdk_configuration.server_url = "https://cribl.example/api/v1"
+    overview_ctx = leader_overview_module.ProductOverviewContext(
+        client=client,
+        product=ProductsCore.EDGE,
+        timeout_ms=10_000,
+        ctx=mock_ctx,
+    )
+    request = httpx.Request("GET", "https://cribl.example/api/v1/m/fleet/sources/status")
+    status_method = AsyncMock(side_effect=[httpx.ReadTimeout("", request=request), _Page([])])
+    sleep = AsyncMock()
+    monkeypatch.setattr(leader_overview_module.asyncio, "sleep", sleep)
+
+    result = await leader_overview_module._collect_group_statuses(
+        overview_ctx,
+        group_id="fleet",
+        resource_type="sources",
+        list_method=status_method,
+    )
+
+    assert result["status"] == "ok"
+    assert status_method.await_count == 2
+    sleep.assert_awaited_once_with(0.2)
+    cast("AsyncMock", mock_ctx.warning).assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_group_runtime_status_exhaustion_is_structured_and_nonempty(
+    mock_ctx: Context,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retry exhaustion should remain distinguishable from a permanent API error."""
+    client = MagicMock()
+    client.sdk_configuration.server_url = "https://cribl.example/api/v1"
+    overview_ctx = leader_overview_module.ProductOverviewContext(
+        client=client,
+        product=ProductsCore.EDGE,
+        timeout_ms=10_000,
+        ctx=mock_ctx,
+    )
+    request = httpx.Request("GET", "https://cribl.example/api/v1/m/fleet/sources/status")
+    status_method = AsyncMock(
+        side_effect=[httpx.ConnectError("", request=request) for _attempt in range(3)],
+    )
+    monkeypatch.setattr(leader_overview_module.asyncio, "sleep", AsyncMock())
+
+    result = await leader_overview_module._collect_group_statuses(
+        overview_ctx,
+        group_id="fleet",
+        resource_type="sources",
+        list_method=status_method,
+    )
+
+    assert result == {
+        "status": "transient_error",
+        "message": "Transient network error while listing sources status for group 'fleet' after 3 attempts: ConnectError",
+        "error_type": "ConnectError",
+        "transient": True,
+        "retryable": True,
+        "attempts": 3,
+    }
 
 
 def test_active_group_count_accepts_sdk_snake_case_and_group_name_matches() -> None:

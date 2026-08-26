@@ -130,7 +130,8 @@ def register(  # noqa: C901
         name="get_config_deployment_job",
         description=(
             "Get the current state and bounded result of an asynchronous Cribl replication, commit, deploy, or Git "
-            "push job. Pass target with job_id for one target's durable detail. "
+            "push job. Pass target with job_id for one target's durable detail; targets not started yet return a "
+            "pending detail instead of an error. Manifest replication progress is item-based across all targets. "
             "Pass the job_id returned by a mutation execution for its final result, or omit job_id to list recent "
             "jobs. Job state, progress, target detail, and resumable request metadata survive MCP process restarts."
         ),

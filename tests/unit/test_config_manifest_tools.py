@@ -90,6 +90,8 @@ async def test_manifest_tools_register_plan_validate_and_submit(monkeypatch: pyt
         return _loaded()
 
     monkeypatch.setattr(tool_module, "load_config_manifest", _load_manifest)
+    write_impl = MagicMock(return_value=(_loaded(), "created"))
+    monkeypatch.setattr(tool_module, "write_config_manifest", write_impl)
     plan_impl = AsyncMock(return_value={"status": "planned", "plan_sha256": "plan"})
     validate_impl = AsyncMock(return_value={"status": "in_sync"})
     execute_impl = AsyncMock(return_value={"status": "completed"})
@@ -99,6 +101,7 @@ async def test_manifest_tools_register_plan_validate_and_submit(monkeypatch: pyt
     monkeypatch.setattr(tool_module, "execute_config_manifest_replication", execute_impl)
     monkeypatch.setattr(tool_module, "plan_manifest_commit_deploy", commit_plan_impl)
 
+    written = await app.tools["write_manifest"](ctx, "wave", "schema: 1")
     plan = await app.tools["replicate_config_manifest"](ctx, "wave.yaml")
     validation = await app.tools["validate_config_manifest"](ctx, "wave.yaml")
     deploy_plan = await app.tools["commit_and_deploy_manifest"](
@@ -107,6 +110,9 @@ async def test_manifest_tools_register_plan_validate_and_submit(monkeypatch: pyt
         "test wave",
         apply_job_id="apply-job",
     )
+    assert written["status"] == "created"
+    assert written["manifest_path"] == "wave.yaml"
+    write_impl.assert_called_once_with("wave", "schema: 1", overwrite=False)
     assert plan["plan_sha256"] == "plan"
     assert validation == {"status": "in_sync"}
     assert deploy_plan["plan_sha256"] == "deploy-plan"
@@ -114,6 +120,7 @@ async def test_manifest_tools_register_plan_validate_and_submit(monkeypatch: pyt
         "replicate_config_manifest",
         "validate_config_manifest",
         "commit_and_deploy_manifest",
+        "write_manifest",
     }
     assert app.annotations["validate_config_manifest"]["readOnlyHint"] is True  # type: ignore[index]
 
@@ -128,4 +135,6 @@ async def test_manifest_tools_register_plan_validate_and_submit(monkeypatch: pyt
     )
     completed = await _wait(jobs, str(accepted["job_id"]))
     assert completed["status"] == "completed"
+    assert accepted["progress"]["unit"] == "items"
+    assert accepted["progress"]["concurrency"] == 1
     execute_impl.assert_awaited_once()

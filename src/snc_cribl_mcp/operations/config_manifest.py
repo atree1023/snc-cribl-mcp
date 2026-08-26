@@ -47,6 +47,8 @@ from .version_control_jobs import JobContext
 
 type ManifestOperation = Literal["commit_and_deploy_manifest", "replicate_config_manifest"]
 type SnapshotItem = dict[str, Any]
+type ValidationDetailScope = Literal["all", "differences"]
+type WorkProgressCallback = Callable[[str, int], Awaitable[None]]
 
 _CONTENT_ORDER = {
     "variables": 0,
@@ -59,6 +61,8 @@ _CONTENT_ORDER = {
 }
 _MAX_ERROR_MESSAGE_CHARS = 2000
 _MAX_RESPONSE_DETAILS = 25
+_MAX_VALIDATION_DETAILS = 100
+_MAX_CONCURRENCY = 10
 
 
 def _now() -> str:
@@ -72,6 +76,15 @@ def _digest(value: object) -> str:
 
 def _product(manifest: ConfigManifest) -> ProductsCore:
     return ProductsCore.EDGE if manifest.source.product == "edge" else ProductsCore.STREAM
+
+
+def resolve_manifest_concurrency(manifest: ConfigManifest, override: int | None) -> int:
+    """Resolve a tool override or the manifest's configured target concurrency."""
+    effective = manifest.options.concurrency if override is None else override
+    if effective < 1 or effective > _MAX_CONCURRENCY:
+        msg = f"concurrency must be between 1 and {_MAX_CONCURRENCY}."
+        raise ValueError(msg)
+    return effective
 
 
 def _error(exc: Exception) -> dict[str, Any]:
@@ -301,6 +314,7 @@ def _public_replication_plan(
     intent: dict[str, Any],
     target_plans: list[dict[str, Any]],
     plan_sha256: str,
+    concurrency: int,
 ) -> dict[str, Any]:
     targets: list[dict[str, Any]] = []
     for plan in target_plans:
@@ -330,6 +344,7 @@ def _public_replication_plan(
         "wave": loaded.manifest.wave,
         "source_server": loaded.manifest.source.server,
         "product": loaded.manifest.source.product,
+        "concurrency": concurrency,
         **intent,
         "plan_sha256": plan_sha256,
         "target_count": len(targets),
@@ -348,7 +363,7 @@ async def plan_config_manifest_replication(
     loaded = load_config_manifest(manifest_path)
     source_snapshot = await _source_snapshot(loaded)
     intent = _intent(loaded, source_snapshot)
-    effective_concurrency = concurrency or loaded.manifest.options.concurrency
+    effective_concurrency = resolve_manifest_concurrency(loaded.manifest, concurrency)
 
     async def _plan(target: str) -> dict[str, Any]:
         return await _target_replication_plan(target, loaded=loaded, source_snapshot=source_snapshot)
@@ -383,14 +398,16 @@ async def plan_config_manifest_replication(
         intent=intent,
         target_plans=target_plans,
         plan_sha256=plan_sha256,
+        concurrency=effective_concurrency,
     )
 
 
-async def _write_target(  # noqa: C901
+async def _write_target(  # noqa: C901, PLR0912
     target_server: str,
     *,
     loaded: LoadedConfigManifest,
     source_snapshot: dict[str, Any],
+    progress_callback: WorkProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Apply one already-reviewed source snapshot to a target leader."""
     manifest = loaded.manifest
@@ -462,6 +479,8 @@ async def _write_target(  # noqa: C901
                     msg = "Post-write validation did not match the reviewed source snapshot."
                     raise RuntimeError(msg)  # noqa: TRY301
                 results.append({"group_id": group_id, "kind": kind, "item_id": item_id, "action": action})
+                if progress_callback is not None:
+                    await progress_callback(action, 1)
             except Exception as exc:  # noqa: BLE001 - stop this target at the first dependency failure
                 results.append(
                     {
@@ -472,7 +491,13 @@ async def _write_target(  # noqa: C901
                         "error": _error(exc),
                     }
                 )
+                if progress_callback is not None:
+                    await progress_callback("failed", 1)
                 break
+
+    skipped = max(len(cast("list[SnapshotItem]", source_snapshot["items"])) - len(results), 0)
+    if skipped and progress_callback is not None:
+        await progress_callback("skipped", skipped)
 
     receipt_groups: dict[str, Any] = {}
     for group_id in sorted(set(cast("dict[str, str]", source_snapshot["groups"]).values())):
@@ -502,6 +527,7 @@ async def _write_target(  # noqa: C901
             "updated": sum(result["action"] == "updated" for result in results),
             "appended": sum(result["action"] == "appended" for result in results),
             "noop": sum(result["action"] in {"noop", "skipped_existing"} for result in results),
+            "skipped": skipped,
             "failed": failed + receipt_failed,
         },
         "failures": [result for result in results if result["action"] == "failed"],
@@ -530,7 +556,25 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
     if stored.get("manifest_path") != loaded.relative_path:
         msg = "The reviewed plan belongs to a different manifest path."
         raise ValueError(msg)
+    effective_concurrency = resolve_manifest_concurrency(loaded.manifest, concurrency)
+    item_count = sum(len(entry.items) for entry in loaded.manifest.content)
+    progress = {
+        "unit": "items",
+        "total": item_count * len(loaded.manifest.targets),
+        "completed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "running": 0,
+        "target_total": len(loaded.manifest.targets),
+        "targets_completed": 0,
+        "targets_failed": 0,
+        "concurrency": effective_concurrency,
+        "phase": "snapshotting_source",
+        "source_running": 1,
+    }
+    job_context.update_progress(dict(progress))
     source_snapshot = await _source_snapshot(loaded)
+    progress["source_running"] = 0
     current_intent = _intent(loaded, source_snapshot)
     stored_intent = cast("dict[str, Any]", stored["intent"])
     if current_intent["intent_sha256"] != stored_intent["intent_sha256"]:
@@ -538,9 +582,11 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
         raise ValueError(msg)
 
     expected_targets = _expected_target_plans(stored)
-    effective_concurrency = concurrency or loaded.manifest.options.concurrency
     drift_policy = on_drift or loaded.manifest.options.on_drift
     prior = resume_details or {}
+    progress["phase"] = "revalidating"
+    progress["running"] = min(effective_concurrency, len(loaded.manifest.targets))
+    job_context.update_progress(dict(progress))
 
     async def _resume_state_is_guarded(target: str, detail: dict[str, Any]) -> tuple[str, bool]:
         if detail.get("status") in {"applied", "noop", "completed"}:
@@ -566,6 +612,9 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
         concurrency=effective_concurrency,
         operation=_plan,
     )
+    progress["running"] = 0
+    progress["phase"] = "applying"
+    job_context.update_progress(dict(progress))
     drifted = {
         str(plan["server"]): plan
         for plan in current_plans
@@ -582,13 +631,22 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
 
     completed_prior = {server for server, detail in prior.items() if detail.get("status") in {"applied", "noop", "completed"}}
     results: dict[str, dict[str, Any]] = {}
-    progress = {"total": len(loaded.manifest.targets), "completed": 0, "failed": 0, "running": 0}
     progress_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(effective_concurrency)
+
+    async def _update_progress(**changes: int | str) -> None:
+        async with progress_lock:
+            for key, value in changes.items():
+                if isinstance(value, int) and isinstance(progress.get(key), int):
+                    progress[key] = int(progress[key]) + value
+                else:
+                    progress[key] = value
+            job_context.update_progress(dict(progress))
 
     async def _apply(target: str) -> None:
         if target in completed_prior:
             detail = {**prior[target], "status": "resumed_completed", "resumed_from_prior_job": True}
+            await _update_progress(completed=item_count)
         elif target in drifted:
             detail = {
                 "server": target,
@@ -596,16 +654,33 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
                 "expected_target_plan_sha256": expected_targets.get(target, {}).get("target_plan_sha256"),
                 "current_target_plan_sha256": drifted[target].get("target_plan_sha256"),
             }
+            await _update_progress(completed=item_count, skipped=item_count)
         else:
             async with semaphore:
-                detail = await _write_target(target, loaded=loaded, source_snapshot=source_snapshot)
+                await _update_progress(running=1, phase="applying")
+                job_context.set_target_detail(target, {"server": target, "status": "running"})
+
+                async def _item_progress(action: str, count: int) -> None:
+                    changes: dict[str, int | str] = {"completed": count}
+                    if action == "failed":
+                        changes["failed"] = count
+                    elif action == "skipped":
+                        changes["skipped"] = count
+                    await _update_progress(**changes)
+
+                try:
+                    detail = await _write_target(
+                        target,
+                        loaded=loaded,
+                        source_snapshot=source_snapshot,
+                        progress_callback=_item_progress,
+                    )
+                finally:
+                    await _update_progress(running=-1)
         results[target] = detail
         job_context.set_target_detail(target, detail)
-        async with progress_lock:
-            progress["completed"] += 1
-            if detail.get("status") not in {"applied", "noop", "resumed_completed"}:
-                progress["failed"] += 1
-            job_context.update_progress(dict(progress))
+        target_failed = detail.get("status") not in {"applied", "noop", "resumed_completed"}
+        await _update_progress(targets_completed=1, targets_failed=int(target_failed))
 
     await asyncio.gather(*(_apply(target) for target in loaded.manifest.targets))
     receipt_targets = {
@@ -651,19 +726,48 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
     }
 
 
-async def validate_config_manifest(manifest_path: str, *, concurrency: int | None = None) -> dict[str, Any]:
-    """Semantically validate manifest items across all targets in parallel."""
+def _validate_detail_page(*, offset: int, limit: int, detail_scope: ValidationDetailScope) -> None:
+    """Validate bounded manifest-validation detail controls."""
+    if offset < 0:
+        msg = "offset must be at least 0."
+        raise ValueError(msg)
+    if limit < 1 or limit > _MAX_VALIDATION_DETAILS:
+        msg = f"limit must be between 1 and {_MAX_VALIDATION_DETAILS}."
+        raise ValueError(msg)
+    if detail_scope not in {"all", "differences"}:
+        msg = "detail_scope must be 'differences' or 'all'."
+        raise ValueError(msg)
+
+
+async def validate_config_manifest(
+    manifest_path: str,
+    *,
+    concurrency: int | None = None,
+    target: str | None = None,
+    offset: int = 0,
+    limit: int = _MAX_RESPONSE_DETAILS,
+    detail_scope: ValidationDetailScope = "differences",
+) -> dict[str, Any]:
+    """Semantically validate manifest items with bounded, pageable detail."""
     loaded = load_config_manifest(manifest_path)
     snapshot = await _source_snapshot(loaded)
-    effective_concurrency = concurrency or loaded.manifest.options.concurrency
+    effective_concurrency = resolve_manifest_concurrency(loaded.manifest, concurrency)
+    _validate_detail_page(offset=offset, limit=limit, detail_scope=detail_scope)
+    targets = loaded.manifest.targets
+    if target is not None:
+        normalized_target = target.strip()
+        if normalized_target not in targets:
+            msg = f"Target '{normalized_target}' is not present in manifest '{loaded.relative_path}'."
+            raise ValueError(msg)
+        targets = [normalized_target]
 
     async def _validate(target_server: str) -> dict[str, Any]:
         items: list[dict[str, Any]] = []
-        async with connect_to_server(target_server) as target:
+        async with connect_to_server(target_server) as resolved_target:
             for source in cast("list[SnapshotItem]", snapshot["items"]):
                 kind = cast("ResourceKind", source["kind"])
                 target_item = await _maybe_get_item(
-                    target,
+                    resolved_target,
                     kind,
                     item_id=str(source["item_id"]),
                     group_id=str(source["group_id"]),
@@ -676,6 +780,7 @@ async def validate_config_manifest(manifest_path: str, *, concurrency: int | Non
                             "kind": kind,
                             "item_id": source["item_id"],
                             "status": "missing",
+                            "action": "create" if get_resource_spec(kind).supports("create") else "unsupported",
                         }
                     )
                     continue
@@ -684,43 +789,92 @@ async def validate_config_manifest(manifest_path: str, *, concurrency: int | Non
                 source_payload.pop("status", None)
                 target_payload.pop("status", None)
                 comparison = compare_config_objects(kind, source_payload, target_payload)
+                action = "update" if comparison["status"] == "functional_difference" else "noop"
                 items.append(
                     {
                         "group_id": source["group_id"],
                         "kind": kind,
                         "item_id": source["item_id"],
                         "status": comparison["status"],
+                        "action": action,
                         "functional_difference_count": len(comparison["functional_differences"]),
                         "identity_difference_count": len(comparison["identity_differences"]),
                         "volatile_difference_count": len(comparison["volatile_differences"]),
                     }
                 )
-        functional = sum(item["status"] in {"functional_difference", "missing"} for item in items)
-        return {
+        create = sum(item["action"] == "create" for item in items)
+        update = sum(item["action"] == "update" for item in items)
+        noop = sum(item["action"] == "noop" for item in items)
+        unsupported = sum(item["action"] == "unsupported" for item in items)
+        blocking = create + update + unsupported
+        differences = [
+            item
+            for item in items
+            if item["action"] != "noop"
+            or int(item.get("identity_difference_count", 0)) > 0
+            or int(item.get("volatile_difference_count", 0)) > 0
+        ]
+        detail_items = items if detail_scope == "all" else differences
+        page = detail_items[offset : offset + limit]
+        next_offset = offset + len(page) if offset + len(page) < len(detail_items) else None
+        previous_offset = max(offset - limit, 0) if offset > 0 else None
+        details_truncated = offset > 0 or next_offset is not None
+        detail_key = "items" if detail_scope == "all" else "differences"
+        result = {
             "server": target_server,
-            "status": "in_sync" if functional == 0 else "different",
+            "status": "in_sync" if blocking == 0 else "different",
             "summary": {
                 "item_count": len(items),
-                "functionally_equivalent": len(items) - functional,
-                "functional_or_missing": functional,
+                "create": create,
+                "update": update,
+                "noop": noop,
+                "unsupported": unsupported,
+                "missing": create + unsupported,
+                "functional_differences": update,
+                "functionally_equivalent": noop,
+                "functional_or_missing": blocking,
                 "identity_differences": sum(int(item.get("identity_difference_count", 0)) for item in items),
+                "volatile_differences": sum(int(item.get("volatile_difference_count", 0)) for item in items),
             },
-            "differences": [item for item in items if item["status"] != "functionally_equivalent"][:_MAX_RESPONSE_DETAILS],
-            "differences_truncated": functional > _MAX_RESPONSE_DETAILS,
+            "detail_scope": detail_scope,
+            "detail_count": len(detail_items),
+            "detail_offset": offset,
+            "detail_limit": limit,
+            "next_offset": next_offset,
+            "previous_offset": previous_offset,
+            "details_truncated": details_truncated,
+            detail_key: page,
         }
+        if detail_scope == "differences":
+            result.update(
+                {
+                    "difference_count": len(detail_items),
+                    "differences_offset": offset,
+                    "differences_limit": limit,
+                    "differences_next_offset": next_offset,
+                    "differences_previous_offset": previous_offset,
+                    "differences_truncated": details_truncated,
+                }
+            )
+        return result
 
-    targets = await _bounded_map(loaded.manifest.targets, concurrency=effective_concurrency, operation=_validate)
-    failed = [target for target in targets if target.get("status") != "in_sync"]
+    target_results = await _bounded_map(targets, concurrency=effective_concurrency, operation=_validate)
+    failed = [target_result for target_result in target_results if target_result.get("status") != "in_sync"]
     return {
         "status": "in_sync" if not failed else "different",
         "operation": "validate_config_manifest",
         "manifest_path": loaded.relative_path,
         "manifest_sha256": loaded.manifest_sha256,
         "source_snapshot_sha256": snapshot["snapshot_sha256"],
-        "target_count": len(targets),
-        "in_sync_count": len(targets) - len(failed),
+        "concurrency": effective_concurrency,
+        "target_filter": target,
+        "detail_scope": detail_scope,
+        "offset": offset,
+        "limit": limit,
+        "target_count": len(target_results),
+        "in_sync_count": len(target_results) - len(failed),
         "different_or_failed_count": len(failed),
-        "targets": targets,
+        "targets": target_results,
     }
 
 
@@ -769,7 +923,7 @@ async def plan_manifest_commit_deploy(
         raise ValueError(msg)
     receipt_targets = cast("dict[str, dict[str, Any]]", receipt.get("targets", {}))
     groups = sorted({entry.group for entry in loaded.manifest.content})
-    effective_concurrency = concurrency or loaded.manifest.options.concurrency
+    effective_concurrency = resolve_manifest_concurrency(loaded.manifest, concurrency)
 
     async def _plan(target: str) -> dict[str, Any]:
         target_receipt = receipt_targets.get(target, {})
@@ -806,6 +960,7 @@ async def plan_manifest_commit_deploy(
         "receipt_sha256": receipt["receipt_sha256"],
         "message": message,
         "push": push,
+        "concurrency": effective_concurrency,
         "groups": groups,
         "targets": [
             {
@@ -834,6 +989,7 @@ async def plan_manifest_commit_deploy(
         "manifest_path": loaded.relative_path,
         "apply_receipt_sha256": receipt["receipt_sha256"],
         "plan_sha256": plan_sha256,
+        "concurrency": effective_concurrency,
         "target_count": len(target_plans),
         "blocked_target_count": sum(bool(plan.get("blocked_reasons")) for plan in target_plans),
         "targets": target_plans,
@@ -865,64 +1021,83 @@ async def execute_manifest_commit_deploy(  # noqa: C901, PLR0915
     expected = _expected_target_plans(stored)
     groups = cast("list[str]", stored["groups"])
     targets = sorted(expected)
-    effective_concurrency = concurrency or loaded.manifest.options.concurrency
+    effective_concurrency = resolve_manifest_concurrency(loaded.manifest, concurrency)
     prior = resume_details or {}
     results: dict[str, dict[str, Any]] = {}
     semaphore = asyncio.Semaphore(effective_concurrency)
-    progress = {"total": len(targets), "completed": 0, "failed": 0, "running": 0}
+    progress = {
+        "unit": "targets",
+        "total": len(targets),
+        "completed": 0,
+        "failed": 0,
+        "running": 0,
+        "concurrency": effective_concurrency,
+        "phase": "executing",
+    }
     progress_lock = asyncio.Lock()
+    job_context.update_progress(dict(progress))
+
+    async def _update_progress(**changes: int) -> None:
+        async with progress_lock:
+            for key, value in changes.items():
+                progress[key] = int(progress[key]) + value
+            job_context.update_progress(dict(progress))
 
     async def _execute(target: str) -> None:
         if prior.get(target, {}).get("status") == "completed":
             detail = {**prior[target], "status": "resumed_completed", "resumed_from_prior_job": True}
         else:
             async with semaphore:
-                receipt_target = cast("dict[str, Any]", receipt["targets"].get(target, {}))
-                blocked = await _receipt_drift(target, loaded=loaded, receipt_target=receipt_target)
-                current = await commit_and_deploy_all(
-                    target,
-                    message=message,
-                    product=loaded.manifest.source.product,
-                    effective=True,
-                    push=push,
-                    stop_on_error=True,
-                    dry_run=True,
-                    groups=groups,
-                )
-                inner_plan = cast("dict[str, Any]", current["plan"])
-                if inner_plan["plan_sha256"] != expected[target].get("inner_plan_sha256"):
-                    blocked.append("The target commit/deploy plan changed after review.")
-                if blocked:
-                    if on_drift == "abort":
-                        msg = f"Commit/deploy aborted for '{target}': {' '.join(blocked)}"
-                        raise ValueError(msg)
-                    detail = {"server": target, "status": "skipped_drift", "blocked_reasons": blocked}
-                else:
-                    result = await commit_and_deploy_all(
+                await _update_progress(running=1)
+                job_context.set_target_detail(target, {"server": target, "status": "running"})
+                try:
+                    receipt_target = cast("dict[str, Any]", receipt["targets"].get(target, {}))
+                    blocked = await _receipt_drift(target, loaded=loaded, receipt_target=receipt_target)
+                    current = await commit_and_deploy_all(
                         target,
                         message=message,
                         product=loaded.manifest.source.product,
                         effective=True,
                         push=push,
                         stop_on_error=True,
-                        dry_run=False,
-                        expected_plan_sha256=str(inner_plan["plan_sha256"]),
+                        dry_run=True,
                         groups=groups,
                     )
-                    detail = {
-                        "server": target,
-                        "status": "completed" if result["status"] == "completed" else result["status"],
-                        "summary": result["summary"],
-                        "push": result["push"],
-                        "errors": result["errors"],
-                    }
+                    inner_plan = cast("dict[str, Any]", current["plan"])
+                    if inner_plan["plan_sha256"] != expected[target].get("inner_plan_sha256"):
+                        blocked.append("The target commit/deploy plan changed after review.")
+                    if blocked:
+                        if on_drift == "abort":
+                            msg = f"Commit/deploy aborted for '{target}': {' '.join(blocked)}"
+                            raise ValueError(msg)
+                        detail = {"server": target, "status": "skipped_drift", "blocked_reasons": blocked}
+                    else:
+                        result = await commit_and_deploy_all(
+                            target,
+                            message=message,
+                            product=loaded.manifest.source.product,
+                            effective=True,
+                            push=push,
+                            stop_on_error=True,
+                            dry_run=False,
+                            expected_plan_sha256=str(inner_plan["plan_sha256"]),
+                            groups=groups,
+                        )
+                        detail = {
+                            "server": target,
+                            "status": "completed" if result["status"] == "completed" else result["status"],
+                            "summary": result["summary"],
+                            "push": result["push"],
+                            "errors": result["errors"],
+                        }
+                finally:
+                    await _update_progress(running=-1)
         results[target] = detail
         job_context.set_target_detail(target, detail)
-        async with progress_lock:
-            progress["completed"] += 1
-            if detail.get("status") not in {"completed", "resumed_completed"}:
-                progress["failed"] += 1
-            job_context.update_progress(dict(progress))
+        await _update_progress(
+            completed=1,
+            failed=int(detail.get("status") not in {"completed", "resumed_completed"}),
+        )
 
     if on_drift == "abort":
         # Validate every receipt before the first mutation so abort remains all-or-nothing at dispatch time.
@@ -956,9 +1131,11 @@ async def execute_manifest_commit_deploy(  # noqa: C901, PLR0915
 
 
 __all__ = [
+    "ValidationDetailScope",
     "execute_config_manifest_replication",
     "execute_manifest_commit_deploy",
     "plan_config_manifest_replication",
     "plan_manifest_commit_deploy",
+    "resolve_manifest_concurrency",
     "validate_config_manifest",
 ]
