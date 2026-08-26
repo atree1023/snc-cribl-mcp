@@ -95,6 +95,8 @@ class _Harness:
         self.deploy_error_for: str | None = None
         self.dirty_leader_on_group_commit = False
         self.inherit_on_commit: dict[str, list[str]] = {}
+        self.inherit_versions_on_commit: dict[str, list[str]] = {}
+        self.commit_response_deletions: dict[str, int] = {}
         self.changed_paths_by_group: dict[str, list[str]] = {}
         self.diff_paths_by_group: dict[str, list[str]] = {}
         self._commit_sequence = 1
@@ -261,11 +263,19 @@ class _Harness:
             self.global_dirty = True
         for descendant in self.inherit_on_commit.get(group_id, []):
             cast("dict[str, Any]", self._state_for_id(descendant)["git"])["localChanges"] = 1
+        for descendant in self.inherit_versions_on_commit.get(group_id, []):
+            descendant_git = cast("dict[str, Any]", self._state_for_id(descendant)["git"])
+            descendant_git["commit"] = f"{version}-inherited-{descendant}"
+            descendant_git["localChanges"] = 0
         return _Counted(
             {
                 "branch": "main",
                 "commit": version,
-                "summary": {"changes": 1, "insertions": 2, "deletions": 1},
+                "summary": {
+                    "changes": 1,
+                    "insertions": 2,
+                    "deletions": self.commit_response_deletions.get(group_id, 1),
+                },
                 "files": {"modified": [f"local/cribl/{group_id}.yml"]},
                 "message": message,
             }
@@ -375,6 +385,23 @@ def test_status_diff_and_remote_helpers_cover_response_shapes() -> None:
     bounded_error = vc._error_payload(RuntimeError("x" * 3000))
     assert len(bounded_error["message"]) == vc._MAX_ERROR_MESSAGE_CHARS
     assert bounded_error["message_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_group_git_status_uses_one_coherent_local_change_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inventory metadata must not contradict the Git status in one response."""
+    state = _group_payload("default", product=ProductsCore.STREAM, local_changes=1)
+    harness = _Harness((ProductsCore.STREAM, state))
+    harness.changed_paths_by_group["default"] = []
+    _install_harness(monkeypatch, harness)
+
+    result = await vc.collect_group_git_status("test", product="stream", group="default")
+
+    target_result = result["targets"][0]
+    assert target_result["target"]["local_changes"] == 0
+    assert target_result["git"]["local_changes"] == 0
+    assert target_result["git"]["changed_count"] == 0
+    assert target_result["git"]["clean"] is True
 
 
 @pytest.mark.asyncio
@@ -590,6 +617,38 @@ async def test_commit_group_requires_reviewed_plan_and_reports_push_failure(monk
 
 
 @pytest.mark.asyncio
+async def test_commit_group_uses_selected_file_diff_for_line_counts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Selective commits should report only the reviewed files' pre-commit line counts."""
+    state = _group_payload("default", product=ProductsCore.STREAM)
+    harness = _Harness((ProductsCore.STREAM, state))
+    selected_path = "local/cribl/selected.yml"
+    harness.changed_paths_by_group["default"] = [selected_path, "local/cribl/other.yml"]
+    harness.diff_paths_by_group["default"] = [selected_path, "local/cribl/other.yml"]
+    harness.commit_response_deletions["default"] = 0
+    _install_harness(monkeypatch, harness)
+
+    planned = await vc.commit_group_config(
+        "test",
+        product=ProductsCore.STREAM,
+        group="default",
+        message="Commit one reviewed file",
+        files=[selected_path],
+    )
+    result = await vc.commit_group_config(
+        "test",
+        product=ProductsCore.STREAM,
+        group="default",
+        message="Commit one reviewed file",
+        files=[selected_path],
+        dry_run=False,
+        expected_plan_sha256=planned["plan"]["plan_sha256"],
+    )
+
+    assert planned["plan"]["changes"]["changed_paths"] == [selected_path]
+    assert result["commit"]["line_changes"] == {"total": 3, "insertions": 2, "deletions": 1}
+
+
+@pytest.mark.asyncio
 async def test_deploy_explicit_version_commits_leader_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     """Explicit deploy should use the requested hash and make a scoped Leader metadata commit."""
     state = _group_payload("default", product=ProductsCore.STREAM, local_changes=0)
@@ -730,17 +789,35 @@ async def test_commit_and_deploy_all_rechecks_descendants_and_deploys_parent_fir
 ) -> None:
     """All-target workflow should capture inherited changes and preserve Edge hierarchy order."""
     parent = _group_payload("parent", product=ProductsCore.EDGE, local_changes=1)
-    child = _group_payload("child", product=ProductsCore.EDGE, local_changes=0, inherits="parent")
-    grandchild = _group_payload("grandchild", product=ProductsCore.EDGE, local_changes=0, inherits="child")
+    child = _group_payload(
+        "child",
+        product=ProductsCore.EDGE,
+        local_changes=0,
+        deployed="commit-1",
+        inherits="parent",
+    )
+    grandchild = _group_payload(
+        "grandchild",
+        product=ProductsCore.EDGE,
+        local_changes=0,
+        deployed="commit-1",
+        inherits="child",
+    )
     harness = _Harness(
         (ProductsCore.EDGE, grandchild),
         (ProductsCore.EDGE, child),
         (ProductsCore.EDGE, parent),
     )
-    harness.inherit_on_commit = {"parent": ["child"], "child": ["grandchild"]}
+    harness.inherit_versions_on_commit = {"parent": ["child", "grandchild"]}
     _install_harness(monkeypatch, harness)
 
     planned = await vc.commit_and_deploy_all("test", message="Roll out inherited Edge settings", product="edge")
+    plan_by_id = {item["target"]["id"]: item for item in planned["plan"]["targets"]}
+    assert plan_by_id["parent"]["action"] == "commit_and_deploy"
+    assert plan_by_id["child"]["action"] == "deploy_inherited"
+    assert plan_by_id["child"]["inherited_deploy_from"] == "parent"
+    assert plan_by_id["grandchild"]["action"] == "deploy_inherited"
+    assert plan_by_id["grandchild"]["inherited_deploy_from"] == "parent"
     result = await vc.commit_and_deploy_all(
         "test",
         message="Roll out inherited Edge settings",
@@ -750,10 +827,46 @@ async def test_commit_and_deploy_all_rechecks_descendants_and_deploys_parent_fir
     )
 
     assert result["status"] == "completed"
-    assert harness.commit_order == ["parent", "child", "grandchild"]
+    assert harness.commit_order == ["parent"]
     assert harness.deploy_order == ["parent", "child", "grandchild"]
+    commit_by_id = {item["target"]["id"]: item for item in result["commit_results"]}
+    assert commit_by_id["child"]["status"] == "noop"
+    assert commit_by_id["child"]["changes"]["changed_after_parent_commit"] is True
+    assert commit_by_id["grandchild"]["status"] == "noop"
+    assert commit_by_id["grandchild"]["changes"]["changed_after_parent_commit"] is True
     assert result["leader_commit"]["status"] == "committed"
     assert all(item["control_plane_version_confirmed"] for item in result["deploy_results"])
+
+
+@pytest.mark.asyncio
+async def test_commit_and_deploy_all_uses_precommit_diff_line_counts_across_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Alternating bad SDK deletion summaries must not corrupt commit audit results."""
+    groups = [
+        _group_payload(group_id, product=ProductsCore.STREAM, local_changes=1) for group_id in ("first", "second", "third")
+    ]
+    harness = _Harness(*((ProductsCore.STREAM, group) for group in groups))
+    harness.commit_response_deletions = {"first": 0, "second": 1, "third": 0}
+    _install_harness(monkeypatch, harness)
+
+    planned = await vc.commit_and_deploy_all("test", message="Audit all line counts", product="stream")
+    result = await vc.commit_and_deploy_all(
+        "test",
+        message="Audit all line counts",
+        product="stream",
+        dry_run=False,
+        expected_plan_sha256=planned["plan"]["plan_sha256"],
+    )
+
+    assert harness.commit_order == ["first", "second", "third"]
+    for commit_result in result["commit_results"]:
+        assert commit_result["commit"]["line_changes"] == {
+            "total": 3,
+            "insertions": 2,
+            "deletions": 1,
+        }
+        assert commit_result["commit"]["line_changes"]["deletions"] == commit_result["changes"]["deleted_lines"]
 
 
 @pytest.mark.asyncio

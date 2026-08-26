@@ -285,6 +285,36 @@ def test_compare_items_ignores_runtime_status_but_not_config_drift() -> None:
     assert result["differing_paths"] == ["port"]
 
 
+def test_semantic_change_summary_classifies_config_paths_and_ignores_key_order() -> None:
+    """Copy review summaries should separate true field changes from key-order churn."""
+    source = {
+        "id": "in_test",
+        "type": "tcp",
+        "enabled": True,
+        "nested": {"added": "yes", "changed": 2},
+    }
+    target = {
+        "nested": {"changed": 1, "removed": "yes"},
+        "enabled": True,
+        "type": "tcp",
+        "id": "in_test",
+    }
+
+    summary = sync_module._semantic_change_summary("sources", source, target)
+
+    assert summary == {
+        "added_count": 1,
+        "added_paths": ["nested.added"],
+        "changed_count": 1,
+        "changed_paths": ["nested.changed"],
+        "removed_count": 1,
+        "removed_paths": ["nested.removed"],
+        "total_count": 3,
+        "paths_truncated": False,
+    }
+    assert sync_module._semantic_change_summary("sources", source, dict(reversed(list(source.items()))))["total_count"] == 0
+
+
 @pytest.mark.asyncio
 async def test_maybe_get_item_returns_none_only_for_http_404(monkeypatch: pytest.MonkeyPatch) -> None:
     """Single-item lookup should translate HTTP 404 to None and re-raise other errors."""
@@ -643,9 +673,70 @@ async def test_copy_resource_config_dry_run_filters_and_reports_planned_actions(
     assert result["planned_updated_count"] == 1
     assert result["items"] == [
         {"item_id": "oodp-main", "action": "would_create"},
-        {"item_id": "oodp-extra", "action": "would_update"},
+        {
+            "item_id": "oodp-extra",
+            "action": "would_update",
+            "semantic_changes": {
+                "added_count": 0,
+                "added_paths": [],
+                "changed_count": 1,
+                "changed_paths": ["conf.output"],
+                "removed_count": 0,
+                "removed_paths": [],
+                "total_count": 1,
+                "paths_truncated": False,
+            },
+        },
     ]
     create_resource.assert_not_awaited()
+    update_resource.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_copy_resource_config_skips_semantically_identical_reordered_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An identical target with different dictionary order must not be rewritten."""
+
+    @asynccontextmanager
+    async def _pair(_source: str, _target: str) -> AsyncGenerator[tuple[SimpleNamespace, SimpleNamespace]]:
+        yield _resolved("source"), _resolved("target")
+
+    source_item = {"id": "in_test", "type": "tcp", "port": 10060}
+    target_item = {"port": 10060, "type": "tcp", "id": "in_test"}
+    list_resource = AsyncMock(return_value=[source_item])
+    maybe_get_item = AsyncMock(side_effect=[target_item, target_item])
+    update_resource = AsyncMock()
+    monkeypatch.setattr(sync_module, "connect_server_pair", _pair)
+    monkeypatch.setattr(sync_module, "list_resource", list_resource)
+    monkeypatch.setattr(sync_module, "_maybe_get_item", maybe_get_item)
+    monkeypatch.setattr(sync_module, "update_resource", update_resource)
+
+    planned = await sync_module.copy_resource_config(
+        "sources",
+        "source",
+        "target",
+        group_id="default",
+        dry_run=True,
+    )
+    executed = await sync_module.copy_resource_config(
+        "sources",
+        "source",
+        "target",
+        group_id="default",
+        expected_plan_sha256=planned["plan_sha256"],
+    )
+
+    assert planned["planned_count"] == 0
+    assert planned["items"] == [
+        {
+            "item_id": "in_test",
+            "action": "would_skip",
+            "reason": "Target item is already semantically in sync.",
+        }
+    ]
+    assert executed["copied_count"] == 0
+    assert executed["items"][0]["action"] == "skipped"
     update_resource.assert_not_awaited()
 
 
@@ -1043,7 +1134,22 @@ async def test_copy_resource_config_updates_existing_target_item(monkeypatch: py
     )
 
     assert result["updated_count"] == 1
-    assert result["items"] == [{"item_id": "pipe1", "action": "updated"}]
+    assert result["items"] == [
+        {
+            "item_id": "pipe1",
+            "action": "updated",
+            "semantic_changes": {
+                "added_count": 0,
+                "added_paths": [],
+                "changed_count": 1,
+                "changed_paths": ["conf.functions.length"],
+                "removed_count": 0,
+                "removed_paths": [],
+                "total_count": 1,
+                "paths_truncated": False,
+            },
+        }
+    ]
     update_resource.assert_awaited_once()
 
 

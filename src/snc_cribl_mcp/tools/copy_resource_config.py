@@ -25,7 +25,8 @@ def register(app: FastMCP, *, impl: CopyResourceConfigFunc) -> None:
             "configured Cribl leader to another. Group-scoped resources support different source and target group selectors. "
             "Use item_pattern for wildcard boolean expressions such as 'oodp-* and not oodp-source-*' or 'oodp-* but not "
             "oodp-source-*', item_regex for regular expressions. This mutation defaults to dry_run=true; pass the returned "
-            "plan_sha256 as expected_plan_sha256 with dry_run=false to execute the exact reviewed plan."
+            "plan_sha256 as expected_plan_sha256 with dry_run=false to execute the exact reviewed plan. Semantically "
+            "identical targets are skipped; real updates report bounded added, changed, and removed config paths."
         ),
         annotations={
             "title": "Copy config between leaders",

@@ -367,14 +367,37 @@ def _compact_git_status(
     return compact
 
 
-def _plan_change_summary(git_status: dict[str, Any], pending_diff: dict[str, Any]) -> dict[str, Any]:
+def _target_status_snapshot(target: GroupTarget, git_status: dict[str, Any]) -> dict[str, Any]:
+    """Return target metadata aligned with the same Git-status snapshot."""
+    snapshot = target.as_dict()
+    snapshot["local_changes"] = git_status["local_changes"]
+    return snapshot
+
+
+def _plan_change_summary(
+    git_status: dict[str, Any],
+    pending_diff: dict[str, Any],
+    *,
+    files: list[str] | None = None,
+) -> dict[str, Any]:
     """Return one bounded changed-path preview and complete drift digests for a plan."""
-    diff_summary = cast("dict[str, Any]", pending_diff["summary"])
+    selected_files = set(files) if files is not None else None
+    diff_summary = _diff_summary(cast("dict[str, Any]", pending_diff["payload"]), files=selected_files)
+    if selected_files is None:
+        changed_count = int(git_status["changed_count"])
+        changed_paths = cast("list[str]", git_status["changed_paths"])
+        changed_paths_truncated = bool(git_status["changed_paths_truncated"])
+        changed_paths_sha256 = git_status["changed_paths_sha256"]
+    else:
+        changed_paths = cast("list[str]", diff_summary["paths"])
+        changed_count = int(diff_summary["path_count"])
+        changed_paths_truncated = bool(diff_summary["paths_truncated"])
+        changed_paths_sha256 = diff_summary["paths_sha256"]
     return {
-        "changed_count": git_status["changed_count"],
-        "changed_paths": git_status["changed_paths"],
-        "changed_paths_truncated": git_status["changed_paths_truncated"],
-        "changed_paths_sha256": git_status["changed_paths_sha256"],
+        "changed_count": changed_count,
+        "changed_paths": changed_paths[:_MAX_STATUS_PATHS],
+        "changed_paths_truncated": changed_paths_truncated or len(changed_paths) > _MAX_STATUS_PATHS,
+        "changed_paths_sha256": changed_paths_sha256,
         "pending_diff_sha256": pending_diff["sha256"],
         "file_count": diff_summary["file_count"],
         "added_lines": diff_summary["added_lines"],
@@ -384,9 +407,14 @@ def _plan_change_summary(git_status: dict[str, Any], pending_diff: dict[str, Any
     }
 
 
-def _execution_change_counts(git_status: dict[str, Any], pending_diff: dict[str, Any]) -> dict[str, Any]:
+def _execution_change_counts(
+    git_status: dict[str, Any],
+    pending_diff: dict[str, Any],
+    *,
+    files: list[str] | None = None,
+) -> dict[str, Any]:
     """Return change counts for execution results without path previews."""
-    plan_summary = _plan_change_summary(git_status, pending_diff)
+    plan_summary = _plan_change_summary(git_status, pending_diff, files=files)
     return {
         key: value
         for key, value in plan_summary.items()
@@ -417,7 +445,11 @@ async def _group_status(resolved: ResolvedControlPlane, target: GroupTarget) -> 
             "committed_version": committed_version,
             "deployed_version": target.config_version,
             "deployment_pending": bool(committed_version and committed_version != target.config_version),
-            "local_changes": target.local_changes,
+            # Group inventory and Git status are separate Cribl calls and can race
+            # with an in-flight commit. Keep the public status payload internally
+            # coherent by deriving this value from the same status response as
+            # clean, changed_count, and changed_paths.
+            "local_changes": summary["changed_count"],
             "worker_count": target.worker_count,
             "deploying_worker_count": target.deploying_worker_count,
             "incompatible_worker_count": target.incompatible_worker_count,
@@ -447,22 +479,31 @@ def _diff_files(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return files
 
 
-def _diff_summary(payload: dict[str, Any]) -> dict[str, Any]:
+def _diff_summary(payload: dict[str, Any], *, files: set[str] | None = None) -> dict[str, Any]:
     """Summarize a potentially large Cribl diff without returning line bodies."""
-    files = _diff_files(payload)
+    diff_files = _diff_files(payload)
+    if files is not None:
+        diff_files = [
+            item
+            for item in diff_files
+            if _optional_text(item.get("newName") or item.get("new_name")) in files
+            or _optional_text(item.get("oldName") or item.get("old_name")) in files
+        ]
     paths: list[str] = []
-    for item in files:
+    for item in diff_files:
         path = _optional_text(item.get("newName") or item.get("new_name") or item.get("oldName") or item.get("old_name"))
         if path is not None:
             paths.append(path)
     return {
-        "file_count": len(files),
-        "added_lines": sum(_optional_int(item.get("addedLines") or item.get("added_lines")) or 0 for item in files),
-        "deleted_lines": sum(_optional_int(item.get("deletedLines") or item.get("deleted_lines")) or 0 for item in files),
-        "binary_file_count": sum(bool(item.get("isBinary") or item.get("is_binary")) for item in files),
-        "too_big_file_count": sum(bool(item.get("isTooBig") or item.get("is_too_big")) for item in files),
+        "file_count": len(diff_files),
+        "added_lines": sum(_optional_int(item.get("addedLines") or item.get("added_lines")) or 0 for item in diff_files),
+        "deleted_lines": sum(_optional_int(item.get("deletedLines") or item.get("deleted_lines")) or 0 for item in diff_files),
+        "binary_file_count": sum(bool(item.get("isBinary") or item.get("is_binary")) for item in diff_files),
+        "too_big_file_count": sum(bool(item.get("isTooBig") or item.get("is_too_big")) for item in diff_files),
         "paths": paths[:_MAX_SUMMARY_PATHS],
+        "path_count": len(paths),
         "paths_truncated": len(paths) > _MAX_SUMMARY_PATHS,
+        "paths_sha256": _canonical_digest(paths),
     }
 
 
@@ -680,11 +721,14 @@ def _first_response_item(response_payload: dict[str, Any]) -> dict[str, Any]:
     return cast("dict[str, Any]", first) if isinstance(first, dict) else {}
 
 
-def _commit_result_summary(response_payload: dict[str, Any], *, version: str) -> dict[str, Any]:
+def _commit_result_summary(
+    response_payload: dict[str, Any],
+    *,
+    version: str,
+    changes: dict[str, Any],
+) -> dict[str, Any]:
     """Summarize a commit response without returning affected path arrays."""
     item = _first_response_item(response_payload)
-    line_summary_value = item.get("summary")
-    line_summary = cast("dict[str, Any]", line_summary_value) if isinstance(line_summary_value, dict) else {}
     files_value = item.get("files")
     files = cast("dict[str, Any]", files_value) if isinstance(files_value, dict) else {}
     file_counts: dict[str, int] = {}
@@ -695,9 +739,12 @@ def _commit_result_summary(response_payload: dict[str, Any], *, version: str) ->
         "version": version,
         "branch": _optional_text(item.get("branch")),
         "line_changes": {
-            "total": _optional_int(line_summary.get("changes")) or 0,
-            "insertions": _optional_int(line_summary.get("insertions")) or 0,
-            "deletions": _optional_int(line_summary.get("deletions")) or 0,
+            # SDK 0.11 can intermittently lose deletions from the create-commit
+            # response. The immediately preceding pending diff is the reviewed,
+            # drift-checked source for these audit counts.
+            "total": int(changes["added_lines"]) + int(changes["deleted_lines"]),
+            "insertions": int(changes["added_lines"]),
+            "deletions": int(changes["deleted_lines"]),
         },
         "file_changes": {
             **file_counts,
@@ -837,7 +884,7 @@ async def collect_group_git_status(
         for target in ordered_targets:
             try:
                 status = await _group_status(resolved, target)
-                results.append({"target": target.as_dict(), "status": "ok", "git": status})
+                results.append({"target": _target_status_snapshot(target, status), "status": "ok", "git": status})
             except Exception as exc:  # noqa: BLE001 - preserve partial inventory results
                 results.append({"target": target.as_dict(), "status": "error", "error": _error_payload(exc)})
 
@@ -890,7 +937,7 @@ async def collect_group_git_diff(
 
         return {
             "server": resolved.server_name,
-            "target": target.as_dict(),
+            "target": _target_status_snapshot(target, status),
             "git": status,
             "compare_to": compare_to,
             "comparison_commit": comparison_commit or status.get("committed_version"),
@@ -915,7 +962,9 @@ async def _build_group_plan(
     """Build a mutation plan for one group/fleet."""
     git_status = await _group_status(resolved, target)
     pending_diff = await _fetch_diff(resolved, target, diff_line_limit=0)
-    has_pending = not bool(git_status["clean"]) or bool(pending_diff["summary"]["file_count"]) or bool(target.local_changes)
+    has_pending = (
+        not bool(git_status["clean"]) or bool(pending_diff["summary"]["file_count"]) or bool(git_status["local_changes"])
+    )
     committed_version = _optional_text(git_status.get("committed_version"))
     deployed_version = _optional_text(git_status.get("deployed_version"))
     action = "noop"
@@ -952,7 +1001,7 @@ async def _build_group_plan(
         "effective": effective,
         "push": push,
         "git": _compact_git_status(git_status, include_change_metadata=False),
-        "changes": _plan_change_summary(git_status, pending_diff),
+        "changes": _plan_change_summary(git_status, pending_diff, files=files),
         "leader_git": _compact_git_status(leader_status),
         "git_integration": git_info,
         "edge_ancestors": edge_ancestors,
@@ -1046,7 +1095,11 @@ async def commit_group_config(
                 "dry_run": False,
                 "action": plan["action"],
                 "executed_plan_sha256": plan["plan_sha256"],
-                "commit": _commit_result_summary(response, version=version),
+                "commit": _commit_result_summary(
+                    response,
+                    version=version,
+                    changes=cast("dict[str, Any]", plan["changes"]),
+                ),
                 "push": _push_result(requested=True, attempted=True),
                 "completed_steps": ["group_commit"],
                 "error": _error_payload(exc),
@@ -1056,7 +1109,11 @@ async def commit_group_config(
             "dry_run": False,
             "action": plan["action"],
             "executed_plan_sha256": plan["plan_sha256"],
-            "commit": _commit_result_summary(response, version=version),
+            "commit": _commit_result_summary(
+                response,
+                version=version,
+                changes=cast("dict[str, Any]", plan["changes"]),
+            ),
             "push": _push_result(requested=push, pushed=push_response is not None),
             "completed_steps": ["group_commit", *(["push"] if push else [])],
         }
@@ -1283,8 +1340,38 @@ async def commit_and_deploy_group(
             "completed_steps": [*completed_steps, *finalized_steps],
         }
         if commit_response is not None:
-            result["commit"] = _commit_result_summary(commit_response, version=version)
+            result["commit"] = _commit_result_summary(
+                commit_response,
+                version=version,
+                changes=cast("dict[str, Any]", plan["changes"]),
+            )
         return result
+
+
+def _all_target_plan_action(
+    target: GroupTarget,
+    *,
+    has_pending: bool,
+    committed: str | None,
+    deployed: str | None,
+    edge_targets: dict[str, GroupTarget],
+    planned_edge_commits: set[str],
+) -> tuple[str, str | None]:
+    """Return one target's planned action and inheritance trigger."""
+    if has_pending:
+        if target.product == ProductsCore.EDGE:
+            planned_edge_commits.add(target.group_id)
+        return "commit_and_deploy", None
+    if committed is not None and committed != deployed:
+        return "deploy", None
+    if target.product != ProductsCore.EDGE:
+        return "noop", None
+    ancestor = _blocked_edge_ancestor(
+        target,
+        edge_targets=edge_targets,
+        blocked_ids=planned_edge_commits,
+    )
+    return ("deploy_inherited", ancestor) if ancestor is not None else ("noop", None)
 
 
 async def _build_all_plan(
@@ -1303,13 +1390,24 @@ async def _build_all_plan(
     blocked_reasons: list[str] = []
 
     target_plans: list[dict[str, Any]] = []
+    edge_targets = {target.group_id: target for target in targets if target.product == ProductsCore.EDGE}
+    planned_edge_commits: set[str] = set()
     for target in targets:
         git_status = await _group_status(resolved, target)
         pending = await _fetch_diff(resolved, target, diff_line_limit=0)
-        has_pending = not bool(git_status["clean"]) or bool(pending["summary"]["file_count"]) or bool(target.local_changes)
+        has_pending = (
+            not bool(git_status["clean"]) or bool(pending["summary"]["file_count"]) or bool(git_status["local_changes"])
+        )
         committed = _optional_text(git_status.get("committed_version"))
         deployed = _optional_text(git_status.get("deployed_version"))
-        action = "commit_and_deploy" if has_pending else "deploy" if committed and committed != deployed else "noop"
+        action, inherited_deploy_from = _all_target_plan_action(
+            target,
+            has_pending=has_pending,
+            committed=committed,
+            deployed=deployed,
+            edge_targets=edge_targets,
+            planned_edge_commits=planned_edge_commits,
+        )
         conflicts = cast("list[str]", git_status["conflicted"])
         if conflicts:
             blocked_reasons.append(f"{target.product.value} target '{target.group_id}' contains Git conflicts.")
@@ -1317,6 +1415,7 @@ async def _build_all_plan(
             {
                 "target": _target_ref(target),
                 "action": action,
+                "inherited_deploy_from": inherited_deploy_from,
                 "git": _compact_git_status(git_status, include_change_metadata=False),
                 "changes": _plan_change_summary(git_status, pending),
                 "commit_message": f"{message} [{target.product.value}:{target.group_id}]",
@@ -1432,7 +1531,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
                     changed_ancestor=changed_ancestor,
                 )
                 has_pending = (
-                    not bool(git_status["clean"]) or bool(pending["summary"]["file_count"]) or bool(target.local_changes)
+                    not bool(git_status["clean"]) or bool(pending["summary"]["file_count"]) or bool(git_status["local_changes"])
                 )
                 version = _optional_text(git_status.get("committed_version"))
                 response: dict[str, Any] | None = None
@@ -1450,18 +1549,19 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
                         committed_edge_ids.add(target.group_id)
                 if version is not None and version != target.config_version:
                     deploy_candidates[(target.product, target.group_id)] = (target, version)
+                execution_changes = _execution_change_counts(git_status, pending)
                 commit_results.append(
                     {
                         "target": _target_ref(target),
                         "status": action,
                         "version": version,
                         "commit": (
-                            _commit_result_summary(response, version=version)
+                            _commit_result_summary(response, version=version, changes=execution_changes)
                             if response is not None and version is not None
                             else None
                         ),
                         "changes": {
-                            **_execution_change_counts(git_status, pending),
+                            **execution_changes,
                             "changed_after_parent_commit": changed_ancestor is not None,
                         },
                     }

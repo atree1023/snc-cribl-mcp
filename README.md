@@ -323,7 +323,7 @@ Semantically compares groups, sources, destinations, pipelines, routes, breakers
 
 Copies groups, sources, destinations, pipelines, routes, breakers, lookups, or variables from one configured leader to another.
 
-- **Returns:** Dry-run plans describe would-create, would-update, would-append, skip, unsupported, and failed actions and include a content-addressed `plan_sha256`. Execution results report the matching `executed_plan_sha256` plus created, updated, appended, skipped, unsupported, and failed items. For group-scoped resources, both responses include the requested selectors and resolved group IDs.
+- **Returns:** Dry-run plans describe would-create, would-update, would-append, skip, unsupported, and failed actions and include a content-addressed `plan_sha256`. Semantically identical targets are skipped without an API write; real updates include bounded added, changed, and removed config-path summaries so YAML key-order normalization cannot hide functional drift. Execution results report the matching `executed_plan_sha256` plus created, updated, appended, skipped, unsupported, and failed items. For group-scoped resources, both responses include the requested selectors and resolved group IDs.
 - **Safe execution:** The tool defaults to `dry_run=true`. Review the plan, then pass its exact `plan_sha256` as `expected_plan_sha256` with `dry_run=false`. Source or target config drift causes execution to stop before any write.
 - **Subset matching:** Use `item_pattern` for wildcard boolean selectors like `oodp-* but not oodp-source-*`, `item_regex` for regex selectors, and the explicit exclude filters to plan or copy only selected IDs.
 - **Post-copy validation:** Batch copies re-list the target scope after all writes and compare the same list representation used by `validate_resource_sync` and `validate_config_objects`, avoiding false drift from list-versus-detail response differences.
@@ -403,7 +403,7 @@ Commits and deploys one group/fleet. If its working tree is clean but its curren
 
 #### `commit_and_deploy_all`
 
-Commits all selected targets before deploying them. Edge parents are processed before descendants, each descendant is re-evaluated after its parent commit, and Leader deployment metadata is committed once after successful deployments. Use `product="stream"`, `product="edge"`, or `product="all"` to set the scope.
+Commits all selected targets before deploying them. Edge parents are processed before descendants, each descendant is re-evaluated after its parent commit, and Leader deployment metadata is committed once after successful deployments. A clean descendant whose effective configuration will change because an ancestor is committed is planned as `deploy_inherited`, so the reviewed plan includes the full deployment blast radius. Use `product="stream"`, `product="edge"`, or `product="all"` to set the scope.
 
 #### `push_config_git`
 
@@ -411,7 +411,7 @@ Pushes already committed Leader configuration to the configured remote. Prefligh
 
 All five version-control mutation tools default to `dry_run=true`. Review the plan and diff, then pass the returned `plan_sha256` as `expected_plan_sha256` with `dry_run=false`. The execution call returns an accepted `job_id` immediately; poll `get_config_deployment_job` for completion. Mutations are serialized per configured server while read-only tools remain responsive. `copy_resource_config` uses the same review-and-confirm contract but executes synchronously.
 
-Plans contain a single 25-path preview plus digests over the complete path set and pending diff. Final results omit full plans, diffs, deployment objects, and changed-path arrays; they retain the executed plan digest, action/status, commit and line/file counts, deployed versions, rollout aggregates, push status, and recovery details. Use `get_group_git_diff` for file-level drill-down. A successful deployment confirms the Leader's active `configVersion`; use the returned rollout counts or a later status call to confirm that every worker or Edge node has converged. The installed Cribl SDK does not expose a failed-node aggregate, so `rollout.failed` remains `null` unless a future API response provides it.
+Plans contain a single 25-path preview plus digests over the complete path set and pending diff. Final results omit full plans, diffs, deployment objects, and changed-path arrays; they retain the executed plan digest, action/status, pre-commit-diff line counts, file counts, deployed versions, rollout aggregates, push status, and recovery details. Use `get_group_git_diff` for file-level drill-down. A successful deployment confirms the Leader's active `configVersion`; use the returned rollout counts or a later status call to confirm that every worker or Edge node has converged. The installed Cribl SDK does not expose a failed-node aggregate, so `rollout.failed` remains `null` unless a future API response provides it.
 
 ### Example Integration with Claude
 

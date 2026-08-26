@@ -342,6 +342,58 @@ def _diff_paths(source: JsonValue, target: JsonValue, *, prefix: str = "") -> li
     return [prefix or "$"]
 
 
+def _semantic_change_summary(  # noqa: C901
+    kind: CompareKind,
+    source_item: dict[str, Any],
+    target_item: dict[str, Any],
+) -> dict[str, Any]:
+    """Classify bounded config-path previews as added, changed, or removed."""
+    source = cast("JsonValue", _canonical_compare_payload(kind, source_item))
+    target = cast("JsonValue", _canonical_compare_payload(kind, target_item))
+    paths: dict[str, list[str]] = {"added": [], "changed": [], "removed": []}
+    counts = {"added": 0, "changed": 0, "removed": 0}
+
+    def record(change_type: Literal["added", "changed", "removed"], path: str) -> None:
+        counts[change_type] += 1
+        if sum(len(items) for items in paths.values()) < _MAX_DIFF_PATHS:
+            paths[change_type].append(path or "$")
+
+    def walk(source_value: JsonValue, target_value: JsonValue, *, prefix: str = "") -> None:
+        if source_value == target_value:
+            return
+        if isinstance(source_value, dict) and isinstance(target_value, dict):
+            for key in sorted(set(source_value) | set(target_value)):
+                child = _join_path(prefix, str(key))
+                if key not in target_value:
+                    record("added", child)
+                elif key not in source_value:
+                    record("removed", child)
+                else:
+                    walk(source_value[key], target_value[key], prefix=child)
+            return
+        if isinstance(source_value, list) and isinstance(target_value, list):
+            if len(source_value) != len(target_value):
+                record("changed", _join_path(prefix, "length"))
+                return
+            for index, (source_child, target_child) in enumerate(zip(source_value, target_value, strict=True)):
+                walk(source_child, target_child, prefix=f"{prefix}[{index}]")
+            return
+        record("changed", prefix)
+
+    walk(source, target)
+    total_count = sum(counts.values())
+    return {
+        "added_count": counts["added"],
+        "added_paths": paths["added"],
+        "changed_count": counts["changed"],
+        "changed_paths": paths["changed"],
+        "removed_count": counts["removed"],
+        "removed_paths": paths["removed"],
+        "total_count": total_count,
+        "paths_truncated": total_count > sum(len(items) for items in paths.values()),
+    }
+
+
 def _normalize_group_text(value: object) -> str | None:
     """Normalize group metadata values into comparable strings."""
     if value is None:
@@ -955,7 +1007,19 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
                 elif kind == "routes" and append_routes:
                     plan_result = {"item_id": current_item_id, "action": "would_append"}
                 else:
-                    plan_result = {"item_id": current_item_id, "action": "would_update"}
+                    comparison = _compare_items(kind, current_item_id, source_item, target_item)
+                    if comparison["status"] == "in_sync":
+                        plan_result = {
+                            "item_id": current_item_id,
+                            "action": "would_skip",
+                            "reason": "Target item is already semantically in sync.",
+                        }
+                    else:
+                        plan_result = {
+                            "item_id": current_item_id,
+                            "action": "would_update",
+                            "semantic_changes": _semantic_change_summary(kind, source_item, target_item),
+                        }
             except Exception as exc:  # noqa: BLE001 - include target read failures in the reviewed plan
                 plan_result = _build_failed_copy_result(
                     current_item_id,
@@ -1078,6 +1142,9 @@ async def copy_resource_config(  # noqa: C901, PLR0912, PLR0915
                 continue
 
             result: dict[str, Any] = {"item_id": current_item_id, "action": action}
+            semantic_changes = plan_result.get("semantic_changes")
+            if isinstance(semantic_changes, dict):
+                result["semantic_changes"] = semantic_changes
             item_results.append(result)
 
         successful_results = [result for result in item_results if result.get("action") in {"appended", "created", "updated"}]

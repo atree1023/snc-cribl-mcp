@@ -27,6 +27,10 @@ All notable changes to snc-cribl-mcp will be documented in this file.
 - Recovered raw node inventory for leader overview when the generated SDK rejects otherwise usable node responses, and recognized SDK snake_case group counts and name-based fleet associations.
 - Made `get_config_objects.selector` honor case-insensitive shell wildcards instead of treating `*`, `?`, and character classes as literal text.
 - Aligned batch `copy_resource_config(validate_after=true)` with collection validation by comparing source and target list representations after writes.
+- Corrected commit audit line counts by sourcing insertions and deletions from the reviewed pre-commit diff instead of the unreliable SDK 0.11 commit summary.
+- Marked clean Edge descendants as `deploy_inherited` when an ancestor commit will change their effective configuration, so dry-run target counts reflect deployment blast radius.
+- Prevented semantically identical copy updates, including SDK-only YAML key-order normalization, and added bounded added/changed/removed path summaries for real updates.
+- Kept `local_changes`, `changed_count`, changed paths, and `clean` coherent by deriving them from one scoped Git-status snapshot.
 
 ### Tests
 
@@ -35,6 +39,7 @@ All notable changes to snc-cribl-mcp will be documented in this file.
 - Added SDK 0.11 wrapper regressions, copy-plan drift-gate coverage, and live plan/execute/validate/cleanup testing against two local Cribl 4.19.2 leaders.
 - Ran 58 safe MCP tool calls across both local leaders plus a temporary empty-Pack install/list/get/delete cleanup workflow.
 - Added regressions for all four Issue #20 findings and completed a temporary disabled-source plan/copy/inline-validate/standalone-validate/delete workflow across both local leaders.
+- Added multi-target deletion-count, inherited-deploy planning, semantic copy-review, no-op key-order, and coherent Git-status regressions for Issue #21.
 
 ## [0.3.0] - 2026-05-22
 

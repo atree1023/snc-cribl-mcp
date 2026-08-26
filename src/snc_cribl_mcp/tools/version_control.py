@@ -279,7 +279,8 @@ def register(  # noqa: C901
         description=(
             "Commit and deploy all selected Stream worker groups and/or Edge fleets. Stream groups are deterministic; "
             "Edge fleets are committed and deployed in parent-before-descendant order, with each descendant "
-            "re-evaluated after its parent commit so inherited changes are captured. Leader deployment metadata is "
+            "re-evaluated after its parent commit so inherited changes are captured. Clean descendants affected by a "
+            "planned ancestor commit are reported as deploy_inherited. Leader deployment metadata is "
             "committed once after successful deployments. push occurs only when no workflow errors remain. "
             f"{_PLAN_GUIDANCE}"
         ),
