@@ -417,7 +417,7 @@ committing or deploying. Provide exactly one of `apply_job_id` or `apply_receipt
 Commits and deploys a prior manifest application across its successful target leaders.
 
 - **Receipt gate:** Requires either the replication `apply_job_id` or `apply_receipt_sha256`. Every group diff must still match the durable post-apply receipt before planning and again before execution.
-- **Scope:** Commits only manifest groups. For Edge, affected descendants are included and processed parent-first so inherited changes are committed and deployed safely.
+- **Scope:** Commits only manifest groups. For Edge, the full fleet hierarchy is validated before selecting manifest fleets and affected descendants in parent-first order. Ancestors outside that scope are checked for pending configuration and included in the plan's drift guard, but are not committed or deployed. Child-only manifests can proceed when those ancestors are already committed and deployed.
 - **Review contract:** Dry-run and execution use a separate commit/deploy `plan_sha256`, keeping replication approval distinct from deployment approval. Plans expose ordered per-fleet actions, `push_action`, and Leader blocker paths. Targets run concurrently, while each leader's hierarchy remains serialized.
 - **Progress and outcomes:** Progress uses `unit: fleets` and reports the current leader, product, fleet, and phase while preserving parent-before-child order. `on_drift="skip"` applies to receipt, group/fleet, and Leader `groups.yml` blockers; skipped leaders produce `partial_skip`, not `partial_failure`. `push=false` is carried through both plan and execution and is guarded against an unexpected inner push request.
 

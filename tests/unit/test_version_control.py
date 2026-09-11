@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -16,7 +17,10 @@ import pytest
 from cribl_control_plane.models.productscore import ProductsCore
 
 from snc_cribl_mcp.client.cribl_client import ResolvedControlPlane
+from snc_cribl_mcp.models.config_manifest import ConfigManifest, LoadedConfigManifest, ManifestContent, ManifestSource
+from snc_cribl_mcp.operations import config_manifest as manifest_ops
 from snc_cribl_mcp.operations import version_control as vc
+from snc_cribl_mcp.operations.manifest_state import ManifestStateStore
 
 
 class _FakeModel:
@@ -876,13 +880,17 @@ async def test_commit_and_deploy_all_manifest_scope_includes_only_requested_edge
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Manifest scope should include an affected subtree without committing unrelated fleets."""
-    parent = _group_payload("parent", product=ProductsCore.EDGE, local_changes=1)
+    root = _group_payload("root", product=ProductsCore.EDGE, local_changes=0, deployed="commit-1")
+    ancestor = _group_payload("linux", product=ProductsCore.EDGE, local_changes=0, deployed="commit-1", inherits="root")
+    parent = _group_payload("parent", product=ProductsCore.EDGE, local_changes=1, inherits="linux")
     child = _group_payload("child", product=ProductsCore.EDGE, local_changes=0, inherits="parent")
-    unrelated = _group_payload("unrelated", product=ProductsCore.EDGE, local_changes=1)
+    unrelated = _group_payload("unrelated", product=ProductsCore.EDGE, local_changes=1, inherits="linux")
     harness = _Harness(
         (ProductsCore.EDGE, unrelated),
         (ProductsCore.EDGE, child),
         (ProductsCore.EDGE, parent),
+        (ProductsCore.EDGE, ancestor),
+        (ProductsCore.EDGE, root),
     )
     harness.inherit_versions_on_commit = {"parent": ["child"]}
     _install_harness(monkeypatch, harness)
@@ -908,6 +916,161 @@ async def test_commit_and_deploy_all_manifest_scope_includes_only_requested_edge
     assert harness.commit_order == ["parent"]
     assert harness.deploy_order == ["parent", "child"]
     assert "unrelated" not in harness.commit_order
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ancestor_state", ["dirty", "undeployed", "unreadable"])
+async def test_manifest_scope_blocks_unsettled_external_ancestors(monkeypatch: pytest.MonkeyPatch, ancestor_state: str) -> None:
+    """Child-only scope must still require the entire external parent chain to be settled."""
+    root = _group_payload(
+        "root",
+        product=ProductsCore.EDGE,
+        local_changes=int(ancestor_state == "dirty"),
+        deployed="commit-0" if ancestor_state == "undeployed" else "commit-1",
+    )
+    parent = _group_payload("linux", product=ProductsCore.EDGE, local_changes=0, deployed="commit-1", inherits="root")
+    child = _group_payload("appnodes", product=ProductsCore.EDGE, inherits="linux")
+    harness = _Harness(*((ProductsCore.EDGE, item) for item in (child, parent, root)))
+    _install_harness(monkeypatch, harness)
+    if ancestor_state == "unreadable":
+
+        async def _status(*, server_url: str | None = None, **kwargs: object) -> _Counted:
+            if harness._scope_group(server_url) == "root":
+                msg = "Parent status unavailable"
+                raise RuntimeError(msg)
+            return await harness._status(server_url=server_url, **kwargs)
+
+        harness.client.versions.statuses.get_async.side_effect = _status
+
+    planned = await vc.commit_and_deploy_all("test", message="Child scope", product="edge", groups=["appnodes"])
+    reason = "Cannot verify Edge ancestor 'root'" if ancestor_state == "unreadable" else "Edge ancestor 'root' has pending"
+    assert any(reason in block for block in planned["plan"]["blocked_reasons"])
+    with pytest.raises(ValueError, match=reason):
+        await vc.commit_and_deploy_all(
+            "test",
+            message="Child scope",
+            product="edge",
+            groups=["appnodes"],
+            dry_run=False,
+            expected_plan_sha256=planned["plan"]["plan_sha256"],
+        )
+    assert harness.commit_order == harness.deploy_order == []
+    assert harness.push_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_hierarchy", ["missing", "cycle"])
+async def test_manifest_scope_rejects_invalid_full_hierarchy(monkeypatch: pytest.MonkeyPatch, invalid_hierarchy: str) -> None:
+    """Filtering must not hide an actually missing parent or a cycle in its ancestor chain."""
+    child = _group_payload("appnodes", product=ProductsCore.EDGE, inherits="linux")
+    parent = _group_payload(
+        "linux", product=ProductsCore.EDGE, inherits="absent" if invalid_hierarchy == "missing" else "appnodes"
+    )
+    harness = _Harness((ProductsCore.EDGE, child), (ProductsCore.EDGE, parent))
+    _install_harness(monkeypatch, harness)
+    reason = "unknown fleet 'absent'" if invalid_hierarchy == "missing" else "contains a cycle"
+    with pytest.raises(ValueError, match=reason):
+        await vc.commit_and_deploy_all("test", message="Invalid scope", product="edge", groups=["appnodes"])
+    assert harness.commit_order == harness.deploy_order == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ancestor_drift", ["none", "dirty", "redeployed"])
+async def test_manifest_child_only_receipt_uses_full_hierarchy(monkeypatch: pytest.MonkeyPatch, ancestor_drift: str) -> None:
+    """Issue #25: real manifest planning/execution must work with a receipt containing only children."""
+    parent = _group_payload("linux", product=ProductsCore.EDGE, local_changes=0, deployed="commit-1")
+    appnodes = _group_payload("appnodes", product=ProductsCore.EDGE, inherits="linux")
+    dbnodes = _group_payload("dbnodes", product=ProductsCore.EDGE, inherits="linux")
+    descendant = _group_payload(
+        "appchild", product=ProductsCore.EDGE, local_changes=0, deployed="commit-1", inherits="appnodes"
+    )
+    unrelated = _group_payload("unrelated", product=ProductsCore.EDGE, inherits="linux")
+    harness = _Harness(*((ProductsCore.EDGE, item) for item in (descendant, dbnodes, appnodes, unrelated, parent)))
+    harness.inherit_versions_on_commit = {"appnodes": ["appchild"]}
+    _install_harness(monkeypatch, harness)
+    loaded = LoadedConfigManifest.model_construct(
+        manifest=ConfigManifest.model_construct(
+            schema_=1,
+            wave="child-only",
+            source=ManifestSource.model_construct(server="source", product="edge"),
+            content=[
+                ManifestContent.model_construct(group="dbnodes", kind="sources", items=["source-lastlogin"]),
+                ManifestContent.model_construct(group="appnodes", kind="sources", items=["source-net", "source-xml"]),
+            ],
+            targets=["test"],
+        ),
+        path=Path("/safe/child-only.yaml"),
+        relative_path="child-only.yaml",
+        file_sha256="file",
+        manifest_sha256="manifest",
+    )
+
+    def _load(_path: str) -> LoadedConfigManifest:
+        return loaded
+
+    monkeypatch.setattr(manifest_ops, "load_config_manifest", _load)
+    receipt_groups: dict[str, Any] = {}
+    for group_id in ("appnodes", "dbnodes"):
+        diff = await vc.collect_group_git_diff("test", product=ProductsCore.EDGE, group=group_id, diff_line_limit=0)
+        receipt_groups[group_id] = {"pending_diff_sha256": diff["pending_diff_sha256"]}
+    state = ManifestStateStore()
+    state.save_receipt(
+        receipt_sha256="receipt",
+        job_id="apply-job",
+        intent_sha256="intent",
+        manifest_path=loaded.relative_path,
+        created_at="now",
+        payload={
+            "receipt_sha256": "receipt",
+            "intent_sha256": "intent",
+            "manifest_path": loaded.relative_path,
+            "manifest_sha256": loaded.manifest_sha256,
+            "targets": {"test": {"status": "applied", "groups": receipt_groups}},
+        },
+    )
+    planned = await manifest_ops.plan_manifest_commit_deploy(
+        loaded.relative_path,
+        apply_job_id="apply-job",
+        apply_receipt_sha256=None,
+        message="Deploy child-only manifest",
+        push=False,
+        state_store=state,
+    )
+    assert planned["blocked_target_count"] == 0
+    target_plan = planned["targets"][0]
+    assert [(item["group"], item["action"]) for item in target_plan["ordered_actions"]] == [
+        ("appnodes", "commit_and_deploy"),
+        ("appchild", "deploy_inherited"),
+        ("dbnodes", "commit_and_deploy"),
+    ]
+    assert target_plan["summary"]["target_count"] == 3
+    assert harness.commit_order == harness.deploy_order == []
+    if ancestor_drift == "dirty":
+        parent["git"]["localChanges"] = 1
+    elif ancestor_drift == "redeployed":
+        parent["git"]["commit"] = parent["configVersion"] = "commit-new"
+
+    context = MagicMock(job_id="deploy-job")
+    result = await manifest_ops.execute_manifest_commit_deploy(
+        loaded.relative_path,
+        expected_plan_sha256=planned["plan_sha256"],
+        message="Deploy child-only manifest",
+        push=False,
+        state_store=state,
+        job_context=context,
+        on_drift="skip",
+    )
+    assert harness.push_count == 0
+    if ancestor_drift == "none":
+        assert result["status"] == "completed"
+        assert harness.commit_order == ["appnodes", "dbnodes"]
+        assert harness.deploy_order == ["appnodes", "appchild", "dbnodes"]
+        assert context.update_progress.call_args.args[0]["completed"] == 3
+    else:
+        assert result["status"] == "partial_skip"
+        assert result["skipped_targets"] == ["test"]
+        assert result["failed_targets"] == []
+        assert harness.commit_order == harness.deploy_order == []
 
 
 @pytest.mark.asyncio

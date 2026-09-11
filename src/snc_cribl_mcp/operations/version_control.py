@@ -667,12 +667,15 @@ def _blocked_edge_ancestor(
 async def _edge_ancestor_preflight(
     resolved: ResolvedControlPlane,
     target: GroupTarget,
+    *,
+    edge_targets: dict[str, GroupTarget] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Inspect a targeted subfleet's ancestors and require them to be settled first."""
     if target.product != ProductsCore.EDGE or target.inherits is None:
         return [], []
 
-    edge_targets = {item.group_id: item for item in await _list_targets(resolved, (ProductsCore.EDGE,))}
+    if edge_targets is None:
+        edge_targets = {item.group_id: item for item in await _list_targets(resolved, (ProductsCore.EDGE,))}
     ancestors: list[dict[str, Any]] = []
     blocked_reasons: list[str] = []
     seen = {target.group_id}
@@ -706,6 +709,29 @@ async def _edge_ancestor_preflight(
 
     ancestors.reverse()
     return ancestors, blocked_reasons
+
+
+async def _manifest_ancestor_preflight(
+    resolved: ResolvedControlPlane,
+    *,
+    targets: list[GroupTarget],
+    inventory: list[GroupTarget],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Guard ancestors outside the selected subtrees without adding them to deployment scope."""
+    edge_targets = {target.group_id: target for target in inventory if target.product == ProductsCore.EDGE}
+    selected_ids = {target.group_id for target in targets if target.product == ProductsCore.EDGE}
+    ancestors: dict[str, dict[str, Any]] = {}
+    blocked_reasons: list[str] = []
+    for target in targets:
+        if target.product != ProductsCore.EDGE or target.inherits is None or target.inherits in selected_ids:
+            continue
+        if target.inherits in ancestors:
+            continue
+        inspected, blocked = await _edge_ancestor_preflight(resolved, target, edge_targets=edge_targets)
+        for ancestor in inspected:
+            ancestors[str(ancestor["target"]["id"])] = ancestor
+        blocked_reasons.extend(blocked)
+    return [ancestors[target.group_id] for target in edge_targets.values() if target.group_id in ancestors], blocked_reasons
 
 
 def _error_payload(exc: Exception) -> dict[str, Any]:
@@ -1446,11 +1472,13 @@ async def _build_all_plan(
     groups: list[str] | None = None,
 ) -> tuple[dict[str, Any], list[GroupTarget]]:
     """Build a deterministic plan for every selected deployment target."""
-    all_targets = await _list_targets(resolved, _selected_products(product))
-    targets = _deployment_order(_manifest_target_closure(all_targets, groups))
+    # Validate and order the complete hierarchy before restricting mutation scope.
+    # An unchanged ancestor can be absent from the manifest, but not from the graph.
+    all_targets = _deployment_order(await _list_targets(resolved, _selected_products(product)))
+    targets = _manifest_target_closure(all_targets, groups)
     leader_status = await _global_status(resolved)
     git_info = await _git_info(resolved) if push else None
-    blocked_reasons: list[str] = []
+    edge_ancestors, blocked_reasons = await _manifest_ancestor_preflight(resolved, targets=targets, inventory=all_targets)
 
     target_plans: list[dict[str, Any]] = []
     edge_targets = {target.group_id: target for target in targets if target.product == ProductsCore.EDGE}
@@ -1508,6 +1536,7 @@ async def _build_all_plan(
         "push_action": push_action,
         "stop_on_error": stop_on_error,
         "requested_groups": sorted(groups) if groups is not None else None,
+        "edge_ancestors": edge_ancestors,
         "leader_git": _compact_git_status(leader_status),
         "git_integration": git_info,
         "targets": target_plans,

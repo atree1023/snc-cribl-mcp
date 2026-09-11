@@ -98,7 +98,7 @@ uv run pyright                             # then type check
 - Review plans return one capped changed-path preview plus complete path/diff digests. Execution results must not embed full plans, diffs, changed-path arrays, or raw SDK commit/deployment responses; use `get_group_git_diff` for scoped drill-down and `get_leader_git_diff` for `local/cribl/groups.yml`.
 - Group/fleet commits and diffs use a group-scoped SDK client. Deployments use an immutable commit hash, then commit only `local/cribl/groups.yml` at Leader scope to record the active deployment version.
 - `commit_and_deploy_all` commits every selected target before starting deployments. Edge targets are topologically ordered parent-first; clean descendants of a planned ancestor commit use `deploy_inherited`, and descendants are re-evaluated after each parent commit so inherited changes are included. Commit audit line counts come from the drift-checked pre-commit diff rather than the SDK commit summary. A push occurs only if the workflow has no errors.
-- Targeted Edge subfleet mutations inspect their ancestor chain and block while any parent has uncommitted or undeployed configuration.
+- Targeted Edge subfleet mutations inspect their ancestor chain and block while any parent has uncommitted or undeployed configuration. Manifest commit/deploy validates the full fleet hierarchy before selecting affected subtrees; external ancestors remain read-only preflight dependencies whose state is included in the plan digest.
 - Deployment completion confirms the Leader's `configVersion`, not immediate convergence of every worker/Edge node; preserve and report rollout node counts for follow-up status checks.
 
 ## Adding a New Tool
