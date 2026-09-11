@@ -14,9 +14,14 @@ from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import unquote
 
 import pytest
+from cribl_control_plane.errors import CriblControlPlaneError
+from cribl_control_plane.models.countedstring import CountedString
 from cribl_control_plane.models.productscore import ProductsCore
+from cribl_control_plane.models.security import Security
+from pytest_httpx import HTTPXMock
 
-from snc_cribl_mcp.client.cribl_client import ResolvedControlPlane
+from snc_cribl_mcp.client.cribl_client import ResolvedControlPlane, create_control_plane
+from snc_cribl_mcp.config import CriblConfig
 from snc_cribl_mcp.models.config_manifest import ConfigManifest, LoadedConfigManifest, ManifestContent, ManifestSource
 from snc_cribl_mcp.operations import config_manifest as manifest_ops
 from snc_cribl_mcp.operations import version_control as vc
@@ -316,12 +321,12 @@ class _Harness:
     async def _git_info(self, **_: object) -> _Counted:
         return _Counted({"remote": self.remote, "versioning": self.versioning})
 
-    async def _push(self, **_: object) -> _Counted:
+    async def _push(self, **_: object) -> CountedString:
         if self.push_error is not None:
             raise self.push_error
         self.push_count += 1
         self.global_ahead = 0
-        return _Counted({"result": "pushed"})
+        return CountedString(count=1, items=["raw remote push output"])
 
 
 def _install_harness(monkeypatch: pytest.MonkeyPatch, harness: _Harness) -> None:
@@ -975,9 +980,20 @@ async def test_manifest_scope_rejects_invalid_full_hierarchy(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ancestor_drift", ["none", "dirty", "redeployed"])
-async def test_manifest_child_only_receipt_uses_full_hierarchy(monkeypatch: pytest.MonkeyPatch, ancestor_drift: str) -> None:
-    """Issue #25: real manifest planning/execution must work with a receipt containing only children."""
+@pytest.mark.parametrize(
+    ("ancestor_drift", "push_outcome"),
+    [
+        ("none", "not_requested"),
+        ("dirty", "not_requested"),
+        ("redeployed", "not_requested"),
+        ("none", "pushed"),
+        ("none", "failed"),
+    ],
+)
+async def test_manifest_child_only_receipt_uses_full_hierarchy(  # noqa: PLR0915 - end-to-end receipt, deploy, and push outcomes
+    monkeypatch: pytest.MonkeyPatch, ancestor_drift: str, push_outcome: str
+) -> None:
+    """Child-only manifests must preserve hierarchy guards and report actual push outcomes (#25/#26)."""
     parent = _group_payload("linux", product=ProductsCore.EDGE, local_changes=0, deployed="commit-1")
     appnodes = _group_payload("appnodes", product=ProductsCore.EDGE, inherits="linux")
     dbnodes = _group_payload("dbnodes", product=ProductsCore.EDGE, inherits="linux")
@@ -987,6 +1003,9 @@ async def test_manifest_child_only_receipt_uses_full_hierarchy(monkeypatch: pyte
     unrelated = _group_payload("unrelated", product=ProductsCore.EDGE, inherits="linux")
     harness = _Harness(*((ProductsCore.EDGE, item) for item in (descendant, dbnodes, appnodes, unrelated, parent)))
     harness.inherit_versions_on_commit = {"appnodes": ["appchild"]}
+    push_requested = push_outcome != "not_requested"
+    if push_outcome == "failed":
+        harness.push_error = RuntimeError("remote rejected")
     _install_harness(monkeypatch, harness)
     loaded = LoadedConfigManifest.model_construct(
         manifest=ConfigManifest.model_construct(
@@ -1033,7 +1052,7 @@ async def test_manifest_child_only_receipt_uses_full_hierarchy(monkeypatch: pyte
         apply_job_id="apply-job",
         apply_receipt_sha256=None,
         message="Deploy child-only manifest",
-        push=False,
+        push=push_requested,
         state_store=state,
     )
     assert planned["blocked_target_count"] == 0
@@ -1055,22 +1074,37 @@ async def test_manifest_child_only_receipt_uses_full_hierarchy(monkeypatch: pyte
         loaded.relative_path,
         expected_plan_sha256=planned["plan_sha256"],
         message="Deploy child-only manifest",
-        push=False,
+        push=push_requested,
         state_store=state,
         job_context=context,
         on_drift="skip",
     )
-    assert harness.push_count == 0
+    assert "raw remote push output" not in json.dumps(result)
     if ancestor_drift == "none":
-        assert result["status"] == "completed"
+        assert result["status"] == ("partial_failure" if push_outcome == "failed" else "completed")
+        assert result["failed_targets"] == (["test"] if push_outcome == "failed" else [])
         assert harness.commit_order == ["appnodes", "dbnodes"]
         assert harness.deploy_order == ["appnodes", "appchild", "dbnodes"]
         assert context.update_progress.call_args.args[0]["completed"] == 3
+        detail = context.set_target_detail.call_args.args[1]
+        assert detail["push"] == {"requested": push_requested, "status": push_outcome}
+        assert "raw remote push output" not in json.dumps(detail)
+        assert harness.client.versions.commits.push_async.await_count == int(push_requested)
+        if push_outcome == "failed":
+            assert detail["errors"] == [{"phase": "push", "error": {"type": "RuntimeError", "message": "remote rejected"}}]
+            assert harness.global_ahead > 0
+        else:
+            assert detail["errors"] == []
+        if push_outcome == "pushed":
+            assert harness.global_ahead == 0
+            followup = await vc.push_config_git("test")
+            assert followup["plan"]["action"] == "noop"
     else:
         assert result["status"] == "partial_skip"
         assert result["skipped_targets"] == ["test"]
         assert result["failed_targets"] == []
         assert harness.commit_order == harness.deploy_order == []
+        assert harness.push_count == 0
 
 
 @pytest.mark.asyncio
@@ -1200,6 +1234,71 @@ async def test_commit_and_deploy_all_skips_descendant_deploy_after_parent_deploy
     assert child_result["status"] == "skipped_dependency"
     assert child_result["blocked_by"] == "parent"
     assert harness.deploy_order == ["sibling"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("messages", [["raw remote push output"], []])
+async def test_push_accepts_real_sdk_string_response(httpx_mock: HTTPXMock, messages: list[str]) -> None:
+    """The installed SDK must parse successful HTTP push responses without model-item serialization."""
+    config = CriblConfig(url="https://cribl.example.test/api/v1", username="user", password="pass", timeout_ms=1000)
+    security = Security(bearer_auth="test-token")
+    httpx_mock.add_response(
+        method="POST",
+        url="https://cribl.example.test/api/v1/version/push",
+        json={"count": len(messages), "items": messages},
+    )
+    async with create_control_plane(config, security=security) as client:
+        resolved = ResolvedControlPlane(server_name="test", config=config, client=client, security=security)
+        await vc._push(resolved)
+    assert len(httpx_mock.get_requests()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 500])
+async def test_push_preserves_real_sdk_errors(httpx_mock: HTTPXMock, status_code: int) -> None:
+    """Rejected and failed pushes must still propagate the SDK error instead of reporting success."""
+    config = CriblConfig(url="https://cribl.example.test/api/v1", username="user", password="pass", timeout_ms=1000)
+    security = Security(bearer_auth="test-token")
+    httpx_mock.add_response(
+        method="POST",
+        url="https://cribl.example.test/api/v1/version/push",
+        status_code=status_code,
+        json={"message": "remote rejected"},
+    )
+    async with create_control_plane(config, security=security) as client:
+        resolved = ResolvedControlPlane(server_name="test", config=config, client=client, security=security)
+        with pytest.raises(CriblControlPlaneError, match="remote rejected"):
+            await vc._push(resolved)
+    assert len(httpx_mock.get_requests()) == 1
+
+
+@pytest.mark.asyncio
+async def test_commit_group_reports_string_push_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A commit-only workflow must mark a successful CountedString push as completed."""
+    harness = _Harness((ProductsCore.STREAM, _group_payload("default", product=ProductsCore.STREAM)))
+    _install_harness(monkeypatch, harness)
+    planned = await vc.commit_group_config(
+        "test",
+        product=ProductsCore.STREAM,
+        group="default",
+        message="Commit and push",
+        push=True,
+    )
+    result = await vc.commit_group_config(
+        "test",
+        product=ProductsCore.STREAM,
+        group="default",
+        message="Commit and push",
+        push=True,
+        dry_run=False,
+        expected_plan_sha256=planned["plan"]["plan_sha256"],
+    )
+    assert result["status"] == "committed"
+    assert result["push"] == {"requested": True, "status": "pushed"}
+    assert result["completed_steps"] == ["group_commit", "push"]
+    assert "raw remote push output" not in json.dumps(result)
+    assert harness.push_count == 1
+    assert harness.global_ahead == 0
 
 
 @pytest.mark.asyncio

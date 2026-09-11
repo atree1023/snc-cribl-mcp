@@ -899,10 +899,11 @@ async def _commit_leader_metadata(resolved: ResolvedControlPlane, *, message: st
     }
 
 
-async def _push(resolved: ResolvedControlPlane) -> dict[str, Any]:
+async def _push(resolved: ResolvedControlPlane) -> None:
     """Push committed Leader configuration changes to the configured remote."""
-    response = await resolved.client.versions.commits.push_async(timeout_ms=resolved.config.timeout_ms)
-    return _serialize_counted_response(response)
+    # The SDK validates the HTTP response and returns CountedString, not model
+    # items. Its output is unused; serialization must not turn success into failure.
+    await resolved.client.versions.commits.push_async(timeout_ms=resolved.config.timeout_ms)
 
 
 async def _guard_predeploy_leader_state(resolved: ResolvedControlPlane) -> dict[str, Any]:
@@ -1175,7 +1176,8 @@ async def commit_group_config(
             files=files,
         )
         try:
-            push_response = await _push(resolved) if push else None
+            if push:
+                await _push(resolved)
         except Exception as exc:  # noqa: BLE001 - the commit already succeeded
             return {
                 "status": "partial_failure",
@@ -1201,7 +1203,7 @@ async def commit_group_config(
                 version=version,
                 changes=cast("dict[str, Any]", plan["changes"]),
             ),
-            "push": _push_result(requested=push, pushed=push_response is not None),
+            "push": _push_result(requested=push, pushed=push),
             "completed_steps": ["group_commit", *(["push"] if push else [])],
         }
 

@@ -75,6 +75,7 @@ uv run pyright                             # then type check
 - `get_pack` is the single Pack inspection surface: without `kind`, it returns a bounded summary of Pack metadata, sources, destinations, pipelines, routes, settings, and knowledge; with a concrete `kind`, `object_id`, and `detail`, it drills into a Pack section or object. Use `cursor` and `limit` only with concrete section/category kinds.
 - Prefer SDK Pack subresources for `sources`, `destinations`, `pipelines`, and `routes`; use read-only direct HTTP against `/p/{pack}/...` for Pack knowledge/settings categories that are missing from the installed SDK.
 - SDK 0.11 list responses can wrap counted payloads under `result`; exhaust `next()` through the shared pagination helper for top-level Packs, Pack subresources, nodes, groups, and version-control target discovery.
+- SDK `versions.commits.push_async` returns `CountedString` with string items. Successful completion of the SDK call signals push success; preserve raised errors and discard the unused raw output without model-item serialization.
 - Keep the preview `cribl-control-plane` dependency on the validated `>=0.11.0,<0.12` range until the next generated minor line receives the same contract and live-tool validation pass.
 
 **Consolidated config object tooling:**

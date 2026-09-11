@@ -59,6 +59,7 @@ Before writing code:
 - Distributed environments require `/m/{group_id}/` URL scoping
 - Pack management tools support distributed scoping with `product` plus `group`; resolve the group selector before calling SDK Pack methods with `server_url`.
 - SDK 0.11 paginated list responses carry counted collections under `response.result`; shared response helpers must accept wrapped and legacy direct counted shapes, exhaust `response.next()`, and reject unknown shapes instead of returning silent empty results.
+- SDK `versions.commits.push_async` returns `CountedString` with string items. Await the SDK call and propagate errors; do not pass its response through model-item serialization or expose raw push output.
 - Keep `cribl-control-plane` constrained to the validated `>=0.11.0,<0.12` line; the SDK is a Preview feature and generated minor releases can contain breaking model and response changes.
 - `copy_resource_config` defaults to `dry_run=true` and requires the returned `plan_sha256` as `expected_plan_sha256` for exposed execution. Its drift digest excludes runtime-only status metadata while preserving write-relevant config state. Semantically identical targets are skipped; real updates include bounded added/changed/removed config-path summaries.
 - Version-control mutations default to `dry_run=true` and require the returned `plan_sha256` as `expected_plan_sha256` for execution. Group/fleet commits and diffs are scoped under `/m/{group_id}`; deploy an immutable commit and then commit only `local/cribl/groups.yml` at Leader scope.
