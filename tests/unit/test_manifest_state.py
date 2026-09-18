@@ -41,3 +41,23 @@ def test_plans_and_receipts_survive_store_restart(tmp_path: Path) -> None:
         restored.get_receipt()
     with pytest.raises(ValueError, match="Unknown"):
         restored.get_plan("missing")
+
+
+def test_latest_receipt_requires_same_path_and_source_intent(tmp_path: Path) -> None:
+    """New plans must never adopt another manifest's or source snapshot's writes."""
+    store = ManifestStateStore(tmp_path / "state.sqlite3")
+    assert store.latest_receipt(manifest_path="wave.yaml", intent_sha256="intent") is None
+    for index, (path, intent) in enumerate(
+        [("wave.yaml", "intent"), ("wave.yaml", "intent"), ("wave.yaml", "changed-source"), ("other.yaml", "intent")]
+    ):
+        store.save_receipt(
+            receipt_sha256=f"receipt-{index}",
+            job_id=f"job-{index}",
+            intent_sha256=intent,
+            manifest_path=path,
+            created_at="same-timestamp",
+            payload={"receipt_sha256": f"receipt-{index}"},
+        )
+    store.close()
+    assert store.latest_receipt(manifest_path="wave.yaml", intent_sha256="intent") == {"receipt_sha256": "receipt-1"}
+    assert store.latest_receipt(manifest_path="wave.yaml", intent_sha256="missing") is None

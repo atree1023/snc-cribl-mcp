@@ -9,9 +9,13 @@ targets: [golden.oak.new]
 fleets:
   - id: linux
     name: Linux
+    isSearch: false
+    streamtags: [production]
   - id: web
     name: Web servers
     inherits: linux
+    isSearch: false
+    streamtags: [web]
 # Omit content for fleet-only or mapping-only provisioning.
 content:
   - group: web

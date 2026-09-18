@@ -908,6 +908,30 @@ async def _push(resolved: ResolvedControlPlane) -> None:
     await resolved.client.versions.commits.push_async(timeout_ms=resolved.config.timeout_ms)
 
 
+async def _push_with_readback(resolved: ResolvedControlPlane) -> dict[str, Any]:
+    """Record API push success separately from possibly cached Leader Git status."""
+    await _push(resolved)
+    result: dict[str, Any] = {
+        **_push_result(requested=True, pushed=True),
+        "remote_sync_verified": False,
+        "verification_source": "leader_api",
+    }
+    try:
+        status = await _global_status(resolved)
+        result["leader_git"] = {key: status[key] for key in ("ahead", "behind", "conflict_count")}
+        if status["behind"] or status["conflict_count"]:
+            result["verification"] = "api_reports_divergence"
+        elif status["ahead"]:
+            result["verification"] = "api_reports_ahead"
+        else:
+            result["verification"] = "api_reports_synced"
+        result["note"] = "The push API succeeded. Leader Git status may be cached; it does not independently verify the remote."
+    except Exception as exc:  # noqa: BLE001 - failed observation must not turn a successful push into a failed mutation
+        result["verification"] = "unavailable"
+        result["verification_error"] = _error_payload(exc)
+    return result
+
+
 async def _guard_predeploy_leader_state(resolved: ResolvedControlPlane) -> dict[str, Any]:
     """Recheck Leader state immediately before deployment begins."""
     status = await _global_status(resolved)
@@ -1970,11 +1994,12 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
 
         push_attempted = False
         pushed = False
+        push_readback: dict[str, Any] | None = None
         if plan["push_action"] == "push" and not errors:
             await _event("phase", phase="push")
             try:
                 push_attempted = True
-                await _push(resolved)
+                push_readback = await _push_with_readback(resolved)
                 pushed = True
             except Exception as exc:  # noqa: BLE001 - commits/deployments already occurred
                 errors.append({"phase": "push", "error": _error_payload(exc)})
@@ -2001,7 +2026,8 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
             "deploy_results": deploy_results,
             "leader_commit": leader_commit,
             "provisioning_leader_commit": provisioning_commit,
-            "push": _push_result(
+            "push": push_readback
+            or _push_result(
                 requested=plan["push_action"] == "push",
                 pushed=pushed,
                 attempted=push_attempted,
@@ -2051,13 +2077,13 @@ async def push_config_git(
                 "executed_plan_sha256": plan["plan_sha256"],
                 "push": _push_result(requested=False),
             }
-        await _push(resolved)
+        push_readback = await _push_with_readback(resolved)
         return {
             "status": "pushed",
             "dry_run": False,
             "action": "push",
             "executed_plan_sha256": plan["plan_sha256"],
-            "push": _push_result(requested=True, pushed=True),
+            "push": push_readback,
         }
 
 

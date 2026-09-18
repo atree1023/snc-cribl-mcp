@@ -1090,7 +1090,11 @@ async def test_manifest_child_only_receipt_uses_full_hierarchy(  # noqa: PLR0915
         assert harness.deploy_order == ["appnodes", "appchild", "dbnodes"]
         assert context.update_progress.call_args.args[0]["completed"] == 3
         detail = context.set_target_detail.call_args.args[1]
-        assert detail["push"] == {"requested": push_requested, "status": push_outcome}
+        assert detail["push"]["requested"] is push_requested
+        assert detail["push"]["status"] == push_outcome
+        if push_outcome == "pushed":
+            assert detail["push"]["verification"] == "api_reports_synced"
+            assert detail["push"]["remote_sync_verified"] is False
         assert "raw remote push output" not in json.dumps(detail)
         assert harness.client.versions.commits.push_async.await_count == int(push_requested)
         if push_outcome == "failed":
@@ -1320,7 +1324,10 @@ async def test_sdk_commit_deploy_keeps_remote_push_separate(
         plan = await operation("test", **kwargs)
         assert mutations == []
         result = await operation("test", **kwargs, dry_run=False, expected_plan_sha256=plan["plan"]["plan_sha256"])
-        assert result["push"] == {"requested": push, "status": "pushed" if push else "not_requested"}
+        assert result["push"]["requested"] is push
+        assert result["push"]["status"] == ("pushed" if push else "not_requested")
+        if push and all_targets:
+            assert result["push"]["verification"] == "api_reports_synced"
         assert harness.commit_order == ["linux"]
         assert harness.deploy_order == ["linux"]
         assert harness.push_count == int(push)
@@ -1765,3 +1772,31 @@ async def test_explicit_leader_file_read_and_commit_preserve_unselected_changes(
     assert result["push"]["status"] == "pushed"
     harness.client.versions.commits.create_async.assert_awaited_once_with(message="Settings", files=[path], timeout_ms=1000)
     assert harness.deploy_order == []
+
+
+@pytest.mark.parametrize("readback", ["ahead", "unavailable", "diverged"])
+async def test_push_success_is_separate_from_cached_or_failed_readback(monkeypatch: pytest.MonkeyPatch, readback: str) -> None:
+    """A push acknowledged by Cribl must not fail or retry because its status read is stale."""
+    harness = _Harness()
+    harness.global_ahead = 3
+    _install_harness(monkeypatch, harness)
+    plan = await vc.push_config_git("test")
+
+    async def _push(**_: object) -> CountedString:
+        harness.push_count += 1
+        if readback == "unavailable":
+            harness.client.versions.statuses.get_async.side_effect = RuntimeError("status unavailable")
+        elif readback == "diverged":
+            harness.global_behind = 1
+        return CountedString(count=1, items=["private push output"])
+
+    harness.client.versions.commits.push_async.side_effect = _push
+    result = await vc.push_config_git("test", dry_run=False, expected_plan_sha256=plan["plan"]["plan_sha256"])
+    assert result["status"] == result["push"]["status"] == "pushed"
+    assert (
+        result["push"]["verification"]
+        == {"ahead": "api_reports_ahead", "unavailable": "unavailable", "diverged": "api_reports_divergence"}[readback]
+    )
+    assert result["push"]["remote_sync_verified"] is False
+    assert harness.push_count == 1
+    assert "private push output" not in json.dumps(result)

@@ -382,7 +382,8 @@ Validates global Cribl system settings between two configured leaders.
 
 Creates an Edge fleet or subfleet using the SDK. Pass `fleet: {id: "linux", name: "Linux"}` for a fleet,
 or `fleet: {id: "web", inherits: "linux"}` for a subfleet. Optional fields are `name`, `description`, and
-`workerRemoteAccess`. `inherits` is an exact parent ID. Existing matching fleets are noops; conflicting
+`workerRemoteAccess`, `isSearch` (boolean), and `streamtags` (string list). Explicit `false` and empty tag
+lists are preserved. `inherits` is an exact parent ID. Existing matching fleets are noops; conflicting
 settings, missing parents, cycles, and parents with pending or undeployed changes block creation.
 
 Parent readiness uses the target Leader's explicit `git.commit` and `git.localChanges` metadata.
@@ -443,8 +444,8 @@ wave: edge-rollout
 source: {server: golden.oak, product: edge}
 targets: [golden.oak.new]
 fleets:
-  - {id: linux, name: Linux}
-  - {id: web, inherits: linux}
+  - {id: linux, name: Linux, isSearch: false, streamtags: [production]}
+  - {id: web, inherits: linux, isSearch: false, streamtags: [web]}
 content:
   - {group: web, kind: destinations, items: [archive]}
 fleet_mappings: [production]
@@ -456,6 +457,19 @@ on each target. Apply preflight requires the affected Leader files to have no pr
 After applying, the durable receipt guards their complete diffs along with every affected fleet diff.
 `commit_and_deploy_manifest` reviews and commits only those exact Leader files, then deploys fleets in
 inheritance order. A manifest containing only `fleet_mappings` does not deploy any fleets.
+
+Set `isSearch` and `streamtags` directly in fleet declarations; no follow-up group copy is needed.
+`configVersion`, `git`, and `lookupDeployments` are deployment state and are not creation inputs.
+In particular, target deployment versions must not be copied from the source Leader.
+
+After a partial apply, use `resume_job_id` with the original execution parameters, or review a new
+dry-run for the same manifest and source snapshot. The new plan reuses the latest matching durable
+receipt and reports `prior_apply_guard` per target. Receipts guard complete Leader-file and fleet
+diffs, missing fleets, creation ownership, and target-local versions. Matching receipts allow pending
+changes produced by the prior apply and undeployed parents it created. External parents, intervening
+edits or version changes, Git conflicts, remote-behind state, and unreadable guards still block.
+Partial receipts permit retry only; commit/deploy requires successful application. A process interrupted
+before its target receipt was captured has no ownership proof and still fails closed.
 
 #### `validate_config_manifest`
 
@@ -477,6 +491,7 @@ Commits and deploys a prior manifest application across its successful target le
 - **Scope:** Commits manifest groups and receipt-guarded provisioning files (`local/cribl/groups.yml` and/or `local/cribl/fleet-mappings.yml`). Selected Leader files are committed first, then fleet config and deployment metadata. Mappings-only manifests commit their Leader file without deploying unrelated fleets. For Edge, the full fleet hierarchy is validated before selecting manifest fleets and affected descendants in parent-first order. Ancestors outside that scope are checked for pending configuration and included in the plan's drift guard, but are not committed or deployed. Child-only manifests can proceed when those ancestors are already committed and deployed.
 - **Review contract:** Dry-run and execution use a separate commit/deploy `plan_sha256`, keeping replication approval distinct from deployment approval. Plans expose ordered per-fleet actions, `push_action`, and Leader blocker paths. Targets run concurrently, while each leader's hierarchy remains serialized.
 - **Progress and outcomes:** Progress uses `unit: fleets` and reports the current leader, product, fleet, and phase while preserving parent-before-child order. `on_drift="skip"` applies to receipt, group/fleet, and Leader `groups.yml` blockers; skipped leaders produce `partial_skip`, not `partial_failure`. `push=false` is carried through both plan and execution and is guarded against an unexpected inner push request.
+- **Remote push:** `push=true` pushes once after each Leader's commit/deploy succeeds; a failed Leader does not prevent successful peers from pushing. The aggregate result includes `push_summary` and a capped `push_results` preview. Target detail records API push success separately from `verification` (`api_reports_synced`, `api_reports_ahead`, `api_reports_divergence`, or `unavailable`). Cribl can cache Git status after a successful push, so readback does not trigger another push or turn API success into failure. `remote_sync_verified=false` explicitly distinguishes this readback from an independent remote check.
 
 #### `get_group_git_status`
 

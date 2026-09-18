@@ -17,6 +17,8 @@ class EdgeFleet(BaseModel):
     description: str | None = Field(default=None, max_length=4096)
     inherits: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]+$")
     worker_remote_access: bool | None = Field(default=None, alias="workerRemoteAccess")
+    is_search: bool | None = Field(default=None, alias="isSearch")
+    streamtags: list[str] | None = None
 
     def payload(self) -> dict[str, Any]:
         """Return only writable SDK fields, with an explicit Edge type."""

@@ -152,10 +152,12 @@ def mapping_dependencies(item: dict[str, Any]) -> tuple[set[str], int]:
     return dependencies, dynamic
 
 
-async def _parent_readiness(resolved: ResolvedControlPlane, target: GroupTarget) -> tuple[dict[str, Any], list[str]]:
+async def _parent_readiness(
+    resolved: ResolvedControlPlane, target: GroupTarget, *, receipt_owned: bool = False, receipt_guarded_changes: bool = False
+) -> tuple[dict[str, Any], list[str]]:
     """Inspect target-local parent state and explain every blocking signal."""
     label = f"Parent fleet '{target.group_id}'"
-    if target.committed_version is None:
+    if target.committed_version is None and not receipt_owned:
         return {"status": "unavailable", "committed_version": None, "deployed_version": target.config_version}, [
             f"{label}: committed_version unavailable despite requesting git.commit; cannot verify deployment readiness."
         ]
@@ -175,9 +177,9 @@ async def _parent_readiness(resolved: ResolvedControlPlane, target: GroupTarget)
         )
     }
     blocked: list[str] = []
-    if not status["clean"] or status["local_changes"]:
+    if (not status["clean"] or status["local_changes"]) and not (receipt_owned or receipt_guarded_changes):
         blocked.append(f"{label}: local_changes={status['local_changes']}, clean={status['clean']}; commit pending changes.")
-    if status["deployment_pending"]:
+    if status["deployment_pending"] and not receipt_owned:
         blocked.append(
             f"{label}: deployment_pending=true (committed_version={status['committed_version']}, "
             f"deployed_version={status['deployed_version']}); deploy the parent configuration."
@@ -187,6 +189,8 @@ async def _parent_readiness(resolved: ResolvedControlPlane, target: GroupTarget)
     if status["behind"]:
         blocked.append(f"{label}: behind={status['behind']}; reconcile the target Leader's remote Git state.")
     # ahead is informational: local commit/deploy and remote push are separate.
+    if receipt_owned:
+        snapshot["receipt_owned"] = True
     return snapshot, blocked
 
 
@@ -195,6 +199,8 @@ async def provision_preflight(
     *,
     fleets: list[EdgeFleet],
     mappings: list[dict[str, Any]],
+    receipt_owned_fleets: set[str] | None = None,
+    receipt_guarded_groups: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     """Validate fleet hierarchy, parent readiness, mapping destinations, and Git."""
     inventory = await fleet_inventory(resolved)
@@ -211,7 +217,12 @@ async def provision_preflight(
         parent = fleet.inherits
         while parent and parent in existing and parent not in parents:
             target = GroupTarget.from_payload(ProductsCore.EDGE, existing[parent])
-            parents[parent], reasons = await _parent_readiness(resolved, target)
+            parents[parent], reasons = await _parent_readiness(
+                resolved,
+                target,
+                receipt_owned=parent in (receipt_owned_fleets or set()),
+                receipt_guarded_changes=parent in (receipt_guarded_groups or set()),
+            )
             blocked.extend(reasons)
             parent = target.inherits
     dynamic = 0

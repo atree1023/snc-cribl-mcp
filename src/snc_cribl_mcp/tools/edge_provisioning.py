@@ -19,7 +19,8 @@ def register(app: FastMCP, *, job_manager: VersionControlJobManager) -> None:
         name="create_edge_fleet",
         description=(
             "Create a Cribl Edge fleet, or a subfleet by setting fleet.inherits to its parent's exact ID. "
-            "fleet accepts id, name, description, inherits, and workerRemoteAccess. Existing matching fleets are "
+            "fleet accepts id, name, description, inherits, workerRemoteAccess, isSearch, and streamtags. "
+            "Existing matching fleets are "
             "noops; different settings are blocked. Defaults to dry_run=true. Review plan.plan_sha256, then pass "
             "it as expected_plan_sha256 with dry_run=false. Execution returns a job_id; poll "
             "get_config_deployment_job. Changes remain uncommitted. Also supported by manifest fleets declarations."

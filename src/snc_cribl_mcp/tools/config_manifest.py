@@ -122,11 +122,14 @@ def register(  # noqa: C901, PLR0915
         name="replicate_config_manifest",
         description=(
             "Plan or apply a strict schema-1 YAML manifest to many configured Leaders. Edge manifests support fleets "
-            "(typed creation declarations with id and optional inherits) and fleet_mappings (source ruleset IDs), "
+            "(typed creation declarations including inherits, isSearch, and streamtags) "
+            "and fleet_mappings (source ruleset IDs), "
             "alongside group-scoped content. Fleets are created parent-first, content copied next, mappings last. "
             "Ruleset copies preserve target activation; updating an active ruleset changes live assignment rules. "
             "The source is snapshotted once, each target has an independent drift guard, "
             "and execution emits a durable apply receipt required by commit_and_deploy_manifest. "
+            "Retries reuse matching prior receipts for the same manifest and source, "
+            "including their own new undeployed parents. "
             f"{_PLAN_GUIDANCE}"
         ),
         annotations={
@@ -287,6 +290,8 @@ def register(  # noqa: C901, PLR0915
             "Plan or commit and deploy the groups and receipt-selected Leader provisioning files changed by an apply "
             "receipt. Edge descendants are included in parent-before-child order so inherited changes are captured. "
             "Leader provisioning files are committed before fleets; mappings-only manifests deploy no fleets. "
+            "push=true pushes once per successful Leader and returns per-Leader outcomes and API readback. "
+            "Readback may be cached and does not independently verify remote synchronization. "
             "The operation refuses group or Leader-file diffs that no longer match the apply receipt. "
             f"{_PLAN_GUIDANCE}"
         ),

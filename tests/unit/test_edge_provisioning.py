@@ -90,6 +90,9 @@ class _EdgeHarness(_Harness):
         self.events.append(f"fleet:{id}")
         item = _group_payload(id, product=ProductsCore.EDGE, inherits=kwargs.get("inherits"))
         item.update({key: value for key, value in kwargs.items() if key in {"name", "description"}})
+        for key, alias in (("is_search", "isSearch"), ("streamtags", "streamtags")):
+            if key in kwargs:
+                item[alias] = kwargs[key]
         self.states[ProductsCore.EDGE, id] = item
         self.global_dirty = True
         return _Counted(item)
@@ -130,6 +133,23 @@ class _EdgeHarness(_Harness):
         return result
 
     async def _diff(self, *, filename: str | None = None, server_url: str | None = None, **kwargs: Any) -> _Counted:  # noqa: ANN401
+        if server_url is None and filename == edge.FLEET_FILE:
+            groups = {
+                fleet_id: {key: value for key, value in state.items() if key not in {"git", "workerCount"}}
+                for (_, fleet_id), state in self.states.items()
+            }
+            return _Counted(
+                {
+                    "diffJson": [
+                        {
+                            **self._diff_file("groups"),
+                            "blocks": [{"lines": [{"type": "insert", "content": json.dumps(groups)}]}],
+                        }
+                    ]
+                    if self.global_dirty
+                    else []
+                }
+            )
         if server_url is None and filename == edge.MAPPING_FILE:
             files = (
                 [
@@ -184,7 +204,8 @@ async def leaders(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[dict[str, _
         await harness.http.aclose()
 
 
-async def test_sdk_fleet_creation_contract(httpx_mock: HTTPXMock) -> None:
+@pytest.mark.parametrize(("is_search", "tags"), [(True, ["prod", "linux"]), (False, [])])
+async def test_sdk_fleet_creation_contract(httpx_mock: HTTPXMock, *, is_search: bool, tags: list[str]) -> None:
     """The real installed SDK sends the Edge product, parent, and writable fields."""
     httpx_mock.add_response(
         method="POST",
@@ -197,13 +218,19 @@ async def test_sdk_fleet_creation_contract(httpx_mock: HTTPXMock) -> None:
         await edge.create_resource(
             client,
             "groups",
-            item=EdgeFleet(id="child", inherits="parent").payload(),
+            item=EdgeFleet(id="child", inherits="parent", isSearch=is_search, streamtags=tags).payload(),
             product=ProductsCore.EDGE,
             timeout_ms=1000,
         )
     request = httpx_mock.get_request()
     assert request is not None
-    assert json.loads(request.content) == {"id": "child", "inherits": "parent", "type": "edge"}
+    assert json.loads(request.content) == {
+        "id": "child",
+        "inherits": "parent",
+        "type": "edge",
+        "isSearch": is_search,
+        "streamtags": tags,
+    }
 
 
 async def test_sdk_fleet_inventory_requests_git_metadata(httpx_mock: HTTPXMock) -> None:
@@ -579,6 +606,8 @@ def test_manifest_edge_schema_and_existing_digest(monkeypatch: pytest.MonkeyPatc
         {"fleets": [{"id": "x"}, {"id": "x"}]},
         {"fleet_mappings": ["x", "x"]},
         {"fleets": [{"id": "x", "configVersion": "secret"}]},
+        {"fleets": [{"id": "x", "lookupDeployments": [{"deployedVersion": "foreign"}]}]},
+        {"fleets": [{"id": "x", "streamtags": "not-a-list"}]},
     ):
         with pytest.raises(ValidationError):
             ConfigManifest.model_validate({**base, **additions})
@@ -586,6 +615,8 @@ def test_manifest_edge_schema_and_existing_digest(monkeypatch: pytest.MonkeyPatc
         ConfigManifest.model_validate({**base, "source": {"server": "source", "product": "stream"}, "fleet_mappings": ["x"]})
     manifest = ConfigManifest.model_validate({**base, "fleet_mappings": [" rollout "]})
     assert manifest.fleet_mappings == ["rollout"]
+    fleet_manifest = ConfigManifest.model_validate({**base, "fleets": [{"id": "x", "isSearch": False, "streamtags": []}]})
+    assert fleet_manifest.fleets[0].payload() == {"id": "x", "type": "edge", "isSearch": False, "streamtags": []}
     legacy = ConfigManifest.model_validate({**base, "content": [{"group": "x", "kind": "routes", "items": ["default"]}]})
     assert "fleets" not in legacy.canonical_payload()
     assert "fleet_mappings" not in legacy.canonical_payload()
@@ -820,3 +851,339 @@ async def test_fleet_only_manifest_does_not_require_source_fleets(
     receipt = state.get_receipt(receipt_sha256=result["apply_receipt_sha256"])
     assert set(receipt["targets"]["target"]["leader"]) == {edge.FLEET_FILE}
     assert leaders["target"].events == ["fleet:parent", "fleet:child"]
+
+
+async def _partial_manifest_apply(
+    leaders: dict[str, _EdgeHarness], monkeypatch: pytest.MonkeyPatch, state: ManifestStateStore
+) -> tuple[LoadedConfigManifest, dict[str, Any], _JobContext]:
+    """Create a parent then fail before its child on one of two Leaders."""
+    loaded = _loaded()
+    loaded.manifest.targets.append("peer")
+    leaders["peer"] = _EdgeHarness()
+
+    def _load(_path: str) -> LoadedConfigManifest:
+        return loaded
+
+    monkeypatch.setattr(manifests, "load_config_manifest", _load)
+    plan = await manifests.plan_config_manifest_replication("edge.yaml", state_store=state)
+    target = leaders["target"]
+
+    async def _fail_child(*, id: str, **kwargs: Any) -> _Counted:  # noqa: A002, ANN401
+        if id == "child":
+            message = "temporary create failure"
+            raise RuntimeError(message)
+        return await target._create(id=id, **kwargs)
+
+    target.client.groups.create_async.side_effect = _fail_child
+    context = _JobContext("partial-apply")
+    result = await manifests.execute_config_manifest_replication(
+        "edge.yaml", expected_plan_sha256=plan["plan_sha256"], state_store=state, job_context=cast("JobContext", context)
+    )
+    assert result["status"] == "partial_failure", context.details
+    assert context.details["target"]["receipt_groups"]["child"] == {"missing": True}
+    assert context.details["target"]["created_fleets"] == ["parent"]
+    assert context.details["peer"]["status"] == "applied"
+    target.client.groups.create_async.side_effect = target._create
+    return loaded, plan, context
+
+
+@pytest.mark.parametrize("retry_mode", ["resume", "new_plan"])
+async def test_manifest_partial_apply_retry_owns_only_recorded_changes(
+    leaders: dict[str, _EdgeHarness], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, retry_mode: str
+) -> None:
+    """A restarted MCP can finish a partial apply without rejecting its own new parent."""
+    database = tmp_path / "manifest.sqlite3"
+    store = ManifestStateStore(database)
+    _, plan, first = await _partial_manifest_apply(leaders, monkeypatch, store)
+    store.close()
+    store = ManifestStateStore(database)
+    if retry_mode == "new_plan":
+        plan = await manifests.plan_config_manifest_replication("edge.yaml", state_store=store)
+        assert plan["blocked_target_count"] == 0, plan
+        assert all(target["prior_apply_guard"]["matched"] for target in plan["targets"])
+    context = _JobContext("retry-apply")
+    result = await manifests.execute_config_manifest_replication(
+        "edge.yaml",
+        expected_plan_sha256=plan["plan_sha256"],
+        state_store=store,
+        job_context=cast("JobContext", context),
+        resume_details=first.details if retry_mode == "resume" else None,
+    )
+    assert result["status"] == "completed", context.details
+    for name in ("target", "peer"):
+        assert leaders[name].events == ["fleet:parent", "fleet:child", "destination:child/out", "mapping:rollout"]
+        assert context.details[name]["created_fleets"] == ["child", "parent"]
+    if retry_mode == "resume":
+        assert context.details["peer"]["status"] == "resumed_completed"
+    validity = await manifests.check_manifest_receipt_validity(
+        "edge.yaml", apply_job_id=context.job_id, apply_receipt_sha256=None, state_store=store
+    )
+    assert validity["status"] == "valid", validity
+    deploy = await manifests.plan_manifest_commit_deploy(
+        "edge.yaml", apply_job_id=context.job_id, apply_receipt_sha256=None, message="finish", push=False, state_store=store
+    )
+    assert deploy["blocked_target_count"] == 0, deploy
+    # Replanning a completed apply before deployment must also preserve its ownership.
+    repeat = await manifests.plan_config_manifest_replication("edge.yaml", state_store=store)
+    assert repeat["blocked_target_count"] == 0, repeat
+    assert all(target["summary"]["create"] == 0 for target in repeat["targets"])
+
+
+@pytest.mark.parametrize("drift", ["leader_file", "group_diff", "commit", "deploy", "missing_created", "conflict", "behind"])
+async def test_manifest_retry_still_rejects_foreign_changes(
+    leaders: dict[str, _EdgeHarness], monkeypatch: pytest.MonkeyPatch, drift: str
+) -> None:
+    """Receipt ownership never excuses intervening writes, version drift, or unsafe Git state."""
+    store = ManifestStateStore()
+    _, plan, first = await _partial_manifest_apply(leaders, monkeypatch, store)
+    target = leaders["target"]
+    parent = target.states[ProductsCore.EDGE, "parent"]
+    if drift == "leader_file":
+        target.states[ProductsCore.EDGE, "unrelated"] = _group_payload("unrelated", product=ProductsCore.EDGE)
+    elif drift == "group_diff":
+        target.diff_paths_by_group["parent"] = ["local/cribl/foreign.yml"]
+    elif drift == "commit":
+        parent["git"]["commit"] = "foreign"
+    elif drift == "deploy":
+        parent["configVersion"] = "foreign"
+    elif drift == "missing_created":
+        target.states[ProductsCore.EDGE, "child"] = _group_payload("child", product=ProductsCore.EDGE, inherits="parent")
+    elif drift == "conflict":
+        target.global_conflicts = ["local/cribl/foreign.yml"]
+    else:
+        target.global_behind = 1
+    events = target.events.copy()
+    replanned = await manifests.plan_config_manifest_replication("edge.yaml", state_store=store)
+    assert replanned["blocked_target_count"] == 1, replanned
+    context = _JobContext("blocked-retry")
+    result = await manifests.execute_config_manifest_replication(
+        "edge.yaml",
+        expected_plan_sha256=plan["plan_sha256"],
+        state_store=store,
+        job_context=cast("JobContext", context),
+        resume_details=first.details,
+    )
+    assert result["status"] == "partial_skip", context.details
+    assert context.details["target"]["blocked_reasons"]
+    assert target.events == events
+
+
+@pytest.mark.parametrize("push", [False, True])
+async def test_cluster_manifest_fields_receipts_order_and_per_leader_push(
+    leaders: dict[str, _EdgeHarness], monkeypatch: pytest.MonkeyPatch, *, push: bool
+) -> None:
+    """One manifest handles 12 fleets on 22 Leaders without group copies or push sweeps."""
+    loaded = _loaded()
+    loaded.manifest.targets[:] = [f"leader-{index:02d}" for index in range(22)]
+    loaded.manifest.fleets[:] = [
+        EdgeFleet(
+            id=f"fleet-{index:02d}",
+            inherits=f"fleet-{index - 1:02d}" if index else None,
+            isSearch=False,
+            streamtags=["cluster", f"tag-{index}"],
+        )
+        for index in range(12)
+    ]
+    loaded.manifest.content.clear()
+    loaded.manifest.fleet_mappings.clear()
+    for name in loaded.manifest.targets:
+        leaders[name] = _EdgeHarness()
+
+        async def _cached_push(harness: _EdgeHarness = leaders[name], **kwargs: object) -> object:
+            result = await harness._push(**kwargs)
+            harness.global_ahead = 5  # Cribl 4.18.1 can retain cached ahead after successful push.
+            return result
+
+        leaders[name].client.versions.commits.push_async.side_effect = _cached_push
+
+    def _load(_path: str) -> LoadedConfigManifest:
+        return loaded
+
+    monkeypatch.setattr(manifests, "load_config_manifest", _load)
+    store = ManifestStateStore()
+    plan = await manifests.plan_config_manifest_replication("edge.yaml", state_store=store)
+    assert plan["blocked_target_count"] == 0
+    context = _JobContext("cluster-apply")
+    applied = await manifests.execute_config_manifest_replication(
+        "edge.yaml", expected_plan_sha256=plan["plan_sha256"], state_store=store, job_context=cast("JobContext", context)
+    )
+    assert applied["status"] == "completed", context.details
+    for name in loaded.manifest.targets:
+        for fleet in loaded.manifest.fleets:
+            actual = leaders[name].states[ProductsCore.EDGE, fleet.id]
+            assert actual["isSearch"] is False
+            assert actual["streamtags"] == fleet.streamtags
+            assert actual["configVersion"] == "commit-0"
+        leaders[name].client.groups.update_async.assert_not_called()
+    deploy = await manifests.plan_manifest_commit_deploy(
+        "edge.yaml",
+        apply_job_id=context.job_id,
+        apply_receipt_sha256=None,
+        message="cluster rollout",
+        push=push,
+        state_store=store,
+    )
+    assert deploy["blocked_target_count"] == 0, deploy
+    deployed = await manifests.execute_manifest_commit_deploy(
+        "edge.yaml",
+        expected_plan_sha256=deploy["plan_sha256"],
+        message="cluster rollout",
+        push=push,
+        state_store=store,
+        job_context=cast("JobContext", context),
+    )
+    assert deployed["status"] == "completed", context.details
+    assert deployed["push_summary"]["pushed" if push else "not_requested"] == 22
+    assert len(deployed["push_results"]) == 22
+    for name in loaded.manifest.targets:
+        harness = leaders[name]
+        assert harness.deploy_order == [fleet.id for fleet in loaded.manifest.fleets]
+        assert harness.events[12] == f"leader:{edge.FLEET_FILE}"
+        assert harness.push_count == int(push)
+        if push:
+            assert context.details[name]["push"]["verification"] == "api_reports_ahead"
+            assert context.details[name]["push"]["remote_sync_verified"] is False
+
+
+async def test_manifest_pushes_only_successful_leaders_and_preserves_peer_failures(
+    leaders: dict[str, _EdgeHarness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deployment and push failures stay local to their Leader and need no separate push sweep."""
+    loaded = _loaded()
+    loaded.manifest.targets[:] = ["target", "deploy-fails", "push-fails"]
+    leaders["deploy-fails"] = _EdgeHarness()
+    leaders["push-fails"] = _EdgeHarness()
+
+    def _load(_path: str) -> LoadedConfigManifest:
+        return loaded
+
+    monkeypatch.setattr(manifests, "load_config_manifest", _load)
+    state = ManifestStateStore()
+    plan = await manifests.plan_config_manifest_replication("edge.yaml", state_store=state)
+    context = _JobContext()
+    await manifests.execute_config_manifest_replication(
+        "edge.yaml", expected_plan_sha256=plan["plan_sha256"], state_store=state, job_context=cast("JobContext", context)
+    )
+    deploy = await manifests.plan_manifest_commit_deploy(
+        "edge.yaml", apply_job_id=context.job_id, apply_receipt_sha256=None, message="rollout", push=True, state_store=state
+    )
+    leaders["deploy-fails"].deploy_error_for = "parent"
+    leaders["push-fails"].push_error = RuntimeError("remote rejected")
+    result = await manifests.execute_manifest_commit_deploy(
+        "edge.yaml",
+        expected_plan_sha256=deploy["plan_sha256"],
+        message="rollout",
+        push=True,
+        state_store=state,
+        job_context=cast("JobContext", context),
+    )
+    assert result["status"] == "partial_failure", context.details
+    assert result["push_summary"] == {"pushed": 1, "failed": 1, "not_attempted": 1, "not_requested": 0}
+    assert leaders["target"].push_count == 1
+    leaders["deploy-fails"].client.versions.commits.push_async.assert_not_awaited()
+    leaders["push-fails"].client.versions.commits.push_async.assert_awaited_once()
+    assert context.details["push-fails"]["errors"][0]["phase"] == "push"
+    assert context.details["target"]["status"] == "completed"
+
+
+@pytest.mark.parametrize("drift", ["commit", "dirty", "behind", "conflict"])
+async def test_manifest_retry_does_not_own_external_parent(
+    leaders: dict[str, _EdgeHarness], monkeypatch: pytest.MonkeyPatch, drift: str
+) -> None:
+    """Creating a child in a receipt never grants ownership of its existing ancestor."""
+    loaded = _loaded()
+    loaded.manifest.fleets[:] = [EdgeFleet(id="child", inherits="parent")]
+    target = leaders["target"]
+    target.states[ProductsCore.EDGE, "parent"] = deepcopy(leaders["source"].states[ProductsCore.EDGE, "parent"])
+
+    def _load(_path: str) -> LoadedConfigManifest:
+        return loaded
+
+    monkeypatch.setattr(manifests, "load_config_manifest", _load)
+    store = ManifestStateStore()
+    plan = await manifests.plan_config_manifest_replication("edge.yaml", state_store=store)
+    context = _JobContext()
+    await manifests.execute_config_manifest_replication(
+        "edge.yaml", expected_plan_sha256=plan["plan_sha256"], state_store=store, job_context=cast("JobContext", context)
+    )
+    if drift == "commit":
+        target.states[ProductsCore.EDGE, "parent"]["git"]["commit"] = "undeployed"
+    elif drift == "dirty":
+        target.states[ProductsCore.EDGE, "parent"]["git"]["localChanges"] = 1
+    else:
+
+        async def _status(**kwargs: Any) -> _Counted:  # noqa: ANN401
+            result = await target._status(**kwargs)
+            if str(kwargs.get("server_url", "")).endswith("/parent"):
+                result.items[0].payload.update({"behind": 1} if drift == "behind" else {"conflicted": ["conflict"]})
+            return result
+
+        target.client.versions.statuses.get_async.side_effect = _status
+    repeated = await manifests.plan_config_manifest_replication("edge.yaml", state_store=store)
+    assert repeated["blocked_target_count"] == 1, repeated
+    assert any("Parent fleet 'parent'" in reason for reason in repeated["targets"][0]["blocked_reasons"])
+
+
+async def test_skipped_retry_preserves_receipt_for_later_recovery(
+    leaders: dict[str, _EdgeHarness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A temporarily unsafe Git state must not erase ownership needed by a later retry."""
+    store = ManifestStateStore()
+    _, plan, first = await _partial_manifest_apply(leaders, monkeypatch, store)
+    leaders["target"].global_behind = 1
+    skipped = _JobContext("skipped")
+    result = await manifests.execute_config_manifest_replication(
+        "edge.yaml",
+        expected_plan_sha256=plan["plan_sha256"],
+        state_store=store,
+        job_context=cast("JobContext", skipped),
+        resume_details=first.details,
+    )
+    assert result["status"] == "partial_skip"
+    assert skipped.details["target"]["receipt_groups"] == first.details["target"]["receipt_groups"]
+    leaders["target"].global_behind = 0
+    plan = await manifests.plan_config_manifest_replication("edge.yaml", state_store=store)
+    assert plan["blocked_target_count"] == 0, plan
+    recovered = _JobContext("recovered")
+    result = await manifests.execute_config_manifest_replication(
+        "edge.yaml", expected_plan_sha256=plan["plan_sha256"], state_store=store, job_context=cast("JobContext", recovered)
+    )
+    assert result["status"] == "completed", recovered.details
+    assert leaders["target"].events.count("fleet:parent") == 1
+
+
+async def test_receipt_owned_existing_parent_changes_are_retryable(
+    leaders: dict[str, _EdgeHarness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A receipt may own copied parent content without claiming the parent was newly created."""
+    loaded = _loaded()
+    loaded.manifest.content[:] = [ManifestContent(group="parent", kind="destinations", items=["out"])]
+    source, target = leaders["source"], leaders["target"]
+    source.destinations["parent/out"] = {"id": "out", "type": "devnull"}
+    target.states = deepcopy(source.states)
+
+    def _load(_path: str) -> LoadedConfigManifest:
+        return loaded
+
+    monkeypatch.setattr(manifests, "load_config_manifest", _load)
+
+    async def _create_destination(**kwargs: Any) -> _Counted:  # noqa: ANN401
+        result = await target._create_destination(**kwargs)
+        target.states[ProductsCore.EDGE, "parent"]["git"]["localChanges"] = 1
+        return result
+
+    target.client.destinations.create_async.side_effect = _create_destination
+    store = ManifestStateStore()
+    plan = await manifests.plan_config_manifest_replication("edge.yaml", state_store=store)
+    context = _JobContext()
+    result = await manifests.execute_config_manifest_replication(
+        "edge.yaml", expected_plan_sha256=plan["plan_sha256"], state_store=store, job_context=cast("JobContext", context)
+    )
+    assert result["status"] == "completed", context.details
+    assert context.details["target"]["created_fleets"] == []
+    repeated = await manifests.plan_config_manifest_replication("edge.yaml", state_store=store)
+    assert repeated["blocked_target_count"] == 0, repeated
+    # Committing it outside the receipt still invalidates the new plan.
+    target.states[ProductsCore.EDGE, "parent"]["git"]["commit"] = "foreign"
+    stale = await manifests.plan_config_manifest_replication("edge.yaml", state_store=store)
+    assert stale["blocked_target_count"] == 1, stale

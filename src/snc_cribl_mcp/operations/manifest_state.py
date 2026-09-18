@@ -155,6 +155,17 @@ class ManifestStateStore:
                 (receipt_sha256, job_id, intent_sha256, manifest_path, created_at, self._json(payload)),
             )
 
+    def latest_receipt(self, *, manifest_path: str, intent_sha256: str) -> dict[str, Any] | None:
+        """Find the latest apply for exactly the same manifest and source snapshot."""
+        connection = self._ensure_connection()
+        with self._lock:
+            row = connection.execute(
+                "SELECT payload_json FROM manifest_receipts WHERE manifest_path = ? AND intent_sha256 = ? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (manifest_path, intent_sha256),
+            ).fetchone()
+        return None if row is None else self._payload(row, description="latest manifest receipt")
+
     def get_receipt(self, *, receipt_sha256: str | None = None, job_id: str | None = None) -> dict[str, Any]:
         """Return one apply receipt by digest or apply job id."""
         if (receipt_sha256 is None) == (job_id is None):

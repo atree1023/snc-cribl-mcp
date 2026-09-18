@@ -218,6 +218,7 @@ async def _target_git_snapshot(
     product: ProductsCore,
     groups: dict[str, str],
     declared_fleets: set[str] | None = None,
+    receipt_groups: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Return safety-relevant Git state and preflight blockers for manifest groups."""
     inventory = await _list_targets(resolved, (product,))
@@ -247,8 +248,13 @@ async def _target_git_snapshot(
             "pending_diff_sha256": pending["sha256"],
             "incompatible_worker_count": target.incompatible_worker_count,
         }
-        if not status["clean"]:
+        guarded = receipt_groups is not None and pending["sha256"] == receipt_groups.get(target.group_id, {}).get(
+            "pending_diff_sha256"
+        )
+        if not status["clean"] and not guarded:
             blocked.append(f"Group/fleet '{target.group_id}' has pending configuration changes.")
+        if receipt_groups is not None and not guarded:
+            blocked.append(f"Group/fleet '{target.group_id}' changed during receipt revalidation.")
         if status["behind"]:
             blocked.append(f"Group/fleet '{target.group_id}' is behind its configured Git remote.")
         if status["conflict_count"]:
@@ -262,7 +268,12 @@ async def _target_git_snapshot(
 
 
 async def _provisioning_git_preflight(
-    target: ResolvedControlPlane, manifest: ConfigManifest, snapshot: dict[str, Any], git: dict[str, Any]
+    target: ResolvedControlPlane,
+    manifest: ConfigManifest,
+    snapshot: dict[str, Any],
+    git: dict[str, Any],
+    *,
+    receipt_target: dict[str, Any] | None = None,
 ) -> list[str]:
     if not _manifest_leader_files(manifest):
         return []
@@ -270,14 +281,22 @@ async def _provisioning_git_preflight(
         target,
         fleets=manifest.fleets,
         mappings=[entry["item"] for entry in snapshot["items"] if entry["kind"] == "fleet_mappings"],
+        receipt_owned_fleets=set(receipt_target.get("created_fleets", [])) if receipt_target else None,
+        receipt_guarded_groups=set(receipt_target.get("groups", {})) if receipt_target else None,
     )
     git["provisioning"] = guard
     git["leader_files"] = await edge.leader_file_snapshot(target.server_name, _manifest_leader_files(manifest))
     blocked.extend(
         f"Leader file '{filename}' already has pending changes."
         for filename, state in git["leader_files"].items()
-        if state["file_count"]
+        if state["file_count"] and receipt_target is None
     )
+    if receipt_target is not None:
+        blocked.extend(
+            f"Leader file '{filename}' changed during receipt revalidation."
+            for filename, state in git["leader_files"].items()
+            if state != receipt_target.get("leader", {}).get(filename)
+        )
     return blocked
 
 
@@ -303,26 +322,40 @@ def _manifest_deploy_options(manifest: ConfigManifest) -> dict[str, Any]:
     return {"_leader_files": files} if files else {}
 
 
-async def _target_replication_plan(
+async def _target_replication_plan(  # noqa: C901, PLR0912
     target_server: str,
     *,
     loaded: LoadedConfigManifest,
     source_snapshot: dict[str, Any],
+    receipt_target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one target's complete drift-guarded replication plan."""
     manifest = loaded.manifest
     product = _product(manifest)
     plan_items: list[dict[str, Any]] = []
     blocked: list[str] = []
+    receipt_reasons = (
+        await _receipt_drift(target_server, loaded=loaded, receipt_target=receipt_target, allow_partial=True)
+        if receipt_target
+        else []
+    )
+    guarded_receipt = receipt_target if receipt_target and not receipt_reasons else None
     async with connect_to_server(target_server) as target:
         git, git_blocked = await _target_git_snapshot(
             target,
             product=product,
             groups=cast("dict[str, str]", source_snapshot["groups"]),
+            receipt_groups=guarded_receipt.get("groups", {}) if guarded_receipt else None,
             **({"declared_fleets": {fleet.id for fleet in manifest.fleets}} if manifest.fleets else {}),
         )
         blocked.extend(git_blocked)
-        blocked.extend(await _provisioning_git_preflight(target, manifest, source_snapshot, git))
+        blocked.extend(
+            await _provisioning_git_preflight(target, manifest, source_snapshot, git, receipt_target=guarded_receipt)
+        )
+        if receipt_target:
+            git["receipt_guard"] = {"matched": guarded_receipt is not None, "reasons": receipt_reasons}
+            if blocked:
+                blocked.extend(receipt_reasons)
         missing_groups = {state["group_id"] for state in git["groups"].values() if state.get("missing")}
         for snapshot_item in cast("list[SnapshotItem]", source_snapshot["items"]):
             group_id = str(snapshot_item["group_id"])
@@ -494,6 +527,14 @@ def _public_replication_plan(
                 .get("provisioning", {})
                 .get("dynamic_mapping_expressions", 0),
                 "provisioning_guard": plan.get("git", {}).get("provisioning"),
+                "prior_apply_guard": (
+                    {
+                        "matched": plan["git"]["receipt_guard"]["matched"],
+                        "reasons": plan["git"]["receipt_guard"]["reasons"][:_MAX_RESPONSE_DETAILS],
+                    }
+                    if plan.get("git", {}).get("receipt_guard")
+                    else None
+                ),
             }
         )
     return {
@@ -525,9 +566,19 @@ async def plan_config_manifest_replication(
     source_snapshot = await _source_snapshot(loaded)
     intent = _intent(loaded, source_snapshot)
     effective_concurrency = resolve_manifest_concurrency(loaded.manifest, concurrency)
+    prior_receipt = (
+        state_store.latest_receipt(manifest_path=loaded.relative_path, intent_sha256=str(intent["intent_sha256"]))
+        if _manifest_leader_files(loaded.manifest)
+        else None
+    )
 
     async def _plan(target: str) -> dict[str, Any]:
-        return await _target_replication_plan(target, loaded=loaded, source_snapshot=source_snapshot)
+        return await _target_replication_plan(
+            target,
+            loaded=loaded,
+            source_snapshot=source_snapshot,
+            receipt_target=prior_receipt.get("targets", {}).get(target) if prior_receipt else None,
+        )
 
     target_plans = await _bounded_map(
         loaded.manifest.targets,
@@ -538,6 +589,7 @@ async def plan_config_manifest_replication(
         "operation": "replicate_config_manifest",
         "manifest_path": loaded.relative_path,
         "intent": intent,
+        "prior_receipt_sha256": prior_receipt["receipt_sha256"] if prior_receipt else None,
         "targets": target_plans,
     }
     plan_sha256 = _digest(plan_body)
@@ -564,16 +616,39 @@ async def plan_config_manifest_replication(
     )
 
 
+async def _fleet_receipt_snapshot(target_server: str, manifest: ConfigManifest) -> dict[str, Any]:
+    """Guard declared fleet existence, settings and target-local deployment versions."""
+    if not manifest.fleets:
+        return {}
+    async with connect_to_server(target_server) as resolved:
+        inventory = {str(item["id"]): item for item in await edge.fleet_inventory(resolved)}
+    states: dict[str, Any] = {}
+    for fleet in manifest.fleets:
+        item = inventory.get(fleet.id)
+        states[fleet.id] = (
+            {
+                "settings_sha256": edge.leader_item_digest("fleets", fleet.payload(), item),
+                "committed_version": item.get("git", {}).get("commit"),
+                "deployed_version": item.get("configVersion"),
+            }
+            if item is not None
+            else {"missing": True}
+        )
+    return states
+
+
 async def _write_target(  # noqa: C901, PLR0912, PLR0915
     target_server: str,
     *,
     loaded: LoadedConfigManifest,
     source_snapshot: dict[str, Any],
     progress_callback: WorkProgressCallback | None = None,
+    receipt_target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Apply one already-reviewed source snapshot to a target leader."""
     manifest = loaded.manifest
     results: list[dict[str, Any]] = []
+    created_fleets: set[str] = set(receipt_target.get("created_fleets", [])) if receipt_target else set()
     async with connect_to_server(target_server) as target:
         for snapshot_item in cast("list[SnapshotItem]", source_snapshot["items"]):
             kind = cast("ResourceKind", snapshot_item["kind"])
@@ -583,6 +658,8 @@ async def _write_target(  # noqa: C901, PLR0912, PLR0915
             try:
                 if str(snapshot_item["kind"]) in edge.LEADER_KINDS:
                     action = await edge.write_leader_item(target, kind, source_item, overwrite=manifest.options.overwrite)
+                    if str(kind) == "fleets" and action == "created":
+                        created_fleets.add(item_id)
                     results.append({"group_id": group_id, "kind": kind, "item_id": item_id, "action": action})
                     if progress_callback is not None:
                         await progress_callback(action, 1)
@@ -668,7 +745,14 @@ async def _write_target(  # noqa: C901, PLR0912, PLR0915
         await progress_callback("skipped", skipped)
 
     receipt_groups: dict[str, Any] = {}
+    try:
+        receipt_fleets = await _fleet_receipt_snapshot(target_server, manifest)
+    except Exception as exc:  # noqa: BLE001 - fail closed if ownership cannot be recorded
+        receipt_fleets = {"error": _error(exc)}
     for group_id in sorted(set(cast("dict[str, str]", source_snapshot["groups"]).values())):
+        if receipt_fleets.get(group_id, {}).get("missing"):
+            receipt_groups[group_id] = {"missing": True}
+            continue
         try:
             diff = await collect_group_git_diff(
                 target_server,
@@ -691,7 +775,7 @@ async def _write_target(  # noqa: C901, PLR0912, PLR0915
     except Exception as exc:  # noqa: BLE001 - an incomplete receipt must never authorize commits
         receipt_leader = {"error": _error(exc)}
     failed = sum(result["action"] == "failed" for result in results) + int("error" in receipt_leader)
-    receipt_failed = sum("error" in value for value in receipt_groups.values())
+    receipt_failed = sum("error" in value for value in receipt_groups.values()) + int("error" in receipt_fleets)
     return {
         "server": target_server,
         "status": "applied" if not failed and not receipt_failed else "partial_failure",
@@ -706,12 +790,27 @@ async def _write_target(  # noqa: C901, PLR0912, PLR0915
         "failures": [result for result in results if result["action"] == "failed"],
         "receipt_groups": receipt_groups,
         "receipt_leader": receipt_leader,
+        "receipt_fleets": receipt_fleets,
+        "created_fleets": sorted(created_fleets),
     }
 
 
 def _expected_target_plans(stored_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     targets = cast("list[dict[str, Any]]", stored_plan.get("targets", []))
     return {str(target["server"]): target for target in targets}
+
+
+def _detail_receipt(detail: dict[str, Any]) -> dict[str, Any]:
+    """Use the same ownership contract for durable job details and apply receipts."""
+    return {
+        "status": detail.get("status"),
+        "apply_status": detail.get("receipt_status", detail.get("status")),
+        "summary": detail.get("summary"),
+        "groups": detail.get("receipt_groups", {}),
+        "leader": detail.get("receipt_leader", {}),
+        "fleets": detail.get("receipt_fleets", {}),
+        "created_fleets": detail.get("created_fleets", []),
+    }
 
 
 async def execute_config_manifest_replication(  # noqa: C901, PLR0915
@@ -774,27 +873,17 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
     expected_targets = _expected_target_plans(stored)
     drift_policy = on_drift or loaded.manifest.options.on_drift
     prior = resume_details or {}
+    stored_receipt = (
+        state_store.get_receipt(receipt_sha256=stored["prior_receipt_sha256"]) if stored.get("prior_receipt_sha256") else {}
+    )
+    receipts = {**stored_receipt.get("targets", {}), **{target: _detail_receipt(detail) for target, detail in prior.items()}}
     progress["phase"] = "revalidating"
     job_context.update_progress(dict(progress))
 
-    async def _resume_state_is_guarded(target: str, detail: dict[str, Any]) -> tuple[str, bool]:
-        if detail.get("status") in {"applied", "noop", "completed"} and not _manifest_leader_files(loaded.manifest):
-            return target, True
-        receipt_groups = detail.get("receipt_groups")
-        if not isinstance(receipt_groups, dict) or (not receipt_groups and not detail.get("receipt_leader")):
-            return target, False
-        reasons = await _receipt_drift(
-            target,
-            loaded=loaded,
-            receipt_target={"status": "applied", "groups": receipt_groups, "leader": detail.get("receipt_leader", {})},
-        )
-        return target, not reasons
-
-    resume_guard_results = await asyncio.gather(*(_resume_state_is_guarded(target, detail) for target, detail in prior.items()))
-    resume_safe = {target for target, is_safe in resume_guard_results if is_safe}
-
     async def _plan(target: str) -> dict[str, Any]:
-        return await _target_replication_plan(target, loaded=loaded, source_snapshot=source_snapshot)
+        return await _target_replication_plan(
+            target, loaded=loaded, source_snapshot=source_snapshot, receipt_target=receipts.get(target)
+        )
 
     async def _revalidation_progress(event: str, _target: str, result: dict[str, Any] | None) -> None:
         if event == "started":
@@ -815,13 +904,19 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
     )
     progress["phase"] = "applying"
     job_context.update_progress(dict(progress))
+    receipt_safe = {
+        str(plan["server"])
+        for plan in current_plans
+        if plan.get("git", {}).get("receipt_guard", {}).get("matched") and not plan.get("blocked_reasons")
+    }
+    resume_safe = receipt_safe & prior.keys()
     drifted = {
         str(plan["server"]): plan
         for plan in current_plans
-        if str(plan["server"]) not in resume_safe
-        and (
-            bool(plan.get("blocked_reasons"))
-            or str(plan.get("target_plan_sha256"))
+        if bool(plan.get("blocked_reasons"))
+        or (
+            str(plan["server"]) not in resume_safe
+            and str(plan.get("target_plan_sha256"))
             != str(expected_targets.get(str(plan["server"]), {}).get("target_plan_sha256"))
         )
     }
@@ -829,7 +924,9 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
         msg = f"Replication aborted because {len(drifted)} target plan(s) drifted after review."
         raise ValueError(msg)
 
-    completed_prior = {server for server, detail in prior.items() if detail.get("status") in {"applied", "noop", "completed"}}
+    completed_prior = {
+        server for server, detail in prior.items() if detail.get("status") in {"applied", "noop", "resumed_completed"}
+    }
     results: dict[str, dict[str, Any]] = {}
     semaphore = asyncio.Semaphore(effective_concurrency)
 
@@ -838,11 +935,19 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
             detail = {**prior[target], "status": "resumed_completed", "resumed_from_prior_job": True}
             await _update_progress(completed=item_count)
         elif target in drifted:
+            previous_receipt = receipts.get(target, {})
             detail = {
+                **prior.get(target, {}),
                 "server": target,
                 "status": "skipped_drift",
+                "receipt_status": previous_receipt.get("apply_status", previous_receipt.get("status")),
+                "receipt_groups": previous_receipt.get("groups", {}),
+                "receipt_leader": previous_receipt.get("leader", {}),
+                "receipt_fleets": previous_receipt.get("fleets", {}),
+                "created_fleets": previous_receipt.get("created_fleets", []),
                 "expected_target_plan_sha256": expected_targets.get(target, {}).get("target_plan_sha256"),
                 "current_target_plan_sha256": drifted[target].get("target_plan_sha256"),
+                "blocked_reasons": drifted[target].get("blocked_reasons", [])[:_MAX_RESPONSE_DETAILS],
             }
             await _update_progress(completed=item_count, skipped=item_count)
         else:
@@ -864,6 +969,7 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
                         loaded=loaded,
                         source_snapshot=source_snapshot,
                         progress_callback=_item_progress,
+                        receipt_target=receipts.get(target) if target in receipt_safe else None,
                     )
                 finally:
                     await _update_progress(running=-1)
@@ -878,15 +984,7 @@ async def execute_config_manifest_replication(  # noqa: C901, PLR0915
         )
 
     await asyncio.gather(*(_apply(target) for target in loaded.manifest.targets))
-    receipt_targets = {
-        target: {
-            "status": detail.get("status"),
-            "summary": detail.get("summary"),
-            "groups": detail.get("receipt_groups", {}),
-            "leader": detail.get("receipt_leader", {}),
-        }
-        for target, detail in sorted(results.items())
-    }
+    receipt_targets = {target: _detail_receipt(detail) for target, detail in sorted(results.items())}
     receipt_body = {
         "operation": "replicate_config_manifest",
         "job_id": job_context.job_id,
@@ -1090,20 +1188,41 @@ async def validate_config_manifest(
     }
 
 
-async def _receipt_drift(
+async def _receipt_drift(  # noqa: C901
     target_server: str,
     *,
     loaded: LoadedConfigManifest,
     receipt_target: dict[str, Any],
+    allow_partial: bool = False,
 ) -> list[str]:
     """Verify current group diffs still exactly match an apply receipt."""
     reasons: list[str] = []
     groups = cast("dict[str, dict[str, Any]]", receipt_target.get("groups", {}))
-    if receipt_target.get("status") not in {"applied", "noop", "resumed_completed"}:
+    allowed_statuses = {"applied", "noop", "resumed_completed"}
+    if allow_partial:
+        allowed_statuses.add("partial_failure")
+    receipt_status = (
+        receipt_target.get("apply_status", receipt_target.get("status")) if allow_partial else receipt_target.get("status")
+    )
+    if receipt_status not in allowed_statuses:
         reasons.append("The apply receipt does not record this target as successfully applied.")
+    if loaded.manifest.content and not groups:
+        reasons.append("The apply receipt lacks group/fleet diff guards.")
+    expected_fleets = receipt_target.get("fleets", {})
+    if expected_fleets or (allow_partial and loaded.manifest.fleets):
+        current_fleets = await _fleet_receipt_snapshot(target_server, loaded.manifest)
+        reasons.extend(
+            f"Fleet '{fleet.id}' changed after replication or lacks an ownership guard."
+            for fleet in loaded.manifest.fleets
+            if current_fleets.get(fleet.id) != expected_fleets.get(fleet.id) or fleet.id not in groups
+        )
     for group_id, expected in groups.items():
         if "error" in expected:
             reasons.append(f"The apply receipt could not guard group/fleet '{group_id}'.")
+            continue
+        if expected.get("missing"):
+            if not allow_partial or expected_fleets.get(group_id) != {"missing": True}:
+                reasons.append(f"Group/fleet '{group_id}' is missing from the apply receipt.")
             continue
         current = await collect_group_git_diff(
             target_server,
@@ -1524,6 +1643,14 @@ async def execute_manifest_commit_deploy(  # noqa: C901, PLR0915
         if detail.get("status") not in {"completed", "resumed_completed", "blocked", "skipped_drift", "not_started_abort"}
     ]
     completed = len(results) - len(skipped_targets) - len(failed_targets)
+    pushes = [
+        {
+            "server": target,
+            "status": detail.get("push", {}).get("status", "not_attempted" if push else "not_requested"),
+            **{key: detail["push"][key] for key in ("verification", "remote_sync_verified") if key in detail.get("push", {})},
+        }
+        for target, detail in sorted(results.items())
+    ]
     return {
         "status": "partial_failure" if failed_targets else "partial_skip" if skipped_targets else "completed",
         "operation": "commit_and_deploy_manifest",
@@ -1531,6 +1658,12 @@ async def execute_manifest_commit_deploy(  # noqa: C901, PLR0915
         "executed_plan_sha256": expected_plan_sha256,
         "apply_receipt_sha256": stored["receipt_sha256"],
         "push_requested": push,
+        "push_results": pushes[:_MAX_RESPONSE_DETAILS],
+        "push_results_truncated": len(pushes) > _MAX_RESPONSE_DETAILS,
+        "push_summary": {
+            status: sum(item["status"] == status for item in pushes)
+            for status in ("pushed", "failed", "not_attempted", "not_requested")
+        },
         "summary": {
             "target_count": len(results),
             "completed": completed,

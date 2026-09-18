@@ -5,6 +5,31 @@ Fleet creation uses the installed `cribl-control-plane` SDK's `groups.create_asy
 accepts only creation fields, preventing runtime fields such as `configVersion`, `git`, and node
 counts from being written back. The real SDK request is exercised in the HTTP contract tests.
 
+Fleet declarations also accept `isSearch` and `streamtags`; the installed SDK maps these to
+`is_search` and `streamtags` in `groups.create_async`. False values and empty lists are sent explicitly.
+`lookupDeployments` was considered for Issue #29 but excluded: the installed SDK's creation schema
+does not accept it, and Cribl documents it as lookup deployment status containing deployed versions.
+See [groups.yml configuration](https://docs.cribl.io/edge/4.13/groupsyml/) and
+[lookup deployment](https://docs.cribl.io/cribl-as-code/create-update-lookups/).
+
+Manifest receipts already captured `groups.yml`; a later group-copy pass could invalidate that
+complete diff. Supplying the creation fields directly removes that pass. Receipts now also retain
+created-fleet ownership, missing declarations after partial failure, and target-local versions, so
+matching retries can finish provisioning without treating their own undeployed parents as foreign work.
+Fresh plans reuse only receipts with the same manifest path and intent (including source snapshot);
+execution pins the reviewed receipt rather than looking up a newer receipt.
+
+Issue #29 regressions exercise a 22-Leader/12-fleet rollout, exact Leader-file commits, ordered
+deployments, per-Leader push success/failure, cached-ahead readback, partial retries across a SQLite
+restart, and rejection of unrelated drift. The cluster is simulated; these tests do not establish
+Cribl 4.18.1 UI behavior or independently verify a real remote repository.
+
+Read-only validation on 2026-09-18 also planned a new parent and child with `isSearch: false`,
+populated parent tags, and empty child tags on each of `golden.oak` and `golden.oak.new`.
+Both plans had zero blocked targets and two creates. Fleet/Git fingerprints were unchanged afterward;
+temporary manifests were removed with their file digests. No live fleet creation, deployment, or push
+was performed for this change.
+
 The installed Python SDK has no fleet mapping component. Mapping operations use the SDK-owned HTTP
 client, refreshed security, configured TLS policy, and timeout at Leader scope:
 

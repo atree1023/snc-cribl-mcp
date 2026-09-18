@@ -65,10 +65,17 @@ The installed SDK commit body exposes `message`, `effective`, and `files`; it ha
 push parameter. The MCP push flag controls the separate push request. Committing
 `groups.yml` records deployment state locally and is not itself a remote push.
 
-The UI/API symptom has **not** been reproduced or fixed. Both local test leaders report
+The user subsequently traced the symptom to Cribl API caching: after `push_config_git` pushes,
+the Leader API can continue reporting ahead of origin. This is user-reported evidence from the
+affected environment. It has **not** been independently reproduced or fixed here. Both local test leaders report
 `remote_configured=false`. The affected deployment is **4.18.1**, as reported by the user;
 the local guard reproduction used 4.20.0. Passing SDK request tests does not verify Cribl's internal
 Git cache or UI behavior. No claim is made that the API refreshed its remote status.
+
+The Issue #29 changes report successful manifest/all-target and standalone pushes separately from
+one post-push API status read. Cached-ahead or failed reads do not trigger a duplicate push or turn
+API push success into failure. Results explicitly retain `remote_sync_verified=false`; the available
+SDK status endpoint has no cache-refresh control.
 
 `ahead` counts local commits absent from the tracked remote; `behind` counts remote
 commits absent locally. Current push planning trusts Cribl's API counts: a stale
