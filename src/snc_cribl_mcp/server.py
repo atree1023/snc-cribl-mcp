@@ -41,6 +41,7 @@ Registered tools:
 - ``get_leader_git_diff``: inspect Leader deployment-metadata changes
 - ``get_config_deployment_job``: poll asynchronous commit, deploy, and push jobs
 - ``commit_group_config``: commit one group/fleet configuration
+- ``commit_leader_config``: commit explicitly selected Leader configuration files
 - ``deploy_group_config``: deploy an explicit group/fleet commit
 - ``commit_and_deploy_group``: commit and deploy one group/fleet
 - ``commit_and_deploy_all``: commit and deploy groups/fleets in dependency order
@@ -86,6 +87,7 @@ from .operations.version_control import (
     commit_and_deploy_all,
     commit_and_deploy_group,
     commit_group_config,
+    commit_leader_config,
     deploy_group_config,
     push_config_git,
 )
@@ -233,6 +235,7 @@ def _register_capabilities() -> None:
         diff_impl=collect_group_git_diff,
         leader_diff_impl=collect_leader_git_diff,
         commit_impl=commit_group_config,
+        leader_commit_impl=commit_leader_config,
         deploy_impl=deploy_group_config,
         commit_deploy_impl=commit_and_deploy_group,
         commit_deploy_all_impl=commit_and_deploy_all,

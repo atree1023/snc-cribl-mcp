@@ -10,7 +10,8 @@ from typing import Any
 from fastmcp import Context, FastMCP
 
 from ..operations.version_control import CompareTo, ProductScope
-from ..operations.version_control_jobs import VersionControlJobManager
+from ..operations.version_control_jobs import JobContext, VersionControlJobManager
+from ..operations.version_control_progress import FleetJobProgress
 from .sync_common import ProductName, parse_product
 
 type VersionControlFunc = Callable[..., Awaitable[dict[str, Any]]]
@@ -29,6 +30,7 @@ def register(  # noqa: C901
     diff_impl: VersionControlFunc,
     leader_diff_impl: VersionControlFunc,
     commit_impl: VersionControlFunc,
+    leader_commit_impl: VersionControlFunc,
     deploy_impl: VersionControlFunc,
     commit_deploy_impl: VersionControlFunc,
     commit_deploy_all_impl: VersionControlFunc,
@@ -99,7 +101,9 @@ def register(  # noqa: C901
             "Get a Stream worker group or Edge fleet configuration diff. compare_to='deployed' compares the current "
             "working configuration with the active configVersion for deployment sanity review; compare_to='head' "
             "shows only pending uncommitted changes. The response includes a full pending_diff_sha256 drift guard. "
-            "Set diff_line_limit=0 for the complete diff or filename to inspect one changed file."
+            "diff_line_limit bounds returned hunk lines across all files. Responses also have byte/file caps. "
+            "Use diff_page.next_line_offset as line_offset to continue, or filename for one file. "
+            "diff_line_limit=0 removes only the line cap. Hashes and summaries cover the full diff."
         ),
         annotations={
             "title": "Get group or fleet Git diff",
@@ -115,6 +119,7 @@ def register(  # noqa: C901
         compare_to: CompareTo = "deployed",
         filename: str | None = None,
         diff_line_limit: int = 1000,
+        line_offset: int = 0,
     ) -> dict[str, Any]:
         """Get one group/fleet diff with deployed and pending baselines."""
         await ctx.info(f"Getting the Cribl {product} configuration diff for '{group}'.")
@@ -125,14 +130,17 @@ def register(  # noqa: C901
             compare_to=compare_to,
             filename=filename,
             diff_line_limit=diff_line_limit,
+            line_offset=line_offset,
         )
 
     @app.tool(
         name="get_leader_git_diff",
         description=(
-            "Get the Leader-scoped local/cribl/groups.yml diff that records deployed group and fleet versions. "
+            "Get a Leader-scoped file diff; filename defaults to local/cribl/groups.yml, which records deployments. "
             "Use this when a commit/deploy plan reports pre-existing Leader deployment-metadata changes; group-scoped "
-            "diffs intentionally cannot inspect this file. Set diff_line_limit=0 for the complete diff."
+            "diffs intentionally cannot inspect this file. diff_line_limit bounds returned hunk lines locally; "
+            "byte/file caps also apply, even with diff_line_limit=0. Use diff_page.next_line_offset as line_offset "
+            "to continue. Hashes and summaries cover the full diff."
         ),
         annotations={
             "title": "Get Leader deployment metadata diff",
@@ -144,10 +152,12 @@ def register(  # noqa: C901
         ctx: Context,
         server: str | None = None,
         diff_line_limit: int = 1000,
+        filename: str = "local/cribl/groups.yml",
+        line_offset: int = 0,
     ) -> dict[str, Any]:
-        """Get the only Leader file mutated by deployment workflows."""
+        """Get a bounded diff of one explicitly selected Leader file."""
         await ctx.info("Getting the Cribl Leader deployment-metadata diff.")
-        return await leader_diff_impl(server, diff_line_limit=diff_line_limit)
+        return await leader_diff_impl(server, diff_line_limit=diff_line_limit, filename=filename, line_offset=line_offset)
 
     @app.tool(
         name="get_config_deployment_job",
@@ -155,7 +165,9 @@ def register(  # noqa: C901
             "Get the current state and bounded result of an asynchronous Cribl replication, commit, deploy, or Git "
             "push job. Pass target with job_id for one target's durable detail; targets not started yet return a "
             "pending detail instead of an error. Pollers must inspect progress.unit: manifest replication uses items, "
-            "while commit/deploy uses fleets and includes current leader/fleet detail. "
+            "while commit/deploy-all uses fleets. completed counts terminal fleets, including failed/skipped/noop; "
+            "inspect succeeded, noop, failed, skipped and leaders_failed for the outcome. total is null until planning "
+            "finishes. Use target=server for Leader detail or target='edge:fleet-id'/'stream:group-id' for fleet detail. "
             "Pass the job_id returned by a mutation execution for its final result, or omit job_id to list recent "
             "jobs. Job state, progress, target detail, and resumable request metadata survive MCP process restarts."
         ),
@@ -215,6 +227,45 @@ def register(  # noqa: C901
             message=message,
             files=files,
             effective=effective,
+            push=push,
+        )
+
+    @app.tool(
+        name="commit_leader_config",
+        description=(
+            "Commit explicitly selected pending Leader files without deploying groups/fleets. "
+            "Use files=['local/cribl/groups.yml'] to resolve reviewed deployment-metadata changes, or select other "
+            "individual Leader files inspected with get_leader_git_diff(filename=...). "
+            "Group paths, directories and wildcard pathspecs are rejected. Push is optional and defaults to false. "
+            f"{_PLAN_GUIDANCE}"
+        ),
+        annotations={
+            "title": "Commit Leader configuration",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+        },
+    )
+    async def commit_leader_config(
+        ctx: Context,
+        message: str,
+        files: list[str],
+        server: str | None = None,
+        *,
+        push: bool = False,
+        dry_run: bool = True,
+        expected_plan_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        """Plan or commit selected Leader files with a full drift guard."""
+        await ctx.info("Planning or committing selected Cribl Leader configuration files.")
+        return await _plan_or_submit(
+            operation="commit_leader_config",
+            server=server,
+            dry_run=dry_run,
+            expected_plan_sha256=expected_plan_sha256,
+            impl=leader_commit_impl,
+            message=message,
+            files=files,
             push=push,
         )
 
@@ -332,17 +383,41 @@ def register(  # noqa: C901
     ) -> dict[str, Any]:
         """Plan or commit and deploy all selected targets."""
         await ctx.info(f"Planning or committing and deploying all Cribl {product} targets.")
-        return await _plan_or_submit(
+        kwargs = {
+            "message": message,
+            "product": product,
+            "effective": effective,
+            "push": push,
+            "stop_on_error": stop_on_error,
+            "expected_plan_sha256": expected_plan_sha256,
+        }
+        if dry_run:
+            return await commit_deploy_all_impl(server, **kwargs, dry_run=True)
+
+        async def _runner(context: JobContext) -> dict[str, Any]:
+            reporter = FleetJobProgress(context, server or "default")
+            try:
+                return await commit_deploy_all_impl(server, **kwargs, dry_run=False, event_callback=reporter.event)
+            except Exception as exc:
+                reporter.fail(exc)
+                raise
+
+        return await job_manager.submit_aggregate(
             operation="commit_and_deploy_all",
-            server=server,
-            dry_run=dry_run,
+            servers=(server or "default",),
             expected_plan_sha256=expected_plan_sha256,
-            impl=commit_deploy_all_impl,
-            message=message,
-            product=product,
-            effective=effective,
-            push=push,
-            stop_on_error=stop_on_error,
+            runner=_runner,
+            initial_progress={
+                "unit": "fleets",
+                "total": None,
+                "completed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "noop": 0,
+                "succeeded": 0,
+                "running": 0,
+                "phase": "queued",
+            },
         )
 
     @app.tool(

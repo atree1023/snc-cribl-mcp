@@ -25,6 +25,7 @@ from .common import (
     counted_sdk_response_count,
     counted_sdk_response_items,
 )
+from .git_diff import bounded_diff
 
 type CompareTo = Literal["deployed", "head"]
 type ProductScope = Literal["all", "edge", "stream"]
@@ -35,6 +36,7 @@ _GROUP_GIT_FIELDS = "git.commit,git.localChanges"
 _MAX_SUMMARY_PATHS = 100
 _MAX_STATUS_PATHS = 25
 _MAX_ERROR_MESSAGE_CHARS = 2000
+_MAX_LEADER_PATH_CHARS = 1024
 _LEADER_METADATA_PATH = "local/cribl/groups.yml"
 
 
@@ -963,10 +965,11 @@ async def collect_group_git_diff(
     compare_to: CompareTo = "deployed",
     filename: str | None = None,
     diff_line_limit: int = 1000,
+    line_offset: int = 0,
 ) -> dict[str, Any]:
     """Return a group/fleet diff plus a full pending-diff drift guard."""
-    if diff_line_limit < 0:
-        msg = "diff_line_limit must be zero or greater."
+    if diff_line_limit < 0 or line_offset < 0:
+        msg = "diff_line_limit and line_offset must be zero or greater."
         raise ValueError(msg)
     if compare_to not in {"deployed", "head"}:
         msg = "compare_to must be exactly 'deployed' or 'head'."
@@ -987,11 +990,13 @@ async def collect_group_git_diff(
             target,
             commit=comparison_commit,
             filename=filename,
-            diff_line_limit=diff_line_limit,
+            diff_line_limit=0,
         )
         pending = comparison
-        if comparison_commit is not None or diff_line_limit != 0 or filename is not None:
+        if comparison_commit is not None or filename is not None:
             pending = await _fetch_diff(resolved, target, diff_line_limit=0)
+
+        diff, page = bounded_diff(_diff_files(comparison["payload"]), line_limit=diff_line_limit, line_offset=line_offset)
 
         return {
             "server": resolved.server_name,
@@ -1003,7 +1008,8 @@ async def collect_group_git_diff(
             "diff_sha256": comparison["sha256"],
             "pending_diff_sha256": pending["sha256"],
             "summary": comparison["summary"],
-            "diff": comparison["payload"],
+            "diff": diff,
+            "diff_page": page,
         }
 
 
@@ -1011,28 +1017,33 @@ async def collect_leader_git_diff(
     server: str | None,
     *,
     diff_line_limit: int = 1000,
+    filename: str = _LEADER_METADATA_PATH,
+    line_offset: int = 0,
 ) -> dict[str, Any]:
-    """Return the Leader-scoped deployment-metadata diff that group-scoped reads cannot expose."""
-    if diff_line_limit < 0:
-        msg = "diff_line_limit must be zero or greater."
+    """Return a bounded Leader file diff, defaulting to deployment metadata."""
+    _validate_leader_files([filename])
+    if diff_line_limit < 0 or line_offset < 0:
+        msg = "diff_line_limit and line_offset must be zero or greater."
         raise ValueError(msg)
     async with connect_to_server(server) as resolved:
         status = await _global_status(resolved)
         response = await resolved.client.versions.commits.diff_async(
-            filename=_LEADER_METADATA_PATH,
-            diff_line_limit=diff_line_limit,
+            filename=filename,
+            diff_line_limit=0,
             timeout_ms=resolved.config.timeout_ms,
         )
         payload = _serialize_counted_response(response)
         files = _diff_files(payload)
+        diff, page = bounded_diff(files, line_limit=diff_line_limit, line_offset=line_offset)
         return {
             "server": resolved.server_name,
             "scope": "leader",
-            "filename": _LEADER_METADATA_PATH,
+            "filename": filename,
             "git": status,
             "diff_sha256": _canonical_digest(files),
-            "summary": _diff_summary(payload, files={_LEADER_METADATA_PATH}),
-            "diff": payload,
+            "summary": _diff_summary(payload, files={filename}),
+            "diff": diff,
+            "diff_page": page,
         }
 
 
@@ -1111,6 +1122,138 @@ def _validate_execution_plan(plan: dict[str, Any], expected_plan_sha256: str | N
     if isinstance(blocked, list) and blocked:
         msg = "Deployment plan is blocked: " + " ".join(str(reason) for reason in cast("list[object]", blocked))
         raise ValueError(msg)
+
+
+def _validate_leader_files(files: list[str]) -> list[str]:
+    """Require explicit literal Leader paths, never a broad Git pathspec."""
+    if not files or len(files) > _MAX_SUMMARY_PATHS:
+        msg = f"Select between 1 and {_MAX_SUMMARY_PATHS} explicit Leader file paths."
+        raise ValueError(msg)
+    for path in files:
+        parts = path.split("/")
+        if (
+            not path
+            or len(path) > _MAX_LEADER_PATH_CHARS
+            or any(part in {"", ".", "..", ".git"} for part in parts)
+            or parts[0] == "groups"
+            or any(char in path for char in "*?[]:\\")
+            or not path.isprintable()
+        ):
+            msg = "Use explicit relative Leader file paths; group paths, directories, and Git pathspecs are not allowed."
+            raise ValueError(msg)
+    return sorted(set(files))
+
+
+async def _build_leader_commit_plan(
+    resolved: ResolvedControlPlane, *, message: str, files: list[str], push: bool
+) -> dict[str, Any]:
+    """Review exact pending Leader files and hash their complete contents."""
+    response = await resolved.client.versions.statuses.get_async(timeout_ms=resolved.config.timeout_ms)
+    raw_status = _first_counted_item(response) or {}
+    status = _status_summary(raw_status)
+    changed_paths = set(_status_changed_paths(raw_status))
+    pending_files = [path for path in files if path in changed_paths]
+    diff_files: dict[str, dict[str, Any]] = {}
+    # Exact status membership excludes directory pathspecs, even without globs.
+    blocked = [
+        f"'{path}' is a directory; select individual changed files."
+        for path in files
+        if path not in changed_paths and any(changed.startswith(f"{path}/") for changed in changed_paths)
+    ]
+    for path in pending_files:
+        diff_response = await resolved.client.versions.commits.diff_async(
+            filename=path, diff_line_limit=0, timeout_ms=resolved.config.timeout_ms
+        )
+        selected_diff = _diff_files(_serialize_counted_response(diff_response))
+        if not selected_diff:
+            blocked.append(f"No diff was returned for pending Leader file '{path}'; its content cannot be reviewed.")
+        for file in selected_diff:
+            names = {str(file[key]) for key in ("oldName", "newName", "old_name", "new_name") if file.get(key)}
+            if names - {*files, "/dev/null"}:
+                blocked.append("A selected diff includes another path; select both sides of a Leader rename.")
+            if file.get("isTooBig") or file.get("is_too_big"):
+                blocked.append("A selected Leader diff is incomplete; its full content is required for review.")
+            diff_files[_canonical_digest(file)] = file
+    payload = {"items": [{"diffJson": list(diff_files.values())}]}
+    pending = {"payload": payload, "sha256": _canonical_digest(list(diff_files.values()))}
+    git_info = await _git_info(resolved)
+    if status["conflicted"]:
+        blocked.append("The Leader Git working tree contains conflicts.")
+    if not git_info["versioning"]:
+        blocked.append("Git versioning is disabled for this Cribl Leader.")
+    if push and pending_files and not git_info["remote_configured"]:
+        blocked.append("No remote Git repository is configured for this Cribl Leader.")
+    if push and pending_files and status["behind"]:
+        blocked.append("The Leader branch is behind its remote; reconcile it before pushing.")
+    body = {
+        "server": resolved.server_name,
+        "scope": "leader",
+        "action": "commit" if pending_files else "noop",
+        "message": message,
+        "files": files,
+        "pending_files": pending_files,
+        "push": push,
+        "leader_git": _compact_git_status(status),
+        "git_integration": git_info,
+        "changes": _plan_change_summary(status, pending, files=pending_files),
+        "blocked_reasons": list(dict.fromkeys(blocked)),
+    }
+    return {**body, "plan_sha256": _canonical_digest(body)}
+
+
+async def commit_leader_config(
+    server: str | None,
+    *,
+    message: str,
+    files: list[str],
+    push: bool = False,
+    dry_run: bool = True,
+    expected_plan_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Plan or commit explicitly selected Leader files without deploying groups."""
+    selected = _validate_leader_files(files)
+    normalized_message = _validate_message(message)
+    async with connect_to_server(server) as resolved:
+        plan = await _build_leader_commit_plan(resolved, message=normalized_message, files=selected, push=push)
+        if dry_run:
+            return {"status": "planned", "dry_run": True, "plan": plan}
+        _validate_execution_plan(plan, expected_plan_sha256)
+        result: dict[str, Any] = {
+            "status": "noop",
+            "dry_run": False,
+            "scope": "leader",
+            "action": plan["action"],
+            "executed_plan_sha256": plan["plan_sha256"],
+            "push": _push_result(requested=False),
+            "completed_steps": [],
+        }
+        if plan["action"] == "noop":
+            return result
+        response = await resolved.client.versions.commits.create_async(
+            message=normalized_message,
+            files=plan["pending_files"],
+            timeout_ms=resolved.config.timeout_ms,
+        )
+        payload = _serialize_counted_response(response)
+        version = _commit_hash(payload)
+        if version is None:
+            msg = "Cribl did not return a commit hash after committing the selected Leader files."
+            raise RuntimeError(msg)
+        result.update(
+            status="committed",
+            commit=_commit_result_summary(payload, version=version, changes=plan["changes"]),
+            completed_steps=["leader_commit"],
+        )
+        try:
+            if push:
+                await _push(resolved)
+                result["completed_steps"].append("push")
+            result["push"] = _push_result(requested=push, pushed=push)
+        except Exception as exc:  # noqa: BLE001 - the Leader commit already succeeded
+            result.update(
+                status="partial_failure", error=_error_payload(exc), push=_push_result(requested=True, attempted=True)
+            )
+        return result
 
 
 def _validate_runtime_target_drift(
@@ -1559,8 +1702,14 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
     expected_plan_sha256: str | None = None,
     groups: list[str] | None = None,
     progress_callback: FleetProgressCallback | None = None,
+    event_callback: FleetProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Plan or commit and deploy all selected groups in safe dependency order."""
+
+    async def _event(event: str, **detail: object) -> None:
+        if event_callback is not None:
+            await event_callback({"event": event, **detail})
+
     normalized_message = _validate_message(message)
     async with connect_to_server(server) as resolved:
         plan, targets = await _build_all_plan(
@@ -1575,6 +1724,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
         if dry_run:
             return {"status": "planned", "dry_run": True, "plan": plan}
 
+        await _event("planned", targets=[_target_ref(target) for target in targets])
         _validate_execution_plan(plan, expected_plan_sha256)
         commit_results: list[dict[str, Any]] = []
         deploy_candidates: dict[tuple[ProductsCore, str], tuple[GroupTarget, str]] = {}
@@ -1586,17 +1736,13 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
 
         async def _report_target(target: GroupTarget, *, phase: str, status: str) -> None:
             key = (target.product, target.group_id)
-            if progress_callback is None or key in reported_targets:
+            if key in reported_targets:
                 return
             reported_targets.add(key)
-            await progress_callback(
-                {
-                    "product": target.product.value,
-                    "group": target.group_id,
-                    "phase": phase,
-                    "status": status,
-                }
-            )
+            detail = {"product": target.product.value, "group": target.group_id, "phase": phase, "status": status}
+            if progress_callback is not None:
+                await progress_callback(detail)
+            await _event("target_complete", **detail)
 
         initial_target_plans = {
             (target.product, target.group_id): target_plan
@@ -1608,6 +1754,9 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
         }
 
         for planned_target in targets:
+            await _event(
+                "running", product=planned_target.product.value, group=planned_target.group_id, phase="commit", status="running"
+            )
             blocked_by = _blocked_edge_ancestor(
                 planned_target,
                 edge_targets=edge_targets,
@@ -1683,6 +1832,10 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
                 )
                 if (target.product, target.group_id) not in deploy_candidates:
                     await _report_target(target, phase="commit", status=action)
+                else:
+                    await _event(
+                        "running", product=target.product.value, group=target.group_id, phase="commit", status="awaiting_deploy"
+                    )
             except Exception as exc:  # noqa: BLE001 - all-target workflow reports per-target failures
                 error = {
                     "phase": "commit",
@@ -1712,6 +1865,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
                 if candidate is None:
                     continue
                 target, version = candidate
+                await _event("running", product=target.product.value, group=target.group_id, phase="deploy", status="running")
                 blocked_by = _blocked_edge_ancestor(
                     target,
                     edge_targets=edge_targets,
@@ -1774,6 +1928,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
 
         leader_commit: dict[str, Any] | None = None
         if deploy_results and any(result.get("status") == "deployed" for result in deploy_results):
+            await _event("phase", phase="leader_commit")
             try:
                 leader_commit = await _commit_leader_metadata(
                     resolved,
@@ -1785,6 +1940,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
         push_attempted = False
         pushed = False
         if plan["push_action"] == "push" and not errors:
+            await _event("phase", phase="push")
             try:
                 push_attempted = True
                 await _push(resolved)
@@ -1796,7 +1952,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
             await _report_target(target, phase="workflow", status="not_started")
 
         status = "completed" if not errors else "partial_failure" if commit_results or deploy_results else "failed"
-        return {
+        result = {
             "status": status,
             "dry_run": False,
             "action": "commit_and_deploy_all",
@@ -1820,6 +1976,8 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
             ),
             "errors": errors,
         }
+        await _event("finished", status=status, summary=result["summary"], errors=errors, push=result["push"])
+        return result
 
 
 async def push_config_git(
@@ -1880,6 +2038,7 @@ __all__ = [
     "commit_and_deploy_all",
     "commit_and_deploy_group",
     "commit_group_config",
+    "commit_leader_config",
     "deploy_group_config",
     "push_config_git",
 ]

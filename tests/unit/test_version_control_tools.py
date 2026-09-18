@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from cribl_control_plane.models.productscore import ProductsCore
@@ -71,6 +71,7 @@ async def test_read_tools_forward_status_and_diff_arguments(mock_ctx: Context) -
         status_impl=status_impl,
         diff_impl=diff_impl,
         leader_diff_impl=leader_diff_impl,
+        leader_commit_impl=AsyncMock(),
         commit_impl=AsyncMock(),
         deploy_impl=AsyncMock(),
         commit_deploy_impl=AsyncMock(),
@@ -102,8 +103,9 @@ async def test_read_tools_forward_status_and_diff_arguments(mock_ctx: Context) -
         compare_to="head",
         filename="local/edge/inputs.yml",
         diff_line_limit=0,
+        line_offset=0,
     )
-    leader_diff_impl.assert_awaited_once_with("prod", diff_line_limit=0)
+    leader_diff_impl.assert_awaited_once_with("prod", diff_line_limit=0, filename="local/cribl/groups.yml", line_offset=0)
     assert app.annotations["get_group_git_status"] == {
         "title": "Get group and fleet Git status",
         "readOnlyHint": True,
@@ -126,6 +128,7 @@ async def test_mutation_tools_forward_review_and_workflow_arguments(mock_ctx: Co
         status_impl=AsyncMock(),
         diff_impl=AsyncMock(),
         leader_diff_impl=AsyncMock(),
+        leader_commit_impl=AsyncMock(),
         commit_impl=commit_impl,
         deploy_impl=deploy_impl,
         commit_deploy_impl=commit_deploy_impl,
@@ -231,6 +234,7 @@ async def test_mutation_tools_forward_review_and_workflow_arguments(mock_ctx: Co
         stop_on_error=False,
         dry_run=False,
         expected_plan_sha256="all-plan",
+        event_callback=ANY,
     )
     push_impl.assert_awaited_once_with(
         "prod",
@@ -266,6 +270,7 @@ async def test_mutation_dry_run_returns_plan_inline_without_creating_job(mock_ct
         status_impl=AsyncMock(),
         diff_impl=AsyncMock(),
         leader_diff_impl=AsyncMock(),
+        leader_commit_impl=AsyncMock(),
         commit_impl=commit_impl,
         deploy_impl=AsyncMock(),
         commit_deploy_impl=AsyncMock(),

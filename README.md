@@ -432,24 +432,31 @@ Reports Git and deployment state for one or all Stream worker groups and Edge fl
 Shows the configuration diff for one Stream worker group or Edge fleet/subfleet.
 
 - **Baselines:** `compare_to="deployed"` validates the complete pending deployment against the active `configVersion`; `compare_to="head"` shows only uncommitted changes.
-- **Returns:** A bounded diff plus a digest of the complete pending diff. Use `filename` to inspect one file or `diff_line_limit=0` for the full diff.
+- **Returns:** A bounded diff plus hashes and summaries of the complete diff. `diff_line_limit` is enforced locally across all returned hunk lines, even if Cribl ignores its own limit. `diff_page` reports truncation, total/returned lines, and `next_line_offset`; pass that offset as `line_offset` to continue with the same baseline and filename. Check `diff_sha256` between pages to detect drift.
+- **Size limits:** Diff pages also cap serialized content at 256 KB and 100 files, and clip exceptionally long strings with `content_truncated=true`. `diff_line_limit=0` removes only the line cap. Use `filename` to narrow large file sets. `upstream_truncated=true` means Cribl did not return a complete diff.
 
 #### `get_leader_git_diff`
 
-Shows the Leader-scoped `local/cribl/groups.yml` diff that records deployed group/fleet versions. Use it when a plan is
-blocked by pre-existing Leader deployment metadata; group-scoped diff tools intentionally cannot expose this file.
+Shows a Leader-scoped file diff, defaulting to `local/cribl/groups.yml`, which records deployed group/fleet versions.
+Use it when a plan is blocked by pre-existing Leader deployment metadata, or set `filename` to inspect another Leader file before committing it. It uses the same local line/byte limits and `line_offset` continuation as `get_group_git_diff`.
 
 #### `get_config_deployment_job`
 
 Polls an asynchronous manifest replication, commit, deploy, or Git push execution.
 
-- **With `job_id`:** Returns queued/running/completed/failed/interrupted state, aggregate progress, and the bounded final result when available. Generic pollers must inspect `progress.unit`: replication uses `items`, while manifest commit/deploy uses `fleets`. Add `target` for durable per-target detail; a known target that has not started returns `status: pending` rather than an error.
+- **With `job_id`:** Returns queued/running/completed/failed/interrupted state, aggregate progress, and the bounded final result when available. Generic pollers must inspect `progress.unit`: replication uses `items`, while manifest commit/deploy and `commit_and_deploy_all` use `fleets`. Add `target` for durable per-target detail; a known target that has not started returns `status: pending` rather than an error.
 - **Without `job_id`:** Lists recent jobs without embedding every final result.
 - **Lifetime:** Jobs and resumable request metadata are retained in SQLite across MCP process restarts. A previously running job is restored as `interrupted`; pass it as `resume_job_id` with the exact original parameters to retry unfinished targets.
 
 #### `commit_group_config`
 
 Commits pending changes for one group/fleet without deploying. An optional `files` list restricts the commit, `effective=true` includes inherited Edge configuration, and `push=true` pushes after a successful commit.
+
+#### `commit_leader_config`
+
+Commits explicitly selected pending Leader files without deploying groups/fleets. The required `files` list must name individual relative files; group paths (`groups/...`), directories, wildcards, and Git pathspecs are rejected. Review with `get_leader_git_diff(filename=...)`, then dry-run `commit_leader_config(message=..., files=[...])` and execute with its exact `plan_sha256`. For pending deployment metadata, select `files=["local/cribl/groups.yml"]`.
+
+The plan includes complete selected-file diff and Git-state digests and blocks conflicts. `push` defaults to false; optional pushes also check remote configuration and behind state. Execution returns a durable job and bounded commit summary; an unchanged selection is a no-op. A push failure preserves the successful commit in a `partial_failure` result.
 
 #### `deploy_group_config`
 
@@ -462,6 +469,8 @@ Commits and deploys one group/fleet. If its working tree is clean but its curren
 #### `commit_and_deploy_all`
 
 Commits all selected targets before deploying them. Edge parents are processed before descendants, each descendant is re-evaluated after its parent commit, and Leader deployment metadata is committed once after successful deployments. A clean descendant whose effective configuration will change because an ancestor is committed is planned as `deploy_inherited`, so the reviewed plan includes the full deployment blast radius. Use `product="stream"`, `product="edge"`, or `product="all"` to set the scope.
+
+Single-Leader jobs report `unit: fleets` from submission; `total` is null until execution planning discovers the fleet count. Progress includes the current product/group/phase. `completed` counts terminal fleets, including `failed`, `skipped`, and `noop`; `succeeded` counts successful non-no-op work. `leaders_failed` also captures finalization or push failures after fleets succeeded. Poll `target=<server returned at submission>` for Leader detail or `target="edge:<fleet-id>"` / `target="stream:<group-id>"` for one fleet. Counts and details persist after completion and restart. Job `status: completed` means the runner finished; inspect its result status and failure counts for workflow success.
 
 #### `push_config_git`
 

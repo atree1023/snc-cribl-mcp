@@ -15,6 +15,7 @@ from urllib.parse import unquote
 
 import pytest
 from cribl_control_plane.errors import CriblControlPlaneError
+from cribl_control_plane.models.countedgitdiffresult import CountedGitDiffResult
 from cribl_control_plane.models.countedstring import CountedString
 from cribl_control_plane.models.productscore import ProductsCore
 from cribl_control_plane.models.security import Security
@@ -25,6 +26,7 @@ from snc_cribl_mcp.config import CriblConfig
 from snc_cribl_mcp.models.config_manifest import ConfigManifest, LoadedConfigManifest, ManifestContent, ManifestSource
 from snc_cribl_mcp.operations import config_manifest as manifest_ops
 from snc_cribl_mcp.operations import version_control as vc
+from snc_cribl_mcp.operations.git_diff import MAX_DIFF_BYTES
 from snc_cribl_mcp.operations.manifest_state import ManifestStateStore
 
 
@@ -1407,3 +1409,270 @@ async def test_noop_paths_and_plan_validation(monkeypatch: pytest.MonkeyPatch) -
         expected_plan_sha256=push_plan["plan"]["plan_sha256"],
     )
     assert push_result["status"] == "noop"
+
+
+def _large_diff_file(path: str, *, lines: int, content: str = "+ example") -> dict[str, Any]:
+    """Build realistic SDK hunks whose total payload can exceed a client cap."""
+    return {
+        **_Harness._diff_file("fixture"),
+        "newName": path,
+        "oldName": path,
+        "addedLines": lines,
+        "deletedLines": 0,
+        "blocks": [
+            {
+                "header": "@@ -0,0 +1 @@",
+                "oldStartLine": 0,
+                "newStartLine": 1,
+                "lines": [{"type": "insert", "newNumber": i + 1, "content": f"{content} {i}"} for i in range(lines)],
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize("scope", ["group", "leader"])
+@pytest.mark.parametrize("limit", [10, 120, 0])
+async def test_diff_limits_bound_sdk_payload_and_preserve_full_hash(
+    monkeypatch: pytest.MonkeyPatch, scope: str, limit: int
+) -> None:
+    """Both public diff tools cap oversized SDK results and can continue past the first page."""
+    harness = _Harness((ProductsCore.STREAM, _group_payload("default", product=ProductsCore.STREAM)))
+    _install_harness(monkeypatch, harness)
+    path = "local/cribl/groups.yml" if scope == "leader" else "local/cribl/inputs.yml"
+    files = [_large_diff_file(path, lines=2000, content="+" + "x" * 1024)]
+    response = CountedGitDiffResult.model_validate({"count": 1, "items": [{"diffJson": files}]})
+    harness.client.versions.commits.diff_async = AsyncMock(return_value=response)
+
+    async def _read(offset: int = 0) -> dict[str, Any]:
+        if scope == "leader":
+            return await vc.collect_leader_git_diff("test", diff_line_limit=limit, line_offset=offset)
+        return await vc.collect_group_git_diff(
+            "test",
+            product=ProductsCore.STREAM,
+            group="default",
+            compare_to="head",
+            diff_line_limit=limit,
+            line_offset=offset,
+        )
+
+    result = await _read()
+    assert len(json.dumps(result["diff"]).encode()) <= MAX_DIFF_BYTES
+    assert len(json.dumps(result).encode()) < 1_000_000
+    page = result["diff_page"]
+    assert page["total_lines"] == 2000
+    assert page["returned_lines"] == limit if limit else page["returned_lines"] > 0
+    assert page["truncated"] is True
+    following = await _read(page["next_line_offset"])
+    first_line = following["diff"]["items"][0]["diffJson"][0]["blocks"][0]["lines"][0]
+    assert first_line["newNumber"] == page["returned_lines"] + 1
+    assert result["diff_sha256"] == following["diff_sha256"]
+    assert result["summary"]["added_lines"] == 2000
+    if scope == "group":
+        assert result["pending_diff_sha256"] == following["pending_diff_sha256"]
+    files[0]["blocks"][0]["lines"][-1]["content"] = "+ changed beyond page"
+    harness.client.versions.commits.diff_async.return_value = CountedGitDiffResult.model_validate(
+        {"count": 1, "items": [{"diffJson": files}]}
+    )
+    assert (await _read())["diff_sha256"] != result["diff_sha256"]
+
+
+async def test_diff_long_unicode_lines_and_many_files_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Line and file metadata cannot defeat the byte cap; upstream truncation remains visible."""
+    harness = _Harness((ProductsCore.STREAM, _group_payload("default", product=ProductsCore.STREAM)))
+    _install_harness(monkeypatch, harness)
+    files = [_large_diff_file(f"local/cribl/file-{i}.yml", lines=1, content="🔥" * 100_000) for i in range(3)]
+    harness.client.versions.commits.diff_async.return_value = _Counted({"diffJson": files})
+    harness.client.versions.commits.diff_async.side_effect = None
+    result = await vc.collect_group_git_diff("test", product=ProductsCore.STREAM, group="default", diff_line_limit=10)
+    assert result["diff_page"]["content_truncated"] is True
+    assert len(json.dumps(result["diff"]).encode()) <= MAX_DIFF_BYTES
+    files = [{**_Harness._diff_file(str(i)), "isTooBig": i == 101} for i in range(200)]
+    harness.client.versions.commits.diff_async.return_value = _Counted({"diffJson": files})
+    result = await vc.collect_group_git_diff("test", product=ProductsCore.STREAM, group="default", diff_line_limit=0)
+    assert result["summary"]["file_count"] == 200
+    assert result["diff_page"]["returned_files"] == 100
+    assert result["diff_page"]["truncated"] is True
+    assert result["diff_page"]["upstream_truncated"] is True
+
+
+async def test_diff_line_budget_spans_files_without_mutating_raw_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The limit applies across files and pages preserve the original hunk line numbers."""
+    harness = _Harness((ProductsCore.STREAM, _group_payload("default", product=ProductsCore.STREAM)))
+    _install_harness(monkeypatch, harness)
+    files = [_large_diff_file(f"local/cribl/{i}.yml", lines=7) for i in range(2)]
+    harness.client.versions.commits.diff_async = AsyncMock(return_value=_Counted({"diffJson": files}))
+    first = await vc.collect_group_git_diff("test", product=ProductsCore.STREAM, group="default", diff_line_limit=10)
+    assert first["diff_page"]["returned_lines"] == 10
+    second = await vc.collect_group_git_diff(
+        "test",
+        product=ProductsCore.STREAM,
+        group="default",
+        diff_line_limit=10,
+        line_offset=10,
+    )
+    assert second["diff_page"]["returned_lines"] == 4
+    assert second["diff_page"]["next_line_offset"] is None
+    assert second["diff"]["items"][0]["diffJson"][0]["newName"] == "local/cribl/1.yml"
+    assert len(files[0]["blocks"][0]["lines"]) == 7
+    with pytest.raises(ValueError, match="zero or greater"):
+        await vc.collect_leader_git_diff("test", line_offset=-1)
+
+
+@pytest.mark.parametrize("push_error", [False, True])
+async def test_commit_leader_requires_review_and_limits_sdk_commit_to_selected_files(
+    monkeypatch: pytest.MonkeyPatch, *, push_error: bool
+) -> None:
+    """The Leader tool clears selected pending metadata without committing/deploying any group."""
+    harness = _Harness((ProductsCore.STREAM, _group_payload("default", product=ProductsCore.STREAM)))
+    harness.global_dirty = True
+    _install_harness(monkeypatch, harness)
+    files = ["local/cribl/groups.yml"]
+    planned = await vc.commit_leader_config("test", message="Review metadata", files=files, push=push_error)
+    assert planned["plan"]["pending_files"] == files
+    harness.client.versions.commits.create_async.assert_not_awaited()
+    with pytest.raises(ValueError, match="required"):
+        await vc.commit_leader_config("test", message="Review metadata", files=files, dry_run=False)
+    with pytest.raises(ValueError, match="stale"):
+        await vc.commit_leader_config(
+            "test", message="Different message", files=files, dry_run=False, expected_plan_sha256=planned["plan"]["plan_sha256"]
+        )
+    harness.push_error = RuntimeError("remote rejected") if push_error else None
+    result = await vc.commit_leader_config(
+        "test",
+        message="Review metadata",
+        files=files,
+        push=push_error,
+        dry_run=False,
+        expected_plan_sha256=planned["plan"]["plan_sha256"],
+    )
+    assert result["status"] == ("partial_failure" if push_error else "committed")
+    assert result["commit"]["version"] == "leader-sync"
+    assert result["commit"]["line_changes"]["deletions"] == 1
+    assert result["completed_steps"] == ["leader_commit"]
+    harness.client.versions.commits.create_async.assert_awaited_once_with(
+        message="Review metadata",
+        files=files,
+        timeout_ms=1000,
+    )
+    assert harness.commit_order == harness.deploy_order == []
+    assert harness.global_dirty is False
+    assert "plan" not in result
+    assert "files" not in result
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        [],
+        ["groups/a/local/cribl/inputs.yml"],
+        ["local"],
+        ["../local/cribl/groups.yml"],
+        ["/local/cribl/groups.yml"],
+        ["local/*"],
+        [":(top)**"],
+        [".git/config"],
+    ],
+)
+async def test_leader_commit_rejects_broad_or_nonleader_selection(monkeypatch: pytest.MonkeyPatch, files: list[str]) -> None:
+    """Never turn an empty list, directory or pathspec into a global commit."""
+    harness = _Harness()
+    harness.global_dirty = True
+    _install_harness(monkeypatch, harness)
+    with pytest.raises(ValueError, match=r"Leader|directory"):  # noqa: PT012 - invalid syntax fails during planning
+        planned = await vc.commit_leader_config("test", message="Review", files=files)
+        await vc.commit_leader_config(
+            "test", message="Review", files=files, dry_run=False, expected_plan_sha256=planned["plan"]["plan_sha256"]
+        )
+    harness.client.versions.commits.create_async.assert_not_awaited()
+
+
+@pytest.mark.parametrize("failure", ["conflict", "remote", "behind", "versioning"])
+async def test_leader_commit_blocks_unsafe_git_state(monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    """Leader commits retain conflict and optional push preflight safeguards."""
+    harness = _Harness()
+    harness.global_dirty = True
+    harness.global_conflicts = ["local/cribl/groups.yml"] if failure == "conflict" else []
+    harness.remote = False if failure == "remote" else harness.remote
+    harness.global_behind = int(failure == "behind")
+    harness.versioning = failure != "versioning"
+    _install_harness(monkeypatch, harness)
+    files = ["local/cribl/groups.yml"]
+    plan = (await vc.commit_leader_config("test", message="Review", files=files, push=True))["plan"]
+    assert plan["blocked_reasons"]
+    with pytest.raises(ValueError, match="blocked"):
+        await vc.commit_leader_config(
+            "test", message="Review", files=files, push=True, dry_run=False, expected_plan_sha256=plan["plan_sha256"]
+        )
+    harness.client.versions.commits.create_async.assert_not_awaited()
+
+
+async def test_leader_commit_hash_covers_unshown_content_and_supports_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Changing content without changing file paths invalidates review; clean selections are no-ops."""
+    harness = _Harness()
+    harness.global_dirty = True
+    _install_harness(monkeypatch, harness)
+    files = ["local/cribl/groups.yml"]
+    payload = [_large_diff_file(files[0], lines=300)]
+    harness.client.versions.commits.diff_async = AsyncMock(return_value=_Counted({"diffJson": payload}))
+    plan = (await vc.commit_leader_config("test", message="Review", files=files))["plan"]
+    payload[0]["blocks"][0]["lines"][-1]["content"] = "+ later drift"
+    with pytest.raises(ValueError, match="stale"):
+        await vc.commit_leader_config(
+            "test", message="Review", files=files, dry_run=False, expected_plan_sha256=plan["plan_sha256"]
+        )
+    harness.global_dirty = False
+    plan = (await vc.commit_leader_config("test", message="Review", files=files))["plan"]
+    result = await vc.commit_leader_config(
+        "test", message="Review", files=files, dry_run=False, expected_plan_sha256=plan["plan_sha256"]
+    )
+    assert result["status"] == "noop"
+    harness.client.versions.commits.create_async.assert_not_awaited()
+
+
+@pytest.mark.parametrize("kind", ["missing", "truncated", "rename"])
+async def test_leader_commit_blocks_incomplete_or_out_of_scope_diff(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    """A pending file cannot be committed without complete, in-scope review data."""
+    harness = _Harness()
+    harness.global_dirty = True
+    _install_harness(monkeypatch, harness)
+    file = _large_diff_file("local/cribl/groups.yml", lines=1)
+    file["isTooBig"] = kind == "truncated"
+    if kind == "rename":
+        file["oldName"] = "groups/default/local/cribl/groups.yml"
+    harness.client.versions.commits.diff_async = AsyncMock(
+        return_value=_Counted({"diffJson": [] if kind == "missing" else [file]})
+    )
+    plan = (await vc.commit_leader_config("test", message="Review", files=["local/cribl/groups.yml"]))["plan"]
+    assert plan["blocked_reasons"]
+    with pytest.raises(ValueError, match="blocked"):
+        await vc.commit_leader_config(
+            "test", message="Review", files=["local/cribl/groups.yml"], dry_run=False, expected_plan_sha256=plan["plan_sha256"]
+        )
+    harness.client.versions.commits.create_async.assert_not_awaited()
+
+
+async def test_explicit_leader_file_read_and_commit_preserve_unselected_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inspect and commit a non-metadata Leader file, even beyond the capped status preview."""
+    harness = _Harness()
+    _install_harness(monkeypatch, harness)
+    path = "local/cribl/zz-settings.yml"
+    paths = [f"local/cribl/other-{i}.yml" for i in range(30)] + [path]
+    raw_status = {"current": "main", "ahead": 0, "behind": 0, "conflicted": [], "modified": paths}
+    harness.client.versions.statuses.get_async = AsyncMock(return_value=_Counted(raw_status))
+    harness.client.versions.commits.diff_async = AsyncMock(
+        return_value=_Counted({"diffJson": [_large_diff_file(path, lines=12)]})
+    )
+    diff = await vc.collect_leader_git_diff("test", filename=path, diff_line_limit=10)
+    assert diff["filename"] == path
+    assert diff["diff_page"]["returned_lines"] == 10
+    assert diff["diff_page"]["next_line_offset"] == 10
+    plan = (await vc.commit_leader_config("test", message="Settings", files=[path], push=True))["plan"]
+    assert plan["pending_files"] == [path]
+    assert plan["changes"]["added_lines"] == 12
+    result = await vc.commit_leader_config(
+        "test", message="Settings", files=[path], push=True, dry_run=False, expected_plan_sha256=plan["plan_sha256"]
+    )
+    assert result["status"] == "committed"
+    assert result["push"]["status"] == "pushed"
+    harness.client.versions.commits.create_async.assert_awaited_once_with(message="Settings", files=[path], timeout_ms=1000)
+    assert harness.deploy_order == []
