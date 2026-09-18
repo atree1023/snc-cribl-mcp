@@ -378,6 +378,31 @@ Validates global Cribl system settings between two configured leaders.
 
 - **Returns:** JSON with an in-sync flag and differing setting paths. Use `include_payloads=true` when the raw source and target setting payloads are needed.
 
+#### `create_edge_fleet`
+
+Creates an Edge fleet or subfleet using the SDK. Pass `fleet: {id: "linux", name: "Linux"}` for a fleet,
+or `fleet: {id: "web", inherits: "linux"}` for a subfleet. Optional fields are `name`, `description`, and
+`workerRemoteAccess`. `inherits` is an exact parent ID. Existing matching fleets are noops; conflicting
+settings, missing parents, cycles, and parents with pending or undeployed changes block creation.
+
+Use `server`, review the default dry-run's `plan.plan_sha256`, then pass it as `expected_plan_sha256` with
+`dry_run=false`. Execution returns a `job_id`; poll `get_config_deployment_job`. Creation leaves changes
+uncommitted. Use the normal reviewed Leader-file and fleet commit/deploy workflows to finalize them,
+or use a manifest to create a whole hierarchy in one application.
+
+#### `replicate_fleet_mapping_ruleset`
+
+Copies one ruleset with `source_server`, target `server`, and `ruleset_id`. Uses the Leader-level
+`/fleet-mappings` API because the installed Python SDK has no mapping component. Missing rulesets are
+created; existing rulesets are updated, or skipped with `overwrite=false`. Dry-run, plan-hash confirmation,
+and job polling work as for fleet creation.
+
+Rule order, filters, and destination fleet IDs are functional configuration and are preserved exactly.
+Literal destinations must exist on the target (or be declared in the same manifest). Dynamic assignment
+expressions are reported in the plan and are never evaluated locally. Existing rulesets retain their
+target activation state; new copies are inactive. **Updating an already-active ruleset changes live node
+assignment rules during apply**, before a later Git commit. Replication does not activate another ruleset.
+
 #### `write_manifest`
 
 Validates agent-generated YAML against the strict schema and writes it beneath `manifest_root`, closing the workflow for
@@ -393,23 +418,48 @@ are retained.
 
 #### `replicate_config_manifest`
 
-Plans or applies explicit group-scoped resources from one source leader to every target in a strict YAML manifest.
+Plans or applies explicit resources from one source leader to every target in a strict YAML manifest, including Edge fleet declarations and Leader mapping rulesets.
 
-- **Safe input:** Manifests are limited to the configured manifest root, 1 MiB, schema version 1, configured server names, explicit item IDs, and known fields. Duplicate YAML keys, aliases, inline config payloads, environment expansion, duplicate targets, and duplicate group/kind sections are rejected.
-- **Efficient fan-out:** Source objects are resolved and snapshotted once, then targets run concurrently (manifest `options.concurrency` by default, explicit tool override when supplied; maximum 10). Each target remains internally ordered as variables, breakers, lookups, destinations, pipelines, sources, then routes.
+- **Safe input:** Manifests are limited to the configured manifest root, 1 MiB, schema version 1, configured server names, explicit item IDs, and known fields. Duplicate YAML keys, aliases, arbitrary inline resource payloads, environment expansion, duplicate targets, and duplicate group/kind sections are rejected.
+- **Efficient fan-out:** Source objects are resolved and snapshotted once, then targets run concurrently (manifest `options.concurrency` by default, explicit tool override when supplied; maximum 10). Each target creates declared fleets in parent-first order, copies group content as variables, breakers, lookups, destinations, pipelines, sources, then routes, and copies fleet mapping rulesets last.
 - **Safe execution:** Dry-run returns `intent_sha256`, aggregate `plan_sha256`, a `target_plan_sha256` for each leader, bounded item identities for every action bucket, and the dependency-aware `apply_order`. Execution requires the aggregate hash, revalidates each target independently with a visible `revalidated` counter, skips or aborts on drift, and never executes a target with preflight blockers.
 - **Returns:** Execution immediately returns a durable `job_id`. Progress uses `unit: items`, counts item work across all targets, and reports active target slots plus the effective concurrency. Drift skips produce `partial_skip` and `skipped_targets`, distinct from real failures. The final bounded result includes an `apply_receipt_sha256`; target detail is retrieved with `get_config_deployment_job(job_id, target)`.
+
+Edge manifests may add `fleets` and `fleet_mappings`. Each list is optional; at least one of `content`,
+`fleets`, or `fleet_mappings` must be nonempty. Fleet declarations are typed creation settings; mapping
+entries are exact source ruleset IDs. These sections require `source.product: edge`. Existing schema-1
+manifests keep their canonical intent hashes.
+
+```yaml
+schema: 1
+wave: edge-rollout
+source: {server: golden.oak, product: edge}
+targets: [golden.oak.new]
+fleets:
+  - {id: linux, name: Linux}
+  - {id: web, inherits: linux}
+content:
+  - {group: web, kind: destinations, items: [archive]}
+fleet_mappings: [production]
+options: {overwrite: true, on_drift: abort}
+```
+
+The content objects and mapping ruleset must exist on the source. Fleet declarations create the same IDs
+on each target. Apply preflight requires the affected Leader files to have no pre-existing changes.
+After applying, the durable receipt guards their complete diffs along with every affected fleet diff.
+`commit_and_deploy_manifest` reviews and commits only those exact Leader files, then deploys fleets in
+inheritance order. A manifest containing only `fleet_mappings` does not deploy any fleets.
 
 #### `validate_config_manifest`
 
 Semantically validates every manifest item across all targets in parallel. Hostnames, endpoints, generated identities,
 credential references, and volatile metadata are counted but non-blocking; functional differences and missing items fail
-the affected target. Per-target summaries split `create`, `update`, `noop`, and `unsupported`. Difference detail is pageable
+the affected target. Fleet inheritance and mapping destinations/order use exact configuration comparisons, not identity elision. Per-target summaries split `create`, `update`, `noop`, and `unsupported`. Difference detail is pageable
 with `offset` and `limit`; use `target` to inspect one leader and `detail_scope="all"` to page every item, including noops.
 
 #### `check_manifest_receipt_validity`
 
-Checks whether an apply receipt still matches the current manifest and each guarded group/fleet pending diff without
+Checks whether an apply receipt still matches the current manifest and each guarded group/fleet and Leader-file pending diff without
 committing or deploying. Provide exactly one of `apply_job_id` or `apply_receipt_sha256`; use `target` for one leader.
 
 #### `commit_and_deploy_manifest`
@@ -417,7 +467,7 @@ committing or deploying. Provide exactly one of `apply_job_id` or `apply_receipt
 Commits and deploys a prior manifest application across its successful target leaders.
 
 - **Receipt gate:** Requires either the replication `apply_job_id` or `apply_receipt_sha256`. Every group diff must still match the durable post-apply receipt before planning and again before execution.
-- **Scope:** Commits only manifest groups. For Edge, the full fleet hierarchy is validated before selecting manifest fleets and affected descendants in parent-first order. Ancestors outside that scope are checked for pending configuration and included in the plan's drift guard, but are not committed or deployed. Child-only manifests can proceed when those ancestors are already committed and deployed.
+- **Scope:** Commits manifest groups and receipt-guarded provisioning files (`local/cribl/groups.yml` and/or `local/cribl/fleet-mappings.yml`). Selected Leader files are committed first, then fleet config and deployment metadata. Mappings-only manifests commit their Leader file without deploying unrelated fleets. For Edge, the full fleet hierarchy is validated before selecting manifest fleets and affected descendants in parent-first order. Ancestors outside that scope are checked for pending configuration and included in the plan's drift guard, but are not committed or deployed. Child-only manifests can proceed when those ancestors are already committed and deployed.
 - **Review contract:** Dry-run and execution use a separate commit/deploy `plan_sha256`, keeping replication approval distinct from deployment approval. Plans expose ordered per-fleet actions, `push_action`, and Leader blocker paths. Targets run concurrently, while each leader's hierarchy remains serialized.
 - **Progress and outcomes:** Progress uses `unit: fleets` and reports the current leader, product, fleet, and phase while preserving parent-before-child order. `on_drift="skip"` applies to receipt, group/fleet, and Leader `groups.yml` blockers; skipped leaders produce `partial_skip`, not `partial_failure`. `push=false` is carried through both plan and execution and is guarded against an unexpected inner push request.
 

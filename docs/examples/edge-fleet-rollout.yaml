@@ -1,0 +1,25 @@
+# Replace source/target names and IDs with your configured rollout resources.
+schema: 1
+wave: edge-fleet-rollout
+source:
+  server: golden.oak
+  product: edge
+targets: [golden.oak.new]
+# Parent-first ordering is automatic, including when these entries are reversed.
+fleets:
+  - id: linux
+    name: Linux
+  - id: web
+    name: Web servers
+    inherits: linux
+# Omit content for fleet-only or mapping-only provisioning.
+content:
+  - group: web
+    kind: destinations
+    items: [archive]
+# Copies exact source ruleset IDs after fleets and their content exist.
+# New target rulesets are inactive; existing target activation is preserved.
+fleet_mappings: [production]
+options:
+  overwrite: true
+  on_drift: abort

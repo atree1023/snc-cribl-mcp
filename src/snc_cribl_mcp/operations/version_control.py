@@ -1606,7 +1606,7 @@ def _all_target_plan_action(
     return ("deploy_inherited", ancestor) if ancestor is not None else ("noop", None)
 
 
-async def _build_all_plan(
+async def _build_all_plan(  # noqa: C901
     resolved: ResolvedControlPlane,
     *,
     product: ProductScope,
@@ -1615,12 +1615,18 @@ async def _build_all_plan(
     push: bool,
     stop_on_error: bool,
     groups: list[str] | None = None,
+    _leader_files: list[str] | None = None,
 ) -> tuple[dict[str, Any], list[GroupTarget]]:
     """Build a deterministic plan for every selected deployment target."""
     # Validate and order the complete hierarchy before restricting mutation scope.
     # An unchanged ancestor can be absent from the manifest, but not from the graph.
     all_targets = _deployment_order(await _list_targets(resolved, _selected_products(product)))
-    targets = _manifest_target_closure(all_targets, groups)
+    # Only the receipt-gated manifest workflow supplies these exact Leader files.
+    selected_leader_files = _validate_leader_files(_leader_files) if _leader_files else []
+    if set(selected_leader_files) - {"local/cribl/groups.yml", "local/cribl/fleet-mappings.yml"}:
+        msg = "Manifest provisioning may commit only groups.yml and fleet-mappings.yml."
+        raise ValueError(msg)
+    targets = [] if groups == [] and selected_leader_files else _manifest_target_closure(all_targets, groups)
     leader_status = await _global_status(resolved)
     git_info = await _git_info(resolved) if push else None
     edge_ancestors, blocked_reasons = await _manifest_ancestor_preflight(resolved, targets=targets, inventory=all_targets)
@@ -1658,9 +1664,18 @@ async def _build_all_plan(
             }
         )
 
-    has_actions = any(target_plan["action"] != "noop" for target_plan in target_plans)
+    leader_plan = (
+        await _build_leader_commit_plan(resolved, message=message, files=selected_leader_files, push=False)
+        if selected_leader_files
+        else None
+    )
+    if leader_plan is not None:
+        blocked_reasons.extend(leader_plan["blocked_reasons"])
+    has_actions = any(target_plan["action"] != "noop" for target_plan in target_plans) or bool(
+        leader_plan and leader_plan["action"] == "commit"
+    )
     push_action = "push" if push and (has_actions or bool(leader_status["ahead"])) else "noop"
-    if has_actions and _leader_metadata_paths(leader_status):
+    if has_actions and _leader_metadata_paths(leader_status) and _LEADER_METADATA_PATH not in selected_leader_files:
         blocked_reasons.append("Leader groups.yml already has uncommitted changes; resolve them before deployment.")
     if has_actions and leader_status["conflicted"]:
         blocked_reasons.append("The Leader Git working tree contains conflicts.")
@@ -1687,6 +1702,8 @@ async def _build_all_plan(
         "targets": target_plans,
         "blocked_reasons": list(dict.fromkeys(blocked_reasons)),
     }
+    if leader_plan is not None:
+        plan_body["provisioning_leader_commit"] = leader_plan
     return {**plan_body, "plan_sha256": _canonical_digest(plan_body)}, targets
 
 
@@ -1701,6 +1718,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
     dry_run: bool = True,
     expected_plan_sha256: str | None = None,
     groups: list[str] | None = None,
+    _leader_files: list[str] | None = None,
     progress_callback: FleetProgressCallback | None = None,
     event_callback: FleetProgressCallback | None = None,
 ) -> dict[str, Any]:
@@ -1720,12 +1738,25 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
             push=push,
             stop_on_error=stop_on_error,
             groups=groups,
+            _leader_files=_leader_files,
         )
         if dry_run:
             return {"status": "planned", "dry_run": True, "plan": plan}
 
         await _event("planned", targets=[_target_ref(target) for target in targets])
         _validate_execution_plan(plan, expected_plan_sha256)
+        provisioning_commit: dict[str, Any] | None = None
+        if "provisioning_leader_commit" in plan:
+            leader_plan = cast("dict[str, Any]", plan["provisioning_leader_commit"])
+            await _event("phase", phase="provisioning_leader_commit")
+            provisioning_commit = await commit_leader_config(
+                server,
+                message=normalized_message,
+                files=leader_plan["files"],
+                dry_run=False,
+                expected_plan_sha256=str(leader_plan["plan_sha256"]),
+                push=False,
+            )
         commit_results: list[dict[str, Any]] = []
         deploy_candidates: dict[tuple[ProductsCore, str], tuple[GroupTarget, str]] = {}
         errors: list[dict[str, Any]] = []
@@ -1969,6 +2000,7 @@ async def commit_and_deploy_all(  # noqa: C901, PLR0912, PLR0915
             "commit_results": commit_results,
             "deploy_results": deploy_results,
             "leader_commit": leader_commit,
+            "provisioning_leader_commit": provisioning_commit,
             "push": _push_result(
                 requested=plan["push_action"] == "push",
                 pushed=pushed,

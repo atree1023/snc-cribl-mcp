@@ -5,6 +5,8 @@ logic has been split into focused modules under ``snc_cribl_mcp/`` to avoid
 duplication and improve maintainability.
 
 Registered tools:
+- ``create_edge_fleet``: create an Edge fleet or subfleet with reviewed settings
+- ``replicate_fleet_mapping_ruleset``: copy ordered Leader mapping rules
 - ``list_groups``: list worker groups (Stream) and fleets (Edge)
 - ``get_leader_overview``: summarize leader health, version, nodes, groups, and runtime status
 - ``list_sources``: list configured sources per group across products
@@ -95,6 +97,7 @@ from .operations.version_control_jobs import VersionControlJobManager
 from .tools.config_manifest import register as register_config_manifest_tools
 from .tools.copy_resource_config import register as register_copy_resource_config
 from .tools.edge_info import register as register_edge_info
+from .tools.edge_provisioning import register as register_edge_provisioning
 from .tools.get_config_objects import register as register_get_config_objects
 from .tools.group_sync import register as register_group_sync_tools
 from .tools.leader_overview import register as register_leader_overview
@@ -224,6 +227,7 @@ def _register_capabilities() -> None:
         replicate_impl=replicate_system_settings,
         validate_impl=validate_system_settings_sync,
     )
+    register_edge_provisioning(app, job_manager=version_control_jobs)
     register_config_manifest_tools(
         app,
         job_manager=version_control_jobs,

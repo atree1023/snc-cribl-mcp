@@ -72,7 +72,7 @@ def register(  # noqa: C901, PLR0915
         """Validate and persist a configuration manifest in the safe root."""
         await ctx.info("Validating and writing a multi-leader Cribl configuration manifest.")
         loaded, status = write_config_manifest(name, content, overwrite=overwrite)
-        item_count = sum(len(entry.items) for entry in loaded.manifest.content)
+        item_count = loaded.manifest.item_count
         return {
             "status": status,
             "manifest_path": loaded.relative_path,
@@ -121,15 +121,18 @@ def register(  # noqa: C901, PLR0915
     @app.tool(
         name="replicate_config_manifest",
         description=(
-            "Plan or apply a strict YAML manifest of explicit group-scoped configuration objects to many configured "
-            "Cribl leaders in parallel. The source is snapshotted once, each target has an independent drift guard, "
+            "Plan or apply a strict schema-1 YAML manifest to many configured Leaders. Edge manifests support fleets "
+            "(typed creation declarations with id and optional inherits) and fleet_mappings (source ruleset IDs), "
+            "alongside group-scoped content. Fleets are created parent-first, content copied next, mappings last. "
+            "Ruleset copies preserve target activation; updating an active ruleset changes live assignment rules. "
+            "The source is snapshotted once, each target has an independent drift guard, "
             "and execution emits a durable apply receipt required by commit_and_deploy_manifest. "
             f"{_PLAN_GUIDANCE}"
         ),
         annotations={
             "title": "Replicate configuration manifest",
             "readOnlyHint": False,
-            "destructiveHint": False,
+            "destructiveHint": True,
             "idempotentHint": False,
         },
     )
@@ -191,7 +194,7 @@ def register(  # noqa: C901, PLR0915
             resume_of=resume_job_id,
             initial_progress={
                 "unit": "items",
-                "total": sum(len(entry.items) for entry in loaded.manifest.content) * len(loaded.manifest.targets),
+                "total": loaded.manifest.item_count * len(loaded.manifest.targets),
                 "completed": 0,
                 "failed": 0,
                 "skipped": 0,
@@ -281,9 +284,10 @@ def register(  # noqa: C901, PLR0915
     @app.tool(
         name="commit_and_deploy_manifest",
         description=(
-            "Plan or commit and deploy only the groups changed by a successful replicate_config_manifest apply "
+            "Plan or commit and deploy the groups and receipt-selected Leader provisioning files changed by an apply "
             "receipt. Edge descendants are included in parent-before-child order so inherited changes are captured. "
-            "The operation refuses target diffs that no longer match the apply receipt. "
+            "Leader provisioning files are committed before fleets; mappings-only manifests deploy no fleets. "
+            "The operation refuses group or Leader-file diffs that no longer match the apply receipt. "
             f"{_PLAN_GUIDANCE}"
         ),
         annotations={

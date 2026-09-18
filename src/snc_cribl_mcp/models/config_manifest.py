@@ -14,6 +14,7 @@ from yaml.events import AliasEvent, Event
 from yaml.nodes import MappingNode, Node
 
 from ..config import config_manifest_root, configured_server_names
+from .edge_fleet import EdgeFleet, ordered_fleets
 
 type ManifestContentKind = Literal[
     "breakers",
@@ -158,7 +159,9 @@ class ConfigManifest(BaseModel):
     schema_: Literal[1] = Field(alias="schema")
     wave: str | int
     source: ManifestSource
-    content: list[ManifestContent] = Field(min_length=1)
+    content: list[ManifestContent] = Field(default_factory=list[ManifestContent])
+    fleets: list[EdgeFleet] = Field(default_factory=list[EdgeFleet])
+    fleet_mappings: list[str] = Field(default_factory=list)
     targets: list[str] = Field(min_length=1, max_length=_MAX_TARGETS)
     options: ManifestOptions = Field(default_factory=ManifestOptions)
 
@@ -169,6 +172,11 @@ class ConfigManifest(BaseModel):
             return _non_empty(value)
         return value
 
+    @field_validator("fleet_mappings")
+    @classmethod
+    def _validate_mapping_ids(cls, value: list[str]) -> list[str]:
+        return _unique_strings(value, field_name="fleet_mappings")
+
     @field_validator("targets")
     @classmethod
     def _validate_targets(cls, value: list[str]) -> list[str]:
@@ -176,6 +184,13 @@ class ConfigManifest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_manifest(self) -> Self:
+        if not self.content and not self.fleets and not self.fleet_mappings:
+            msg = "Manifest requires content, fleets, or fleet_mappings."
+            raise ValueError(msg)
+        if (self.fleets or self.fleet_mappings) and self.source.product != "edge":
+            msg = "fleets and fleet_mappings require source.product=edge."
+            raise ValueError(msg)
+        ordered_fleets(self.fleets)
         if self.source.server in self.targets:
             msg = "source.server must not also appear in targets."
             raise ValueError(msg)
@@ -189,7 +204,7 @@ class ConfigManifest(BaseModel):
         if duplicates:
             msg = f"Manifest contains duplicate group/kind sections: {', '.join(duplicates)}."
             raise ValueError(msg)
-        item_count = sum(len(entry.items) for entry in self.content)
+        item_count = self.item_count
         if item_count > _MAX_ITEMS:
             msg = f"Manifest contains {item_count} items; the maximum is {_MAX_ITEMS}."
             raise ValueError(msg)
@@ -198,9 +213,27 @@ class ConfigManifest(BaseModel):
             return self
         return self
 
+    @property
+    def item_count(self) -> int:
+        """Count fleet declarations, ordinary config objects, and mapping rulesets."""
+        return sum(len(entry.items) for entry in self.content) + len(self.fleets) + len(self.fleet_mappings)
+
+    @property
+    def deployment_groups(self) -> list[str]:
+        """Return all fleet/group selectors affected by this manifest."""
+        return sorted({entry.group for entry in self.content} | {fleet.id for fleet in self.fleets})
+
     def canonical_payload(self) -> dict[str, Any]:
         """Return a stable manifest intent payload independent of YAML formatting."""
         payload = self.model_dump(by_alias=True, mode="json")
+        # Keep existing schema-1 intent digests stable when extensions are absent.
+        for key in ("fleets", "fleet_mappings"):
+            if not payload[key]:
+                payload.pop(key)
+        if self.fleets:
+            payload["fleets"] = [fleet.model_dump(by_alias=True, exclude_none=True) for fleet in ordered_fleets(self.fleets)]
+        if self.fleet_mappings:
+            payload["fleet_mappings"] = sorted(self.fleet_mappings)
         payload["targets"] = sorted(self.targets)
         payload["content"] = sorted(
             (
