@@ -32,7 +32,7 @@ from snc_cribl_mcp.operations.version_control_jobs import JobContext
 from snc_cribl_mcp.server import app
 
 from .test_config_manifest_operations import _JobContext
-from .test_version_control import _Counted, _group_payload, _Harness
+from .test_version_control import _Counted, _group_payload, _Harness, _Page
 
 
 def _mapping(*fleets: str, active: bool = True) -> dict[str, Any]:
@@ -76,6 +76,13 @@ class _EdgeHarness(_Harness):
         self.client.sdk_configuration.server_url = "https://cribl.test/api/v1"
         self.http = httpx.AsyncClient(transport=httpx.MockTransport(self._http))
         self.client.sdk_configuration.async_client = self.http
+
+    async def _list_groups(self, *, product: ProductsCore, **kwargs: object) -> _Counted:
+        """Match Cribl's opt-in Git metadata instead of always returning it."""
+        result = await super()._list_groups(product=product, **kwargs)
+        if kwargs.get("fields") is None:
+            return _Counted(*({key: value for key, value in item.payload.items() if key != "git"} for item in result.items))
+        return result
 
     async def _create(self, *, id: str, **kwargs: Any) -> _Counted:  # noqa: A002, ANN401
         assert kwargs["product"] == ProductsCore.EDGE
@@ -199,6 +206,37 @@ async def test_sdk_fleet_creation_contract(httpx_mock: HTTPXMock) -> None:
     assert json.loads(request.content) == {"id": "child", "inherits": "parent", "type": "edge"}
 
 
+async def test_sdk_fleet_inventory_requests_git_metadata(httpx_mock: HTTPXMock) -> None:
+    """Verify the actual SDK query and wrapped response used by the parent guard."""
+    parent = _group_payload("linux", product=ProductsCore.EDGE, committed="2120a01", deployed="2120a01", local_changes=0)
+    httpx_mock.add_response(
+        method="GET",
+        url="https://cribl.test/api/v1/products/edge/groups?fields=git.commit%2Cgit.localChanges",
+        json={"count": 1, "items": [parent]},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url="https://cribl.test/api/v1/products/edge/groups?fields=git.commit%2Cgit.localChanges&offset=1",
+        json={"count": 1, "items": []},
+    )
+    config = CriblConfig(url="https://cribl.test/api/v1", username="user", password="pass")
+    security = Security(bearer_auth="test")
+    async with create_control_plane(config, security=security) as client:
+        inventory = await edge.fleet_inventory(ResolvedControlPlane("test", config, client, security))
+    assert inventory[0]["git"]["commit"] == "2120a01"
+    assert inventory[0]["configVersion"] == "2120a01"
+
+
+async def test_fleet_inventory_exhausts_pages(leaders: dict[str, _EdgeHarness]) -> None:
+    """Projected inventory still includes ancestors on later SDK pages."""
+    target = leaders["target"]
+    target.client.groups.list_async.return_value = _Page({"id": "first"}, next_page=_Page({"id": "last"}))
+    target.client.groups.list_async.side_effect = None
+    async with edge.connect_to_server("target") as resolved:
+        inventory = await edge.fleet_inventory(resolved)
+    assert [item["id"] for item in inventory] == ["first", "last"]
+
+
 async def test_create_fleet_plan_drift_noop_and_parent_checks(leaders: dict[str, _EdgeHarness]) -> None:
     """Creation is review-gated, create-only, and checks exact parent readiness."""
     target = leaders["target"]
@@ -222,6 +260,118 @@ async def test_create_fleet_plan_drift_noop_and_parent_checks(leaders: dict[str,
     assert any("Parent fleet" in reason for reason in child["plan"]["blocked_reasons"])
     with pytest.raises(ValueError, match="unknown fleet"):
         await edge.create_edge_fleet("target", fleet=EdgeFleet(id="orphan", inherits="absent"))
+
+
+@pytest.mark.parametrize("ahead", [0, 5])
+async def test_parent_preflight_uses_projected_target_commit(leaders: dict[str, _EdgeHarness], ahead: int) -> None:
+    """A full history hash must not make the same deployed short hash look pending."""
+    target = leaders["target"]
+    target.states[ProductsCore.EDGE, "linux"] = _group_payload(
+        "linux", product=ProductsCore.EDGE, committed="2120a01", deployed="2120a01", local_changes=0
+    )
+    target.global_ahead = ahead
+    target.client.versions.commits.list_async.return_value = _Counted({"hash": "2120a01" + "a" * 33})
+    target.client.versions.commits.list_async.side_effect = None
+
+    result = await edge.create_edge_fleet("target", fleet=EdgeFleet(id="child", inherits="linux"))
+
+    assert result["plan"]["blocked_reasons"] == []
+    target.client.versions.commits.list_async.assert_not_awaited()
+    guard = result["plan"]["guard"]
+    assert guard["existing_fleet_count"] == 1
+    assert guard["planned_create_count"] == 1
+    assert guard["fleet_count"] == 2
+    assert guard["parents"][0]["committed_version"] == "2120a01"
+    assert guard["parents"][0]["deployment_pending"] is False
+    assert guard["leader_git"]["ahead"] == ahead
+    assert not target.events
+
+
+@pytest.mark.parametrize("signal", ["local_changes", "deployment_pending", "behind", "conflict_count"])
+async def test_parent_block_names_signal_and_values(leaders: dict[str, _EdgeHarness], signal: str) -> None:
+    """Dry-runs explain the exact target-local signal without follow-up reads."""
+    target = leaders["target"]
+    parent = _group_payload("linux", product=ProductsCore.EDGE, committed="2120a01", deployed="2120a01", local_changes=0)
+    target.states[ProductsCore.EDGE, "linux"] = parent
+    if signal == "local_changes":
+        parent["git"]["localChanges"] = 1
+    elif signal == "deployment_pending":
+        parent["git"]["commit"] = "61f03ed"
+    else:
+
+        async def _status(**kwargs: Any) -> _Counted:  # noqa: ANN401
+            result = await target._status(**kwargs)
+            if kwargs.get("server_url"):
+                result.items[0].payload.update({"behind": 2} if signal == "behind" else {"conflicted": ["conflict.yml"]})
+            return result
+
+        target.client.versions.statuses.get_async.side_effect = _status
+
+    result = await edge.create_edge_fleet("target", fleet=EdgeFleet(id="child", inherits="linux"))
+    reasons = " ".join(result["plan"]["blocked_reasons"])
+    assert "Parent fleet 'linux'" in reasons
+    assert signal in reasons
+    guard = result["plan"]["guard"]
+    assert guard["parents"][0][signal]
+    if signal == "deployment_pending":
+        assert "61f03ed" in reasons
+        assert "2120a01" in reasons
+    with pytest.raises(ValueError, match="blocked"):
+        await edge.create_edge_fleet(
+            "target",
+            fleet=EdgeFleet(id="child", inherits="linux"),
+            dry_run=False,
+            expected_plan_sha256=result["plan"]["plan_sha256"],
+        )
+    assert not target.events
+
+
+async def test_preflight_follows_new_parent_to_existing_ancestor(leaders: dict[str, _EdgeHarness]) -> None:
+    """Declaring intermediate fleets must not hide a dirty existing ancestor."""
+    target = leaders["target"]
+    target.states[ProductsCore.EDGE, "linux"] = _group_payload("linux", product=ProductsCore.EDGE)
+    async with edge.connect_to_server("target") as resolved:
+        _, blocked, guard = await edge.provision_preflight(
+            resolved,
+            fleets=[EdgeFleet(id="child", inherits="new-parent"), EdgeFleet(id="new-parent", inherits="linux")],
+            mappings=[],
+        )
+    assert any("linux" in reason and "local_changes" in reason for reason in blocked)
+    assert guard["parent_count"] == 1
+
+
+async def test_parent_without_git_projection_blocks_without_history_guess(leaders: dict[str, _EdgeHarness]) -> None:
+    """Missing requested metadata is unknown readiness, not a clean parent."""
+    target = leaders["target"]
+    target.client.groups.list_async.return_value = _Counted({"id": "linux", "configVersion": "2120a01"})
+    target.client.groups.list_async.side_effect = None
+    result = await edge.create_edge_fleet("target", fleet=EdgeFleet(id="child", inherits="linux"))
+    assert "committed_version unavailable" in result["plan"]["blocked_reasons"][0]
+    assert result["plan"]["guard"]["parents"][0]["status"] == "unavailable"
+    target.client.versions.commits.list_async.assert_not_awaited()
+
+
+async def test_parent_guard_bounds_preview_but_hashes_all_parents(leaders: dict[str, _EdgeHarness]) -> None:
+    """Parents outside the bounded preview must still invalidate reviewed plans."""
+    target = leaders["target"]
+    fleets: list[EdgeFleet] = []
+    for index in range(30):
+        parent_id = f"parent-{index:02d}"
+        target.states[ProductsCore.EDGE, parent_id] = _group_payload(
+            parent_id, product=ProductsCore.EDGE, committed="base", deployed="base", local_changes=0
+        )
+        fleets.append(EdgeFleet(id=f"child-{index:02d}", inherits=parent_id))
+    async with edge.connect_to_server("target") as resolved:
+        _, blocked, guard = await edge.provision_preflight(resolved, fleets=fleets, mappings=[])
+        target.states[ProductsCore.EDGE, "parent-29"]["git"]["localChanges"] = 1
+        _, changed_blocked, changed_guard = await edge.provision_preflight(resolved, fleets=fleets, mappings=[])
+    assert blocked == []
+    assert guard["parent_count"] == 30
+    assert len(guard["parents"]) == 25
+    assert guard["parents_truncated"] is True
+    assert guard["parents"] == changed_guard["parents"]
+    assert guard["parents_sha256"] != changed_guard["parents_sha256"]
+    assert "parent-29" in changed_blocked[0]
 
 
 async def test_mapping_replication_preserves_order_activation_and_guards(leaders: dict[str, _EdgeHarness]) -> None:
@@ -278,6 +428,37 @@ def _loaded(*, mappings_only: bool = False) -> LoadedConfigManifest:
         file_sha256="file",
         manifest_sha256=models._canonical_digest(manifest.canonical_payload()),
     )
+
+
+@pytest.mark.parametrize("dirty", [False, True])
+async def test_manifest_parent_guard_is_target_local_and_visible(
+    leaders: dict[str, _EdgeHarness], monkeypatch: pytest.MonkeyPatch, *, dirty: bool
+) -> None:
+    """Different source/target versions are normal; target blockers remain visible."""
+    loaded = _loaded()
+    target = leaders["target"]
+    parent = _group_payload(
+        "parent", product=ProductsCore.EDGE, committed="2120a01", deployed="2120a01", local_changes=int(dirty)
+    )
+    target.states[ProductsCore.EDGE, "parent"] = parent
+    target.global_ahead = 5
+    target.client.versions.commits.list_async.return_value = _Counted({"hash": "2120a01" + "a" * 33})
+    target.client.versions.commits.list_async.side_effect = None
+
+    def _load(_path: str) -> LoadedConfigManifest:
+        return loaded
+
+    monkeypatch.setattr(manifests, "load_config_manifest", _load)
+    result = await manifests.plan_config_manifest_replication("edge.yaml", state_store=ManifestStateStore())
+    assert result["blocked_target_count"] == int(dirty)
+    plan = result["targets"][0]
+    assert plan["provisioning_guard"]["parents"][0]["committed_version"] == "2120a01"
+    assert plan["provisioning_guard"]["parents"][0]["deployment_pending"] is False
+    assert plan["provisioning_guard"]["leader_git"]["ahead"] == 5
+    if dirty:
+        assert any("local_changes=1" in reason for reason in plan["blocked_reasons"])
+    target.client.versions.commits.list_async.assert_not_awaited()
+    assert not target.events
 
 
 @pytest.mark.parametrize("mappings_only", [False, True])

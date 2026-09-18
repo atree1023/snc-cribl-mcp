@@ -13,6 +13,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import unquote
 
+import httpx
 import pytest
 from cribl_control_plane.errors import CriblControlPlaneError
 from cribl_control_plane.models.countedgitdiffresult import CountedGitDiffResult
@@ -1253,6 +1254,94 @@ async def test_push_accepts_real_sdk_string_response(httpx_mock: HTTPXMock, mess
         resolved = ResolvedControlPlane(server_name="test", config=config, client=client, security=security)
         await vc._push(resolved)
     assert len(httpx_mock.get_requests()) == 1
+
+
+async def _sdk_workflow_response(  # noqa: C901 - model each HTTP route in the SDK contract test
+    request: httpx.Request, *, harness: _Harness, mutations: list[tuple[str, str, dict[str, Any]]]
+) -> httpx.Response:
+    """Serve stateful Cribl responses while recording real SDK mutation requests."""
+    path = request.url.path.removeprefix("/api/v1")
+    scoped_url = None
+    if path.startswith("/m/linux/"):
+        scoped_url = "https://cribl.example.test/api/v1/m/linux"
+        path = path.removeprefix("/m/linux")
+    body: dict[str, Any] = json.loads(request.content) if request.content else {}
+    if request.method != "GET":
+        mutations.append((request.method, request.url.path, body))
+    if path == "/products/edge/groups":
+        result = _Counted() if request.url.params.get("offset") else await harness._list_groups(product=ProductsCore.EDGE)
+    elif path == "/products/edge/groups/linux":
+        result = await harness._get_group(product=ProductsCore.EDGE, id="linux")
+    elif path == "/products/edge/groups/linux/deploy":
+        result = await harness._deploy(product=ProductsCore.EDGE, id="linux", version=body["version"])
+    elif path == "/version/status":
+        result = await harness._status(server_url=scoped_url)
+    elif path == "/version/info":
+        result = await harness._git_info()
+    elif path == "/version/diff":
+        result = await harness._diff(
+            server_url=scoped_url, filename=request.url.params.get("filename"), commit=request.url.params.get("commit")
+        )
+    elif path == "/version/commit":
+        result = await harness._commit(server_url=scoped_url, **body)
+    elif path == "/version/push":
+        return httpx.Response(200, json=(await harness._push()).model_dump())
+    else:
+        pytest.fail(f"Unexpected Cribl request: {request.method} {path}")
+    return httpx.Response(200, json={"count": result.count, "items": [item.payload for item in result.items]})
+
+
+@pytest.mark.parametrize("push", [False, True])
+@pytest.mark.parametrize("all_targets", [False, True])
+async def test_sdk_commit_deploy_keeps_remote_push_separate(
+    httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch, *, push: bool, all_targets: bool
+) -> None:
+    """Inspect actual SDK HTTP requests through the complete reviewed workflow."""
+    harness = _Harness((ProductsCore.EDGE, _group_payload("linux", product=ProductsCore.EDGE)))
+    config = CriblConfig(url="https://cribl.example.test/api/v1", username="user", password="pass", timeout_ms=1000)
+    security = Security(bearer_auth="test-token")
+    mutations: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def _respond(request: httpx.Request) -> httpx.Response:
+        return await _sdk_workflow_response(request, harness=harness, mutations=mutations)
+
+    httpx_mock.add_callback(_respond, is_reusable=True)
+    async with create_control_plane(config, security=security) as client:
+
+        @asynccontextmanager
+        async def _connect(_server: str | None) -> AsyncGenerator[ResolvedControlPlane]:
+            yield ResolvedControlPlane("test", config, client, security)
+
+        monkeypatch.setattr(vc, "connect_to_server", _connect)
+        operation = vc.commit_and_deploy_all if all_targets else vc.commit_and_deploy_group
+        kwargs: dict[str, Any] = {"product": "edge", "message": "Reviewed rollout", "push": push}
+        if not all_targets:
+            kwargs.update(product=ProductsCore.EDGE, group="linux")
+        plan = await operation("test", **kwargs)
+        assert mutations == []
+        result = await operation("test", **kwargs, dry_run=False, expected_plan_sha256=plan["plan"]["plan_sha256"])
+        assert result["push"] == {"requested": push, "status": "pushed" if push else "not_requested"}
+        assert harness.commit_order == ["linux"]
+        assert harness.deploy_order == ["linux"]
+        assert harness.push_count == int(push)
+        assert [path for _, path, _ in mutations] == [
+            "/api/v1/m/linux/version/commit",
+            "/api/v1/products/edge/groups/linux/deploy",
+            "/api/v1/version/commit",
+            *(["/api/v1/version/push"] if push else []),
+        ]
+        assert mutations[0][2] == {
+            "message": "Reviewed rollout [edge:linux]" if all_targets else "Reviewed rollout",
+            "effective": True,
+        }
+        assert mutations[2][2]["files"] == ["local/cribl/groups.yml"]
+        if not push:
+            assert harness.global_ahead > 0
+            followup = await vc.push_config_git("test")
+            assert followup["plan"]["action"] == "push"
+            await vc.push_config_git("test", dry_run=False, expected_plan_sha256=followup["plan"]["plan_sha256"])
+            assert mutations[-1][1] == "/api/v1/version/push"
+            assert harness.push_count == 1
 
 
 @pytest.mark.asyncio

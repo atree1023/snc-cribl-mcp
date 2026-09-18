@@ -14,13 +14,16 @@ from cribl_control_plane.models.productscore import ProductsCore
 from ..client.cribl_client import ResolvedControlPlane, connect_to_server
 from ..models.edge_fleet import EdgeFleet, ordered_fleets
 from .common import HTTP_NOT_FOUND
-from .resource_actions import _direct_request_json, create_resource, list_resource
+from .resource_actions import _direct_request_json, create_resource
 from .version_control import (
+    _GROUP_GIT_FIELDS,
     GroupTarget,
     _canonical_digest,
+    _compact_git_status,
     _deployment_order,
     _global_status,
     _group_status,
+    _serialize_paginated_counted_response,
     _validate_execution_plan,
     collect_leader_git_diff,
 )
@@ -47,8 +50,14 @@ async def leader_file_snapshot(server: str | None, files: list[str]) -> dict[str
 
 
 async def fleet_inventory(resolved: ResolvedControlPlane) -> list[dict[str, Any]]:
-    """Read all Edge fleets through the paginated SDK interface."""
-    return await list_resource(resolved.client, "groups", product=ProductsCore.EDGE, timeout_ms=resolved.config.timeout_ms)
+    """Read fleets with the same opt-in Git metadata used by deployment status."""
+    response = await resolved.client.groups.list_async(
+        product=ProductsCore.EDGE, fields=_GROUP_GIT_FIELDS, timeout_ms=resolved.config.timeout_ms
+    )
+    # Without fields, Cribl omits git.commit. A history fallback returns a full
+    # hash, while configVersion uses a short hash, falsely flagging a deployment.
+    payload = await _serialize_paginated_counted_response(response)
+    return cast("list[dict[str, Any]]", payload["items"])
 
 
 async def read_mapping(resolved: ResolvedControlPlane, ruleset_id: str) -> dict[str, Any] | None:
@@ -143,6 +152,44 @@ def mapping_dependencies(item: dict[str, Any]) -> tuple[set[str], int]:
     return dependencies, dynamic
 
 
+async def _parent_readiness(resolved: ResolvedControlPlane, target: GroupTarget) -> tuple[dict[str, Any], list[str]]:
+    """Inspect target-local parent state and explain every blocking signal."""
+    label = f"Parent fleet '{target.group_id}'"
+    if target.committed_version is None:
+        return {"status": "unavailable", "committed_version": None, "deployed_version": target.config_version}, [
+            f"{label}: committed_version unavailable despite requesting git.commit; cannot verify deployment readiness."
+        ]
+    status = await _group_status(resolved, target)
+    snapshot = {
+        key: status[key]
+        for key in (
+            "clean",
+            "local_changes",
+            "deployment_pending",
+            "ahead",
+            "behind",
+            "conflict_count",
+            "changed_paths_sha256",
+            "committed_version",
+            "deployed_version",
+        )
+    }
+    blocked: list[str] = []
+    if not status["clean"] or status["local_changes"]:
+        blocked.append(f"{label}: local_changes={status['local_changes']}, clean={status['clean']}; commit pending changes.")
+    if status["deployment_pending"]:
+        blocked.append(
+            f"{label}: deployment_pending=true (committed_version={status['committed_version']}, "
+            f"deployed_version={status['deployed_version']}); deploy the parent configuration."
+        )
+    if status["conflict_count"]:
+        blocked.append(f"{label}: conflict_count={status['conflict_count']}; resolve Git conflicts.")
+    if status["behind"]:
+        blocked.append(f"{label}: behind={status['behind']}; reconcile the target Leader's remote Git state.")
+    # ahead is informational: local commit/deploy and remote push are separate.
+    return snapshot, blocked
+
+
 async def provision_preflight(
     resolved: ResolvedControlPlane,
     *,
@@ -164,25 +211,8 @@ async def provision_preflight(
         parent = fleet.inherits
         while parent and parent in existing and parent not in parents:
             target = GroupTarget.from_payload(ProductsCore.EDGE, existing[parent])
-            status = await _group_status(resolved, target)
-            parents[parent] = {
-                key: status.get(key)
-                for key in (
-                    "clean",
-                    "behind",
-                    "conflict_count",
-                    "changed_paths_sha256",
-                    "committed_version",
-                    "deployed_version",
-                )
-            }
-            if (
-                not status["clean"]
-                or status["behind"]
-                or status["conflict_count"]
-                or (status.get("committed_version") != status.get("deployed_version"))
-            ):
-                blocked.append(f"Parent fleet '{parent}' has uncommitted, undeployed, or conflicting configuration.")
+            parents[parent], reasons = await _parent_readiness(resolved, target)
+            blocked.extend(reasons)
             parent = target.inherits
     dynamic = 0
     for mapping in mappings:
@@ -194,13 +224,22 @@ async def provision_preflight(
                 f"Ruleset '{mapping['id']}' references {len(missing)} missing fleets: {', '.join(missing[:_PREVIEW_LIMIT])}."
             )
     status = await _global_status(resolved)
-    if status["conflict_count"] or status["behind"]:
-        blocked.append("The Leader Git repository has conflicts or is behind its remote.")
+    if status["conflict_count"]:
+        blocked.append(f"Leader Git repository: conflict_count={status['conflict_count']}; resolve Git conflicts.")
+    if status["behind"]:
+        blocked.append(f"Leader Git repository: behind={status['behind']}; reconcile remote Git state.")
     guard = {
+        "server": resolved.server_name,
         "hierarchy_sha256": _canonical_digest(sorted((key, item.get("inherits")) for key, item in merged.items())),
         "fleet_count": len(merged),
+        "existing_fleet_count": len(existing),
+        "planned_create_count": len(merged) - len(existing),
         "parents_sha256": _canonical_digest(parents),
+        "parent_count": len(parents),
+        "parents": [{"id": key, **parents[key]} for key in sorted(parents)[:_PREVIEW_LIMIT]],
+        "parents_truncated": len(parents) > _PREVIEW_LIMIT,
         "leader_git_sha256": _canonical_digest(status),
+        "leader_git": _compact_git_status(status),
         "dynamic_mapping_expressions": dynamic,
     }
     return inventory, blocked, guard

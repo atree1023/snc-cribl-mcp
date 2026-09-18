@@ -493,6 +493,7 @@ def _public_replication_plan(
                 "dynamic_mapping_expressions": plan.get("git", {})
                 .get("provisioning", {})
                 .get("dynamic_mapping_expressions", 0),
+                "provisioning_guard": plan.get("git", {}).get("provisioning"),
             }
         )
     return {

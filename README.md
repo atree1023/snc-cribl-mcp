@@ -385,6 +385,13 @@ or `fleet: {id: "web", inherits: "linux"}` for a subfleet. Optional fields are `
 `workerRemoteAccess`. `inherits` is an exact parent ID. Existing matching fleets are noops; conflicting
 settings, missing parents, cycles, and parents with pending or undeployed changes block creation.
 
+Parent readiness uses the target Leader's explicit `git.commit` and `git.localChanges` metadata.
+Unpushed commits (`ahead > 0`) do not block creation. Block reasons name the failing signal and its
+values; `plan.guard.parents` includes a bounded readiness preview with a complete drift digest.
+`existing_fleet_count` counts current fleets, `planned_create_count` counts new declarations, and
+`fleet_count` is their combined total. Manifest replication plans expose the same diagnostics in each
+target's `provisioning_guard`.
+
 Use `server`, review the default dry-run's `plan.plan_sha256`, then pass it as `expected_plan_sha256` with
 `dry_run=false`. Execution returns a `job_id`; poll `get_config_deployment_job`. Creation leaves changes
 uncommitted. Use the normal reviewed Leader-file and fleet commit/deploy workflows to finalize them,
@@ -525,6 +532,15 @@ Single-Leader jobs report `unit: fleets` from submission; `total` is null until 
 #### `push_config_git`
 
 Pushes already committed Leader configuration to the configured remote. Preflight rejects a missing remote, unresolved conflicts, or a local branch behind its remote.
+
+Local commit/deploy and remote push are separate operations. `push=false` still commits the deployed
+versions to the Leader's `local/cribl/groups.yml`; it does not call `/version/push`. A later reviewed
+`push_config_git` call pushes the committed repository. `ahead` means local commits waiting to be
+pushed; `behind` means remote commits missing locally. These counts come from Cribl's API, not an
+independent read of the remote. A stale API count can therefore affect push planning; a clean working
+tree or a missing UI Push button is not proof that the remote is synchronized. See the
+[Issue #28 investigation](docs/issue-28-investigation.md) for the verified guard defect and the separate
+unresolved UI/API push-state report.
 
 All version-control and manifest mutation tools default to `dry_run=true`. Review the plan and diff, then pass the returned `plan_sha256` as `expected_plan_sha256` with `dry_run=false`. The execution call returns an accepted `job_id` immediately; poll `get_config_deployment_job` for completion. Mutations are serialized per configured server while read-only tools remain responsive. `copy_resource_config` uses the same review-and-confirm contract but executes synchronously.
 

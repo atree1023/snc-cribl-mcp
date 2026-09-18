@@ -72,6 +72,7 @@ Before writing code:
 - Review plans return one capped changed-path preview and complete drift digests. Mutation results must not return full plans, diffs, path arrays, or raw SDK commit/deployment payloads.
 - Commit/deploy-all workflows must process Edge parents before descendants, plan clean descendants of an ancestor commit as `deploy_inherited`, and re-evaluate each descendant after its parent commit so inherited changes are captured. Commit line counts must come from the reviewed pre-commit diff because SDK 0.11 commit summaries can lose deletions. Treat node rollout convergence as a follow-up status check, not part of the completed job's deployment guarantee.
 - Targeted Edge subfleet mutations must preflight the ancestor chain and block while any parent has uncommitted or undeployed configuration. Manifest commit/deploy must validate the full hierarchy before selecting affected subtrees, keeping external ancestors outside mutation scope and including their preflight state in the plan digest.
+- Fleet provisioning must request `git.commit,git.localChanges` on target inventory reads. Do not substitute full commit-history hashes for Cribl's short fleet `configVersion` when checking parent readiness. Missing projected commit metadata blocks as unavailable. Keep `ahead` informational, expose signal-specific blockers and bounded parent diagnostics, and distinguish existing fleets from planned creations.
 
 ## File Structure
 
