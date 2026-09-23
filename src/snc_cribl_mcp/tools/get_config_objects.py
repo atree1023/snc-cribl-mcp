@@ -14,9 +14,19 @@ from fastmcp import Context, FastMCP
 
 from ..operations.config_objects import (
     CONFIG_OBJECT_CATALOG,
-    ConfigObjectDetail,
     ConfigObjectKind,
     shape_config_object_response,
+)
+from .params import (
+    ConfigCursor,
+    ConfigDetail,
+    ConfigGroupId,
+    ConfigKind,
+    ConfigLimit,
+    ConfigSelector,
+    IncludeDependencies,
+    OptionalProduct,
+    Server,
 )
 from .sync_common import ProductName, parse_product
 
@@ -98,7 +108,9 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
             "Query Cribl config objects with bounded results. Supports groups, sources, destinations, "
             "pipelines, routes, breakers, lookups, and variables. Returns compact summaries by default; use filters "
             "and detail='full' for selected payloads. The selector is case-insensitive and supports shell-style "
-            "wildcards such as 'source-sysinfo-*'; without wildcards it performs a substring match."
+            "wildcards such as 'source-sysinfo-*'; without wildcards it performs a substring match. "
+            "Use it instead of the list_* tools when you need filtering, paging, or only part of a large deployment; "
+            "pages default to 50 rows (maximum 250)."
         ),
         annotations={
             "title": "Get config objects",
@@ -107,16 +119,16 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
     )
     async def get_config_objects(
         ctx: Context,
-        kind: ConfigObjectKind,
-        server: str | None = None,
-        product: ProductName | None = None,
-        group_id: str | None = None,
-        selector: str | None = None,
-        detail: ConfigObjectDetail = "summary",
+        kind: ConfigKind,
+        server: Server = None,
+        product: OptionalProduct = None,
+        group_id: ConfigGroupId = None,
+        selector: ConfigSelector = None,
+        detail: ConfigDetail = "summary",
         *,
-        include_dependencies: bool = False,
-        cursor: str | None = None,
-        limit: int | None = None,
+        include_dependencies: IncludeDependencies = False,
+        cursor: ConfigCursor = None,
+        limit: ConfigLimit = None,
     ) -> dict[str, Any]:
         """Return a bounded, normalized config object listing."""
         await ctx.info(f"Querying Cribl config objects of kind '{kind}'.")

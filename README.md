@@ -76,7 +76,7 @@ The server handles authentication with bearer tokens, manages token refresh auto
 - **Typed Collector Models**: 9 Pydantic models for collector source configurations (S3, REST, database, Splunk, Azure Blob, GCS, filesystem, script, health check) with full type safety.
 - **Graceful Error Handling**: SDK validation errors return structured, user-friendly responses with actionable guidance instead of crashing. Repeated errors with the same field and cause are collapsed into one counted entry.
 - **Robust Authentication**: Automatic token management and refresh for customer-managed deployments.
-- **FastMCP Integration**: Built with [FastMCP 3.x](https://gofastmcp.com) for easy integration with Claude and other AI assistants.
+- **FastMCP Integration**: Built with [FastMCP 4.x](https://gofastmcp.com) for easy integration with Claude and other AI assistants.
 - **Quality Assurance**: Comprehensive unit test coverage with full typing support.
 
 ## Installation

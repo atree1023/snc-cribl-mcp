@@ -164,7 +164,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
     @app.resource(
         uri="cribl://groups",
         name="Cribl Groups",
-        description="Return a JSON list of all worker groups and Edge fleets.",
+        description=(
+            "Every Stream worker group and Edge fleet "
+            "on the default leader (first in config.toml), keyed by product (stream, edge), with retrieved_at and base_url."
+        ),
         mime_type="application/json",
         tags={"groups", "config"},
     )
@@ -180,7 +183,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
     @app.resource(
         uri="cribl://sources",
         name="Cribl Sources",
-        description="Return a JSON list of all configured sources.",
+        description=(
+            "Configured sources for every Stream worker group and Edge fleet "
+            "on the default leader (first in config.toml), keyed by product (stream, edge), with retrieved_at and base_url."
+        ),
         mime_type="application/json",
         tags={"sources", "config"},
     )
@@ -196,7 +202,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
     @app.resource(
         uri="cribl://destinations",
         name="Cribl Destinations",
-        description="Return a JSON list of all configured destinations.",
+        description=(
+            "Configured destinations for every Stream worker group and Edge fleet "
+            "on the default leader (first in config.toml), keyed by product (stream, edge), with retrieved_at and base_url."
+        ),
         mime_type="application/json",
         tags={"destinations", "config"},
     )
@@ -212,7 +221,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
     @app.resource(
         uri="cribl://pipelines",
         name="Cribl Pipelines",
-        description="Return a JSON list of all configured pipelines.",
+        description=(
+            "Configured pipelines for every Stream worker group and Edge fleet "
+            "on the default leader (first in config.toml), keyed by product (stream, edge), with retrieved_at and base_url."
+        ),
         mime_type="application/json",
         tags={"pipelines", "config"},
     )
@@ -228,7 +240,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
     @app.resource(
         uri="cribl://routes",
         name="Cribl Routes",
-        description="Return a JSON list of all configured routes.",
+        description=(
+            "Configured routes for every Stream worker group and Edge fleet "
+            "on the default leader (first in config.toml), keyed by product (stream, edge), with retrieved_at and base_url."
+        ),
         mime_type="application/json",
         tags={"routes", "config"},
     )
@@ -244,7 +259,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
     @app.resource(
         uri="cribl://breakers",
         name="Cribl Event Breakers",
-        description="Return a JSON list of all configured event breakers.",
+        description=(
+            "Configured event breakers for every Stream worker group and Edge fleet "
+            "on the default leader (first in config.toml), keyed by product (stream, edge), with retrieved_at and base_url."
+        ),
         mime_type="application/json",
         tags={"breakers", "config"},
     )
@@ -260,7 +278,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
     @app.resource(
         uri="cribl://lookups",
         name="Cribl Lookups",
-        description="Return a JSON list of all configured lookups.",
+        description=(
+            "Configured lookups for every Stream worker group and Edge fleet "
+            "on the default leader (first in config.toml), keyed by product (stream, edge), with retrieved_at and base_url."
+        ),
         mime_type="application/json",
         tags={"lookups", "config"},
     )
@@ -276,7 +297,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
     @app.resource(
         uri="cribl://variables",
         name="Cribl Variables",
-        description="Return a JSON list of all configured variables.",
+        description=(
+            "Configured variables for every Stream worker group and Edge fleet "
+            "on the default leader (first in config.toml), keyed by product (stream, edge), with retrieved_at and base_url."
+        ),
         mime_type="application/json",
         tags={"variables", "config"},
     )
@@ -292,7 +316,9 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901 (man
     @app.resource(
         uri="cribl://packs",
         name="Cribl Packs",
-        description="Return a JSON list of installed Packs.",
+        description=(
+            "Installed leader-level Packs on the default leader (first in config.toml), with retrieved_at and base_url."
+        ),
         mime_type="application/json",
         tags={"packs", "config"},
     )

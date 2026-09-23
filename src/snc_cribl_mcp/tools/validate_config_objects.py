@@ -9,9 +9,22 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
-from ..operations.resource_actions import ResourceKind
 from ..operations.semantic_diff import semantic_validation_from_sync_result
-from .sync_common import ProductName, parse_product
+from .params import (
+    CaseSensitive,
+    CopyResourceKind,
+    ExcludeItemPattern,
+    ExcludeItemRegex,
+    ItemId,
+    ItemPattern,
+    ItemRegex,
+    SourceGroup,
+    SourceServer,
+    SyncProduct,
+    TargetGroup,
+    TargetServer,
+)
+from .sync_common import parse_product
 
 type ValidateResourceSyncFunc = Callable[..., Awaitable[dict[str, Any]]]
 
@@ -37,19 +50,19 @@ def register(app: FastMCP, *, impl: ValidateResourceSyncFunc) -> None:
     )
     async def validate_config_objects(
         ctx: Context,
-        resource_kind: ResourceKind,
-        source_server: str,
-        target_server: str,
-        source_group: str | None = None,
-        target_group: str | None = None,
-        item_id: str | None = None,
-        item_pattern: str | None = None,
-        item_regex: str | None = None,
-        exclude_item_pattern: str | None = None,
-        exclude_item_regex: str | None = None,
-        product: ProductName = "stream",
+        resource_kind: CopyResourceKind,
+        source_server: SourceServer,
+        target_server: TargetServer,
+        source_group: SourceGroup = None,
+        target_group: TargetGroup = None,
+        item_id: ItemId = None,
+        item_pattern: ItemPattern = None,
+        item_regex: ItemRegex = None,
+        exclude_item_pattern: ExcludeItemPattern = None,
+        exclude_item_regex: ExcludeItemRegex = None,
+        product: SyncProduct = "stream",
         *,
-        case_sensitive: bool = False,
+        case_sensitive: CaseSensitive = False,
     ) -> dict[str, Any]:
         """Validate whether two config scopes are functionally equivalent."""
         await ctx.info(f"Semantically validating Cribl {resource_kind} between '{source_server}' and '{target_server}'.")

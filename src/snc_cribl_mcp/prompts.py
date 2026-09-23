@@ -34,8 +34,9 @@ def register(app: FastMCP) -> None:
     def find_broken_sources() -> list[Message]:
         return [
             Message(
-                "Please check all configured sources and identify any that are reporting errors "
-                "or have not received data recently. Use the list_sources tool to get the data."
+                "Please find sources that are unhealthy, reporting errors, or have not received data recently. "
+                "Judge this from each source's current runtime health, not only its configuration, "
+                "and group the results by worker group or fleet."
             )
         ]
 
@@ -48,8 +49,7 @@ def register(app: FastMCP) -> None:
         return [
             Message(
                 f"Please analyze the pipeline '{pipeline_id}' in group '{group_id}'. "
-                "Check for inefficient functions, potential data loss, and best practices. "
-                "Use the list_pipelines tool to get the pipeline configuration."
+                "Check for inefficient functions, potential data loss, and best practices."
             )
         ]
 
@@ -63,8 +63,8 @@ def register(app: FastMCP) -> None:
         if error_message:
             prompt += f" The error message is: '{error_message}'."
         prompt += (
-            " Please help me troubleshoot this issue. "
-            "Check the destination configuration using list_destinations and suggest potential fixes."
+            " Please help me troubleshoot this issue: check the destination's current runtime health "
+            "and its configuration, then suggest potential fixes."
         )
         return [Message(prompt)]
 

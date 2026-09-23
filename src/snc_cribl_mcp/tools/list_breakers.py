@@ -12,6 +12,7 @@ from typing import Any
 from fastmcp import Context, FastMCP
 
 from .common import ToolConfig, generic_list_tool
+from .params import Server
 
 
 def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
@@ -33,14 +34,16 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
     @app.tool(
         name="list_breakers",
         description=(
-            "Return JSON describing all configured Stream and Edge event breakers in all groups in the Cribl deployment."
+            "Return JSON describing all configured Stream and Edge event breakers in all groups in the Cribl deployment. "
+            "The response is not paged or truncated: it holds every object's full configuration "
+            "for every group in both products."
         ),
         annotations={
             "title": "List configured event breakers",
             "readOnlyHint": True,
         },
     )
-    async def list_breakers(ctx: Context, server: str | None = None) -> dict[str, Any]:
+    async def list_breakers(ctx: Context, server: Server = None) -> dict[str, Any]:
         return await generic_list_tool(ctx, deps, tool_config, server=server)
 
 

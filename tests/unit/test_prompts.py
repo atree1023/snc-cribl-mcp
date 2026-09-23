@@ -54,7 +54,7 @@ async def test_find_broken_sources_prompt() -> None:
     assert isinstance(result.messages[0], Message)
     content = _message_text(result.messages[0])
     assert "sources" in content.lower()
-    assert "list_sources" in content
+    assert "runtime health" in content
 
 
 @pytest.mark.asyncio
@@ -70,7 +70,7 @@ async def test_analyze_pipeline_prompt() -> None:
     content = _message_text(result.messages[0])
     assert "main" in content
     assert "default" in content
-    assert "list_pipelines" in content
+    assert "data loss" in content
 
 
 @pytest.mark.asyncio
@@ -100,7 +100,7 @@ async def test_troubleshoot_destination_prompt_without_error() -> None:
     assert isinstance(result.messages[0], Message)
     content = _message_text(result.messages[0])
     assert "splunk_hec" in content
-    assert "list_destinations" in content
+    assert "runtime health" in content
 
 
 @pytest.mark.asyncio
@@ -119,4 +119,4 @@ async def test_troubleshoot_destination_prompt_with_error() -> None:
     content = _message_text(result.messages[0])
     assert "s3_bucket" in content
     assert "Connection timed out" in content
-    assert "list_destinations" in content
+    assert "runtime health" in content

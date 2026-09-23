@@ -8,9 +8,8 @@ from typing import Any, cast
 
 from fastmcp import Context, FastMCP
 
-from ..models.config_manifest import DriftPolicy, delete_config_manifest, load_config_manifest, write_config_manifest
+from ..models.config_manifest import delete_config_manifest, load_config_manifest, write_config_manifest
 from ..operations.config_manifest import (
-    ValidationDetailScope,
     check_manifest_receipt_validity,
     execute_config_manifest_replication,
     execute_manifest_commit_deploy,
@@ -23,6 +22,30 @@ from ..operations.config_manifest import (
 )
 from ..operations.manifest_state import ManifestStateStore
 from ..operations.version_control_jobs import JobContext, VersionControlJobManager
+from .params import (
+    ApplyJobId,
+    ApplyReceiptSha256,
+    DeployApplyJobId,
+    DeployApplyReceiptSha256,
+    DeployOnDrift,
+    DetailScope,
+    DryRun,
+    ExpectedFileSha256,
+    ExpectedPlanSha256,
+    ManifestCommitMessage,
+    ManifestConcurrency,
+    ManifestContent,
+    ManifestName,
+    ManifestOverwrite,
+    ManifestPath,
+    ManifestTarget,
+    Push,
+    ReceiptTarget,
+    ReplicateOnDrift,
+    ResumeJobId,
+    ValidationLimit,
+    ValidationOffset,
+)
 
 _PLAN_GUIDANCE = (
     "This mutation defaults to dry_run=true. Review plan_sha256, then pass it as expected_plan_sha256 with "
@@ -64,10 +87,10 @@ def register(  # noqa: C901, PLR0915
     )
     async def write_manifest(
         ctx: Context,
-        name: str,
-        content: str,
+        name: ManifestName,
+        content: ManifestContent,
         *,
-        overwrite: bool = False,
+        overwrite: ManifestOverwrite = False,
     ) -> dict[str, Any]:
         """Validate and persist a configuration manifest in the safe root."""
         await ctx.info("Validating and writing a multi-leader Cribl configuration manifest.")
@@ -103,9 +126,9 @@ def register(  # noqa: C901, PLR0915
     )
     async def delete_manifest(
         ctx: Context,
-        manifest_path: str,
+        manifest_path: ManifestPath,
         *,
-        expected_file_sha256: str | None = None,
+        expected_file_sha256: ExpectedFileSha256 = None,
     ) -> dict[str, Any]:
         """Safely remove a manifest from the configured root."""
         await ctx.info("Deleting a validated Cribl configuration manifest.")
@@ -141,13 +164,13 @@ def register(  # noqa: C901, PLR0915
     )
     async def replicate_config_manifest(
         ctx: Context,
-        manifest_path: str,
+        manifest_path: ManifestPath,
         *,
-        dry_run: bool = True,
-        expected_plan_sha256: str | None = None,
-        concurrency: int | None = None,
-        on_drift: DriftPolicy | None = None,
-        resume_job_id: str | None = None,
+        dry_run: DryRun = True,
+        expected_plan_sha256: ExpectedPlanSha256 = None,
+        concurrency: ManifestConcurrency = None,
+        on_drift: ReplicateOnDrift = None,
+        resume_job_id: ResumeJobId = None,
     ) -> dict[str, Any]:
         """Plan or asynchronously apply a configuration manifest."""
         await ctx.info("Planning or applying a multi-leader Cribl configuration manifest.")
@@ -232,13 +255,13 @@ def register(  # noqa: C901, PLR0915
     )
     async def validate_config_manifest(
         ctx: Context,
-        manifest_path: str,
+        manifest_path: ManifestPath,
         *,
-        concurrency: int | None = None,
-        target: str | None = None,
-        offset: int = 0,
-        limit: int = 25,
-        detail_scope: ValidationDetailScope = "differences",
+        concurrency: ManifestConcurrency = None,
+        target: ManifestTarget = None,
+        offset: ValidationOffset = 0,
+        limit: ValidationLimit = 25,
+        detail_scope: DetailScope = "differences",
     ) -> dict[str, Any]:
         """Validate a configuration manifest across all targets."""
         await ctx.info("Validating a multi-leader Cribl configuration manifest.")
@@ -266,12 +289,12 @@ def register(  # noqa: C901, PLR0915
     )
     async def check_manifest_receipt_validity_tool(
         ctx: Context,
-        manifest_path: str,
+        manifest_path: ManifestPath,
         *,
-        apply_job_id: str | None = None,
-        apply_receipt_sha256: str | None = None,
-        concurrency: int | None = None,
-        target: str | None = None,
+        apply_job_id: ApplyJobId = None,
+        apply_receipt_sha256: ApplyReceiptSha256 = None,
+        concurrency: ManifestConcurrency = None,
+        target: ReceiptTarget = None,
     ) -> dict[str, Any]:
         """Check a durable manifest apply receipt without committing or deploying."""
         await ctx.info("Checking whether a manifest apply receipt is still valid.")
@@ -304,17 +327,17 @@ def register(  # noqa: C901, PLR0915
     )
     async def commit_and_deploy_manifest(
         ctx: Context,
-        manifest_path: str,
-        message: str,
+        manifest_path: ManifestPath,
+        message: ManifestCommitMessage,
         *,
-        apply_job_id: str | None = None,
-        apply_receipt_sha256: str | None = None,
-        push: bool = False,
-        dry_run: bool = True,
-        expected_plan_sha256: str | None = None,
-        concurrency: int | None = None,
-        on_drift: DriftPolicy = "skip",
-        resume_job_id: str | None = None,
+        apply_job_id: DeployApplyJobId = None,
+        apply_receipt_sha256: DeployApplyReceiptSha256 = None,
+        push: Push = False,
+        dry_run: DryRun = True,
+        expected_plan_sha256: ExpectedPlanSha256 = None,
+        concurrency: ManifestConcurrency = None,
+        on_drift: DeployOnDrift = "skip",
+        resume_job_id: ResumeJobId = None,
     ) -> dict[str, Any]:
         """Plan or asynchronously commit and deploy a prior manifest application."""
         await ctx.info("Planning or committing and deploying a multi-leader Cribl configuration manifest.")

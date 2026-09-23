@@ -1,6 +1,6 @@
 # SNC Cribl MCP
 
-MCP server providing tools to query Cribl Stream and Edge deployments. Uses FastMCP 3 and the cribl-control-plane SDK.
+MCP server providing tools to query Cribl Stream and Edge deployments. Uses FastMCP 4 and the cribl-control-plane SDK.
 
 > **For Claude Code users:** See `CLAUDE.md` for detailed guidance on architecture decisions, workflows, and patterns.
 
@@ -60,7 +60,7 @@ Before writing code:
 - Pack management tools support distributed scoping with `product` plus `group`; resolve the group selector before calling SDK Pack methods with `server_url`.
 - SDK 0.11 paginated list responses carry counted collections under `response.result`; shared response helpers must accept wrapped and legacy direct counted shapes, exhaust `response.next()`, and reject unknown shapes instead of returning silent empty results.
 - SDK `versions.commits.push_async` returns `CountedString` with string items. Await the SDK call and propagate errors; do not pass its response through model-item serialization or expose raw push output.
-- Keep `cribl-control-plane` constrained to the validated `>=0.11.0,<0.12` line; the SDK is a Preview feature and generated minor releases can contain breaking model and response changes.
+- The `cribl-control-plane` SDK is a Preview feature, and generated minor releases can contain breaking model and response changes. `pyproject.toml` allows `>=0.11.0`; when `uv.lock` moves to a new SDK minor line, give it the same contract and live-tool validation pass before relying on it.
 - `copy_resource_config` defaults to `dry_run=true` and requires the returned `plan_sha256` as `expected_plan_sha256` for exposed execution. Its drift digest excludes runtime-only status metadata while preserving write-relevant config state. Semantically identical targets are skipped; real updates include bounded added/changed/removed config-path summaries.
 - Git diff reads enforce a local total line budget plus a 256 KB/100-file response cap; `line_offset` follows `diff_page.next_line_offset`. Full hashes and summaries are computed before clipping. `get_leader_git_diff` accepts an explicit Leader `filename`.
 - `commit_leader_config` requires explicit individual Leader `files`, defaults to dry-run and no push, and guards complete selected-file diffs plus Git state. Never pass an empty or omitted file list to a Leader commit.
@@ -107,7 +107,8 @@ docs/                      # SDK docs, schemas, examples
 ### Add New Tool
 
 1. Create `src/snc_cribl_mcp/operations/<resource>.py`
-2. Create `src/snc_cribl_mcp/tools/list_<resource>.py` (follow `list_sources.py` pattern)
+2. Create `src/snc_cribl_mcp/tools/list_<resource>.py` (follow `list_sources.py` pattern); type every parameter with a
+   described alias from `tools/params.py`
 3. Register in `server.py` `_register_capabilities()`
 4. Add `tests/unit/test_<resource>.py`
 5. Run: `uv run ruff format && uv run ruff check --fix && uv run pyright && uv run pytest`

@@ -182,7 +182,7 @@ asyncio.run(main())
 
 SDK 0.11 paginated operations return a response wrapper whose counted payload is under `result`; call `response.next()` to retrieve additional pages. Some non-paginated endpoints still return counted models directly, so application code should normalize both shapes. All application list paths, including Pack inventories and version-control target discovery, must exhaust `next()` through the shared response helper.
 
-The project constrains `cribl-control-plane` to `>=0.11.0,<0.12`. Treat a generated SDK minor-line upgrade as a compatibility change: review its models and method signatures, run the full unit suite, and repeat the live safe-tool matrix before widening this range. The 0.11 `system.settings.cribl` model still rejects valid SSL-disabled 4.19.2 payloads that omit certificate fields, so system-settings workflows intentionally retain the SDK-owned direct HTTP transport.
+The project allows `cribl-control-plane>=0.11.0`. Treat a generated SDK minor-line change in `uv.lock` as a compatibility change: review its models and method signatures, run the full unit suite, and repeat the live safe-tool matrix before relying on it. The 0.11 `system.settings.cribl` model still rejects valid SSL-disabled 4.19.2 payloads that omit certificate fields, so system-settings workflows intentionally retain the SDK-owned direct HTTP transport.
 
 Generated response models can also reject optional node metadata while the rest of a node record remains usable. Leader overview therefore prefers the SDK response, but on `ResponseValidationError` it can recover the raw counted node body, retain group and version inventory, and attach a compact counted schema-warning summary. Do not expose repeated parent-object dumps for the same field failure.
 

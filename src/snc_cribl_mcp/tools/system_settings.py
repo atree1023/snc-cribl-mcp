@@ -9,6 +9,8 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
+from .params import SettingsOverwrite, SettingsPayloads, SettingsValidateAfter, SourceServer, TargetServer
+
 type SystemSettingsFunc = Callable[..., Awaitable[dict[str, Any]]]
 
 
@@ -22,7 +24,13 @@ def register(
 
     @app.tool(
         name="replicate_system_settings",
-        description="Replicate global Cribl system settings from one configured leader to another.",
+        description=(
+            "Replicate global Cribl system settings (the Global Settings page, /system/settings/conf) from one "
+            "configured leader to another. Changes apply immediately with no dry run: when the raw settings differ, "
+            "the complete source settings are PATCHed onto the target, so every differing value, including "
+            "environment-specific ones, takes the source value. Settings already in sync are skipped. "
+            "Use validate_system_settings to preview the differences first."
+        ),
         annotations={
             "title": "Replicate system settings",
             "readOnlyHint": False,
@@ -30,11 +38,11 @@ def register(
     )
     async def replicate_system_settings(
         ctx: Context,
-        source_server: str,
-        target_server: str,
+        source_server: SourceServer,
+        target_server: TargetServer,
         *,
-        overwrite: bool = True,
-        validate_after: bool = True,
+        overwrite: SettingsOverwrite = True,
+        validate_after: SettingsValidateAfter = True,
     ) -> dict[str, Any]:
         """Replicate global system settings."""
         await ctx.info(f"Replicating global system settings from '{source_server}' to '{target_server}'.")
@@ -47,7 +55,11 @@ def register(
 
     @app.tool(
         name="validate_system_settings",
-        description="Validate global Cribl system settings between two configured leaders.",
+        description=(
+            "Compare global Cribl system settings (/system/settings/conf) between two configured leaders. "
+            "The raw payloads are compared without semantic normalization, so environment-specific values "
+            "count as differences. Read-only."
+        ),
         annotations={
             "title": "Validate system settings",
             "readOnlyHint": True,
@@ -55,10 +67,10 @@ def register(
     )
     async def validate_system_settings(
         ctx: Context,
-        source_server: str,
-        target_server: str,
+        source_server: SourceServer,
+        target_server: TargetServer,
         *,
-        include_payloads: bool = False,
+        include_payloads: SettingsPayloads = False,
     ) -> dict[str, Any]:
         """Validate global system settings."""
         await ctx.info(f"Validating global system settings from '{source_server}' against '{target_server}'.")

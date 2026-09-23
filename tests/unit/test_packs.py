@@ -824,7 +824,7 @@ async def test_update_pack_forwards_upgrade_options(mock_client: MagicMock) -> N
             source="https://example.com/cribl-duo.crbl",
             options=packs.PackUpgradeOptions(
                 allow_custom_functions=True,
-                minor="1",
+                minor=True,
                 spec="2.0.0",
             ),
         ),
@@ -834,7 +834,7 @@ async def test_update_pack_forwards_upgrade_options(mock_client: MagicMock) -> N
         id="cribl-duo",
         source="https://example.com/cribl-duo.crbl",
         allow_custom_functions=True,
-        minor="1",
+        minor=True,
         spec="2.0.0",
         timeout_ms=1234,
         server_url="https://cribl.example.com/api/v1/m/worker-main",

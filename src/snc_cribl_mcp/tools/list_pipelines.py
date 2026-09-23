@@ -12,6 +12,7 @@ from typing import Any
 from fastmcp import Context, FastMCP
 
 from .common import ToolConfig, generic_list_tool
+from .params import PipelineId, Server
 
 
 def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
@@ -34,7 +35,8 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
         name="list_pipelines",
         description=(
             "Return JSON describing configured Stream and Edge pipelines in all groups in the Cribl deployment. "
-            "Optionally filter by pipeline_id to fetch a specific pipeline."
+            "Optionally filter by pipeline_id to fetch a specific pipeline. Without pipeline_id the response is not "
+            "paged or truncated: it holds every pipeline's full configuration for every group in both products."
         ),
         annotations={
             "title": "List configured pipelines",
@@ -43,8 +45,8 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
     )
     async def list_pipelines(
         ctx: Context,
-        pipeline_id: str | None = None,
-        server: str | None = None,
+        pipeline_id: PipelineId = None,
+        server: Server = None,
     ) -> dict[str, Any]:
         return await generic_list_tool(
             ctx,

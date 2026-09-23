@@ -7,6 +7,8 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
+from .params import Server
+
 
 def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
     """Register the get_leader_overview tool on the provided app instance.
@@ -30,7 +32,7 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
             "readOnlyHint": True,
         },
     )
-    async def get_leader_overview(ctx: Context, server: str | None = None) -> dict[str, Any]:
+    async def get_leader_overview(ctx: Context, server: Server = None) -> dict[str, Any]:
         config = deps.resolve_config(server)
         token_manager = deps.get_token_manager(config)
         security = await token_manager.get_security()

@@ -16,6 +16,7 @@ from typing import Any
 from fastmcp import Context, FastMCP
 
 from .common import ToolConfig, generic_list_tool
+from .params import Server
 
 
 def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
@@ -37,14 +38,16 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
         name="list_sources",
         description=(
             "Return JSON describing all configured Stream and Edge sources in all groups in the Cribl deployment. "
-            "Includes both regular input sources and collector sources (S3, REST, database, etc.)."
+            "Includes both regular input sources and collector sources (S3, REST, database, etc.). "
+            "The response is not paged or truncated: it holds every object's full configuration "
+            "for every group in both products."
         ),
         annotations={
             "title": "List configured sources",
             "readOnlyHint": True,
         },
     )
-    async def list_sources(ctx: Context, server: str | None = None) -> dict[str, Any]:
+    async def list_sources(ctx: Context, server: Server = None) -> dict[str, Any]:
         return await generic_list_tool(ctx, deps, tool_config, server=server)
 
 

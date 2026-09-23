@@ -13,8 +13,6 @@ from cribl_control_plane.models.security import Security
 from fastmcp import Context, FastMCP
 
 from ..operations.packs import (
-    PackObjectDetail,
-    PackObjectKind,
     PackUpdateRequest,
     PackUpgradeOptions,
     collect_packs,
@@ -26,6 +24,24 @@ from ..operations.packs import (
     upload_pack,
 )
 from .common import resolve_tool_deps
+from .params import (
+    AllowCustomFunctions,
+    PackCounts,
+    PackCursor,
+    PackDetail,
+    PackFilePath,
+    PackGroup,
+    PackId,
+    PackInstallRequest,
+    PackKind,
+    PackLimit,
+    PackMinor,
+    PackObjectId,
+    PackProduct,
+    PackSource,
+    PackSpec,
+    Server,
+)
 from .sync_common import ProductName, parse_product
 
 type PackOperation = Callable[[CriblControlPlane, int, str | None, Security], Awaitable[dict[str, Any]]]
@@ -147,10 +163,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
     )
     async def list_packs(
         ctx: Context,
-        server: str | None = None,
-        with_: str | None = None,
-        product: ProductName = "stream",
-        group: str | None = None,
+        server: Server = None,
+        with_: PackCounts = None,
+        product: PackProduct = "stream",
+        group: PackGroup = None,
     ) -> dict[str, Any]:
         async def _operation(
             client: CriblControlPlane,
@@ -189,15 +205,15 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
     )
     async def get_pack_tool(
         ctx: Context,
-        pack_id: str,
-        server: str | None = None,
-        product: ProductName = "stream",
-        group: str | None = None,
-        kind: PackObjectKind | None = None,
-        object_id: str | None = None,
-        detail: PackObjectDetail = "summary",
-        cursor: str | None = None,
-        limit: int | None = None,
+        pack_id: PackId,
+        server: Server = None,
+        product: PackProduct = "stream",
+        group: PackGroup = None,
+        kind: PackKind = None,
+        object_id: PackObjectId = None,
+        detail: PackDetail = "summary",
+        cursor: PackCursor = None,
+        limit: PackLimit = None,
     ) -> dict[str, Any]:
         async def _operation(
             client: CriblControlPlane,
@@ -248,10 +264,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
     )
     async def install_pack_tool(
         ctx: Context,
-        request: dict[str, Any],
-        server: str | None = None,
-        product: ProductName = "stream",
-        group: str | None = None,
+        request: PackInstallRequest,
+        server: Server = None,
+        product: PackProduct = "stream",
+        group: PackGroup = None,
     ) -> dict[str, Any]:
         async def _operation(
             client: CriblControlPlane,
@@ -290,10 +306,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
     )
     async def upload_pack_tool(
         ctx: Context,
-        file_path: str,
-        server: str | None = None,
-        product: ProductName = "stream",
-        group: str | None = None,
+        file_path: PackFilePath,
+        server: Server = None,
+        product: PackProduct = "stream",
+        group: PackGroup = None,
     ) -> dict[str, Any]:
         async def _operation(
             client: CriblControlPlane,
@@ -328,14 +344,14 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
     )
     async def update_pack_tool(
         ctx: Context,
-        pack_id: str,
-        source: str,
-        server: str | None = None,
-        product: ProductName = "stream",
-        group: str | None = None,
-        allow_custom_functions: bool | None = None,  # noqa: FBT001
-        minor: str | None = None,
-        spec: str | None = None,
+        pack_id: PackId,
+        source: PackSource,
+        server: Server = None,
+        product: PackProduct = "stream",
+        group: PackGroup = None,
+        allow_custom_functions: AllowCustomFunctions = None,
+        minor: PackMinor = None,
+        spec: PackSpec = None,
     ) -> dict[str, Any]:
         async def _operation(
             client: CriblControlPlane,
@@ -383,10 +399,10 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:  # noqa: C901
     )
     async def delete_pack_tool(
         ctx: Context,
-        pack_id: str,
-        server: str | None = None,
-        product: ProductName = "stream",
-        group: str | None = None,
+        pack_id: PackId,
+        server: Server = None,
+        product: PackProduct = "stream",
+        group: PackGroup = None,
     ) -> dict[str, Any]:
         async def _operation(
             client: CriblControlPlane,

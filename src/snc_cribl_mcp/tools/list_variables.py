@@ -8,6 +8,7 @@ from typing import Any
 from fastmcp import Context, FastMCP
 
 from .common import ToolConfig, generic_list_tool
+from .params import Server
 
 
 def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
@@ -21,13 +22,17 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
 
     @app.tool(
         name="list_variables",
-        description="Return JSON describing all configured Stream and Edge variables in all groups in the Cribl deployment.",
+        description=(
+            "Return JSON describing all configured Stream and Edge variables in all groups in the Cribl deployment. "
+            "The response is not paged or truncated: it holds every object's full configuration "
+            "for every group in both products."
+        ),
         annotations={
             "title": "List configured variables",
             "readOnlyHint": True,
         },
     )
-    async def list_variables(ctx: Context, server: str | None = None) -> dict[str, Any]:
+    async def list_variables(ctx: Context, server: Server = None) -> dict[str, Any]:
         return await generic_list_tool(ctx, deps, tool_config, server=server)
 
 

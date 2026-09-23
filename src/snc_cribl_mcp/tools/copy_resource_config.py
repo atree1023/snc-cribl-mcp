@@ -9,8 +9,26 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
-from ..operations.resource_actions import ResourceKind
-from .sync_common import ProductName, parse_product
+from .params import (
+    AppendRoutes,
+    CaseSensitive,
+    CopyOverwrite,
+    CopyResourceKind,
+    CopyValidateAfter,
+    DryRun,
+    ExcludeItemPattern,
+    ExcludeItemRegex,
+    ExpectedPlanSha256,
+    ItemId,
+    ItemPattern,
+    ItemRegex,
+    SourceGroup,
+    SourceServer,
+    SyncProduct,
+    TargetGroup,
+    TargetServer,
+)
+from .sync_common import parse_product
 
 type CopyResourceConfigFunc = Callable[..., Awaitable[dict[str, Any]]]
 
@@ -35,24 +53,24 @@ def register(app: FastMCP, *, impl: CopyResourceConfigFunc) -> None:
     )
     async def copy_resource_config(
         ctx: Context,
-        resource_kind: ResourceKind,
-        source_server: str,
-        target_server: str,
-        source_group: str | None = None,
-        target_group: str | None = None,
-        item_id: str | None = None,
-        item_pattern: str | None = None,
-        item_regex: str | None = None,
-        exclude_item_pattern: str | None = None,
-        exclude_item_regex: str | None = None,
-        product: ProductName = "stream",
+        resource_kind: CopyResourceKind,
+        source_server: SourceServer,
+        target_server: TargetServer,
+        source_group: SourceGroup = None,
+        target_group: TargetGroup = None,
+        item_id: ItemId = None,
+        item_pattern: ItemPattern = None,
+        item_regex: ItemRegex = None,
+        exclude_item_pattern: ExcludeItemPattern = None,
+        exclude_item_regex: ExcludeItemRegex = None,
+        product: SyncProduct = "stream",
         *,
-        case_sensitive: bool = False,
-        overwrite: bool = True,
-        validate_after: bool = True,
-        append_routes: bool = False,
-        dry_run: bool = True,
-        expected_plan_sha256: str | None = None,
+        case_sensitive: CaseSensitive = False,
+        overwrite: CopyOverwrite = True,
+        validate_after: CopyValidateAfter = True,
+        append_routes: AppendRoutes = False,
+        dry_run: DryRun = True,
+        expected_plan_sha256: ExpectedPlanSha256 = None,
     ) -> dict[str, Any]:
         """Copy one config or a whole resource scope between leaders."""
         await ctx.info(f"Copying Cribl {resource_kind} from '{source_server}' to '{target_server}'.")

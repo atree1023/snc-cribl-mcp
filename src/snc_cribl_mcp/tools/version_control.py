@@ -9,10 +9,35 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
-from ..operations.version_control import CompareTo, ProductScope
 from ..operations.version_control_jobs import JobContext, VersionControlJobManager
 from ..operations.version_control_progress import FleetJobProgress
-from .sync_common import ProductName, parse_product
+from .params import (
+    CommitEffective,
+    CommitFiles,
+    CommitMessage,
+    CompareToParam,
+    DeployProductScope,
+    DeployVersion,
+    DiffFilename,
+    DiffLineLimit,
+    DiffLineOffset,
+    DryRun,
+    ExpectedPlanSha256,
+    GroupCommitEffective,
+    GroupProduct,
+    GroupSelector,
+    JobId,
+    JobListLimit,
+    JobTarget,
+    LeaderDiffFilename,
+    LeaderFiles,
+    Push,
+    Server,
+    StatusGroupSelector,
+    StatusProductScope,
+    StopOnError,
+)
+from .sync_common import parse_product
 
 type VersionControlFunc = Callable[..., Awaitable[dict[str, Any]]]
 
@@ -87,9 +112,9 @@ def register(  # noqa: C901
     )
     async def get_group_git_status(
         ctx: Context,
-        server: str | None = None,
-        product: ProductScope = "all",
-        group: str | None = None,
+        server: Server = None,
+        product: StatusProductScope = "all",
+        group: StatusGroupSelector = None,
     ) -> dict[str, Any]:
         """Get group/fleet Git status and deployed configuration versions."""
         await ctx.info("Getting Cribl group and fleet Git and deployment status.")
@@ -113,13 +138,13 @@ def register(  # noqa: C901
     )
     async def get_group_git_diff(
         ctx: Context,
-        group: str,
-        product: ProductName = "stream",
-        server: str | None = None,
-        compare_to: CompareTo = "deployed",
-        filename: str | None = None,
-        diff_line_limit: int = 1000,
-        line_offset: int = 0,
+        group: GroupSelector,
+        product: GroupProduct = "stream",
+        server: Server = None,
+        compare_to: CompareToParam = "deployed",
+        filename: DiffFilename = None,
+        diff_line_limit: DiffLineLimit = 1000,
+        line_offset: DiffLineOffset = 0,
     ) -> dict[str, Any]:
         """Get one group/fleet diff with deployed and pending baselines."""
         await ctx.info(f"Getting the Cribl {product} configuration diff for '{group}'.")
@@ -150,10 +175,10 @@ def register(  # noqa: C901
     )
     async def get_leader_git_diff(
         ctx: Context,
-        server: str | None = None,
-        diff_line_limit: int = 1000,
-        filename: str = "local/cribl/groups.yml",
-        line_offset: int = 0,
+        server: Server = None,
+        diff_line_limit: DiffLineLimit = 1000,
+        filename: LeaderDiffFilename = "local/cribl/groups.yml",
+        line_offset: DiffLineOffset = 0,
     ) -> dict[str, Any]:
         """Get a bounded diff of one explicitly selected Leader file."""
         await ctx.info("Getting the Cribl Leader deployment-metadata diff.")
@@ -163,11 +188,13 @@ def register(  # noqa: C901
         name="get_config_deployment_job",
         description=(
             "Get the current state and bounded result of an asynchronous Cribl replication, commit, deploy, or Git "
-            "push job. Pass target with job_id for one target's durable detail; targets not started yet return a "
-            "pending detail instead of an error. Pollers must inspect progress.unit: manifest replication uses items, "
+            "push job. Pass target with job_id for one target's durable detail; a Leader target that has not started "
+            "returns a pending detail instead of an error, while fleet targets exist only after planning records them. "
+            "Pollers must inspect progress.unit: manifest replication uses items, "
             "while commit/deploy-all uses fleets. completed counts terminal fleets, including failed/skipped/noop; "
             "inspect succeeded, noop, failed, skipped and leaders_failed for the outcome. total is null until planning "
-            "finishes. Use target=server for Leader detail or target='edge:fleet-id'/'stream:group-id' for fleet detail. "
+            "finishes. Use target=server for Leader detail ('default' when the job was started without server) or "
+            "target='edge:fleet-id'/'stream:group-id' for fleet detail. "
             "Pass the job_id returned by a mutation execution for its final result, or omit job_id to list recent "
             "jobs. Job state, progress, target detail, and resumable request metadata survive MCP process restarts."
         ),
@@ -179,9 +206,9 @@ def register(  # noqa: C901
     )
     async def get_config_deployment_job(
         ctx: Context,
-        job_id: str | None = None,
-        limit: int = 20,
-        target: str | None = None,
+        job_id: JobId = None,
+        limit: JobListLimit = 20,
+        target: JobTarget = None,
     ) -> dict[str, Any]:
         """Get one deployment job or list recent jobs."""
         await ctx.info("Getting Cribl configuration deployment job status.")
@@ -203,16 +230,16 @@ def register(  # noqa: C901
     )
     async def commit_group_config(
         ctx: Context,
-        group: str,
-        message: str,
-        product: ProductName = "stream",
-        server: str | None = None,
-        files: list[str] | None = None,
+        group: GroupSelector,
+        message: CommitMessage,
+        product: GroupProduct = "stream",
+        server: Server = None,
+        files: CommitFiles = None,
         *,
-        effective: bool = True,
-        push: bool = False,
-        dry_run: bool = True,
-        expected_plan_sha256: str | None = None,
+        effective: GroupCommitEffective = True,
+        push: Push = False,
+        dry_run: DryRun = True,
+        expected_plan_sha256: ExpectedPlanSha256 = None,
     ) -> dict[str, Any]:
         """Plan or commit one group/fleet configuration."""
         await ctx.info(f"Planning or committing Cribl {product} configuration for '{group}'.")
@@ -248,13 +275,13 @@ def register(  # noqa: C901
     )
     async def commit_leader_config(
         ctx: Context,
-        message: str,
-        files: list[str],
-        server: str | None = None,
+        message: CommitMessage,
+        files: LeaderFiles,
+        server: Server = None,
         *,
-        push: bool = False,
-        dry_run: bool = True,
-        expected_plan_sha256: str | None = None,
+        push: Push = False,
+        dry_run: DryRun = True,
+        expected_plan_sha256: ExpectedPlanSha256 = None,
     ) -> dict[str, Any]:
         """Plan or commit selected Leader files with a full drift guard."""
         await ctx.info("Planning or committing selected Cribl Leader configuration files.")
@@ -285,14 +312,14 @@ def register(  # noqa: C901
     )
     async def deploy_group_config(
         ctx: Context,
-        group: str,
-        version: str,
-        product: ProductName = "stream",
-        server: str | None = None,
+        group: GroupSelector,
+        version: DeployVersion,
+        product: GroupProduct = "stream",
+        server: Server = None,
         *,
-        push: bool = False,
-        dry_run: bool = True,
-        expected_plan_sha256: str | None = None,
+        push: Push = False,
+        dry_run: DryRun = True,
+        expected_plan_sha256: ExpectedPlanSha256 = None,
     ) -> dict[str, Any]:
         """Plan or deploy an explicit group/fleet configuration version."""
         await ctx.info(f"Planning or deploying Cribl {product} version '{version}' to '{group}'.")
@@ -325,16 +352,16 @@ def register(  # noqa: C901
     )
     async def commit_and_deploy_group(
         ctx: Context,
-        group: str,
-        message: str,
-        product: ProductName = "stream",
-        server: str | None = None,
-        files: list[str] | None = None,
+        group: GroupSelector,
+        message: CommitMessage,
+        product: GroupProduct = "stream",
+        server: Server = None,
+        files: CommitFiles = None,
         *,
-        effective: bool = True,
-        push: bool = False,
-        dry_run: bool = True,
-        expected_plan_sha256: str | None = None,
+        effective: CommitEffective = True,
+        push: Push = False,
+        dry_run: DryRun = True,
+        expected_plan_sha256: ExpectedPlanSha256 = None,
     ) -> dict[str, Any]:
         """Plan or commit and deploy one group/fleet."""
         await ctx.info(f"Planning or committing and deploying Cribl {product} target '{group}'.")
@@ -371,15 +398,15 @@ def register(  # noqa: C901
     )
     async def commit_and_deploy_all(
         ctx: Context,
-        message: str,
-        server: str | None = None,
-        product: ProductScope = "all",
+        message: CommitMessage,
+        server: Server = None,
+        product: DeployProductScope = "all",
         *,
-        effective: bool = True,
-        push: bool = False,
-        stop_on_error: bool = True,
-        dry_run: bool = True,
-        expected_plan_sha256: str | None = None,
+        effective: CommitEffective = True,
+        push: Push = False,
+        stop_on_error: StopOnError = True,
+        dry_run: DryRun = True,
+        expected_plan_sha256: ExpectedPlanSha256 = None,
     ) -> dict[str, Any]:
         """Plan or commit and deploy all selected targets."""
         await ctx.info(f"Planning or committing and deploying all Cribl {product} targets.")
@@ -436,10 +463,10 @@ def register(  # noqa: C901
     )
     async def push_config_git(
         ctx: Context,
-        server: str | None = None,
+        server: Server = None,
         *,
-        dry_run: bool = True,
-        expected_plan_sha256: str | None = None,
+        dry_run: DryRun = True,
+        expected_plan_sha256: ExpectedPlanSha256 = None,
     ) -> dict[str, Any]:
         """Plan or push the configured Cribl Git remote."""
         await ctx.info("Planning or pushing the Cribl configuration Git repository.")

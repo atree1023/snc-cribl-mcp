@@ -10,6 +10,7 @@ from fastmcp import Context, FastMCP
 from ..models.edge_fleet import EdgeFleet
 from ..operations.edge_provisioning import create_edge_fleet, replicate_fleet_mapping_ruleset
 from ..operations.version_control_jobs import VersionControlJobManager
+from .params import DryRun, ExpectedPlanSha256, RulesetId, RulesetOverwrite, SourceServer, TargetLeader
 
 
 def register(app: FastMCP, *, job_manager: VersionControlJobManager) -> None:
@@ -31,9 +32,9 @@ def register(app: FastMCP, *, job_manager: VersionControlJobManager) -> None:
         ctx: Context,
         *,
         fleet: EdgeFleet,
-        server: str | None = None,
-        dry_run: bool = True,
-        expected_plan_sha256: str | None = None,
+        server: TargetLeader = None,
+        dry_run: DryRun = True,
+        expected_plan_sha256: ExpectedPlanSha256 = None,
     ) -> dict[str, Any]:
         """Plan or submit one fleet creation."""
         await ctx.info("Planning Edge fleet creation." if dry_run else "Submitting Edge fleet creation.")
@@ -62,12 +63,12 @@ def register(app: FastMCP, *, job_manager: VersionControlJobManager) -> None:
     async def copy_ruleset(
         ctx: Context,
         *,
-        source_server: str,
-        ruleset_id: str,
-        server: str | None = None,
-        overwrite: bool = True,
-        dry_run: bool = True,
-        expected_plan_sha256: str | None = None,
+        source_server: SourceServer,
+        ruleset_id: RulesetId,
+        server: TargetLeader = None,
+        overwrite: RulesetOverwrite = True,
+        dry_run: DryRun = True,
+        expected_plan_sha256: ExpectedPlanSha256 = None,
     ) -> dict[str, Any]:
         """Plan or submit one Leader-scoped mapping replication."""
         await ctx.info("Planning fleet mapping replication." if dry_run else "Submitting fleet mapping replication.")

@@ -9,7 +9,20 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
-from .sync_common import ProductName, parse_product
+from .params import (
+    AppendRoutes,
+    ComparePayloads,
+    ContentKinds,
+    CopyOverwrite,
+    CopyValidateAfter,
+    GroupProduct,
+    GroupSyncSource,
+    GroupSyncTarget,
+    IncludeGroupSettings,
+    SourceServer,
+    TargetServer,
+)
+from .sync_common import parse_product
 
 type GroupWorkflowFunc = Callable[..., Awaitable[dict[str, Any]]]
 
@@ -27,7 +40,10 @@ def register(
         description=(
             "Replicate a complete Stream worker group or Edge fleet between configured leaders, including "
             "group/fleet settings plus variables, breakers, lookups, destinations, pipelines, sources, and routes. "
-            "content_kinds may include variables, breakers, lookups, destinations, pipelines, sources, and routes."
+            "content_kinds may include variables, breakers, lookups, destinations, pipelines, sources, and routes. "
+            "Changes apply immediately: there is no dry run or plan hash, existing target items that differ are "
+            "overwritten unless overwrite=false, and target route tables are replaced unless append_routes=true. "
+            "Use validate_group_config to preview the differences first."
         ),
         annotations={
             "title": "Replicate group or fleet",
@@ -36,17 +52,17 @@ def register(
     )
     async def replicate_group_config(
         ctx: Context,
-        source_server: str,
-        target_server: str,
-        source_group: str,
-        target_group: str | None = None,
-        product: ProductName = "stream",
-        content_kinds: list[str] | None = None,
+        source_server: SourceServer,
+        target_server: TargetServer,
+        source_group: GroupSyncSource,
+        target_group: GroupSyncTarget = None,
+        product: GroupProduct = "stream",
+        content_kinds: ContentKinds = None,
         *,
-        include_group_settings: bool = True,
-        overwrite: bool = True,
-        validate_after: bool = True,
-        append_routes: bool = False,
+        include_group_settings: IncludeGroupSettings = True,
+        overwrite: CopyOverwrite = True,
+        validate_after: CopyValidateAfter = True,
+        append_routes: AppendRoutes = False,
     ) -> dict[str, Any]:
         """Replicate a worker group or Edge fleet and its contents."""
         await ctx.info(f"Replicating Cribl {product} group/fleet '{source_group}' to '{target_server}'.")
@@ -77,15 +93,15 @@ def register(
     )
     async def validate_group_config(
         ctx: Context,
-        source_server: str,
-        target_server: str,
-        source_group: str,
-        target_group: str | None = None,
-        product: ProductName = "stream",
-        content_kinds: list[str] | None = None,
+        source_server: SourceServer,
+        target_server: TargetServer,
+        source_group: GroupSyncSource,
+        target_group: GroupSyncTarget = None,
+        product: GroupProduct = "stream",
+        content_kinds: ContentKinds = None,
         *,
-        include_group_settings: bool = True,
-        include_payloads: bool = False,
+        include_group_settings: IncludeGroupSettings = True,
+        include_payloads: ComparePayloads = False,
     ) -> dict[str, Any]:
         """Validate a worker group or Edge fleet and its contents."""
         await ctx.info(f"Validating Cribl {product} group/fleet '{source_group}' against '{target_server}'.")

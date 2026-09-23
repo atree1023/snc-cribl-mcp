@@ -10,6 +10,8 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
+from .params import Server
+
 
 def register(app: FastMCP, *, impl: Callable[[Context, str | None], Awaitable[dict[str, Any]]]) -> None:
     """Register the list_groups tool on the provided app instance.
@@ -28,7 +30,7 @@ def register(app: FastMCP, *, impl: Callable[[Context, str | None], Awaitable[di
             "readOnlyHint": True,
         },
     )
-    async def list_groups(ctx: Context, server: str | None = None) -> dict[str, Any]:
+    async def list_groups(ctx: Context, server: Server = None) -> dict[str, Any]:
         return await impl(ctx, server)
 
 

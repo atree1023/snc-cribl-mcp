@@ -135,7 +135,7 @@ def _require_collectors_list_method(client: CriblControlPlane) -> CollectorListM
     if not callable(list_async):
         msg = (
             "Installed cribl-control-plane SDK does not expose client.collectors.list_async. "
-            "snc_cribl_mcp requires cribl-control-plane>=0.11.0,<0.12."
+            "snc_cribl_mcp requires cribl-control-plane>=0.11.0."
         )
         raise UnsupportedCollectorsSdkError(msg)
     return cast("CollectorListMethod", list_async)

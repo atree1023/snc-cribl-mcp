@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 3 and the cribl-control-plane SDK.
+MCP server exposing Cribl deployment metadata through tools. Uses FastMCP 4 and the cribl-control-plane SDK.
 
 **Key components:**
 
@@ -77,7 +77,7 @@ uv run pyright                             # then type check
 - SDK 0.11 list responses can wrap counted payloads under `result`; exhaust `next()` through the shared pagination helper for top-level Packs, Pack subresources, nodes, groups, and version-control target discovery.
 - SDK `versions.commits.push_async` returns `CountedString` with string items. Successful completion of the SDK call signals push success; preserve raised errors and discard the unused raw output without model-item serialization.
 - Manifest/all-target and standalone pushes return one post-push API status observation separately from mutation success. Cached ahead counts or failed observations do not trigger retries or imply push failure. `remote_sync_verified=false` reflects that this is not an independent remote check.
-- Keep the preview `cribl-control-plane` dependency on the validated `>=0.11.0,<0.12` range until the next generated minor line receives the same contract and live-tool validation pass.
+- The `cribl-control-plane` SDK is a Preview feature, and generated minor releases can contain breaking model and response changes. `pyproject.toml` allows `>=0.11.0`; when `uv.lock` moves to a new SDK minor line, give it the same contract and live-tool validation pass before relying on it.
 
 **Consolidated config object tooling:**
 
@@ -122,6 +122,8 @@ Follow this checklist:
    - Import `ToolConfig` and `generic_list_tool` from `tools/common.py`
    - Define `register(app, deps)` function using `@app.tool()` decorator
    - Reference `tools/list_sources.py` as the canonical example
+   - Type every parameter with a described alias from `tools/params.py` (add one when none fits); the description is the
+     only parameter documentation a client model sees, and `test_tool_param_descriptions.py` fails without it
 
 3. **Register the tool** in `src/snc_cribl_mcp/server.py`
    - Add import in the tools section

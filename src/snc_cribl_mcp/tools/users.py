@@ -9,6 +9,21 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
+from .params import (
+    PasswordEnv,
+    TargetServer,
+    UserDisabled,
+    UserEmail,
+    UserFirst,
+    UserLast,
+    Username,
+    UserOverwrite,
+    UserPassword,
+    UserRoles,
+    UserSourceServer,
+    UserValidateAfter,
+)
+
 type SyncUserFunc = Callable[..., Awaitable[dict[str, Any]]]
 
 
@@ -29,19 +44,19 @@ def register(app: FastMCP, *, impl: SyncUserFunc) -> None:
     )
     async def sync_user(
         ctx: Context,
-        target_server: str,
-        username: str,
-        source_server: str | None = None,
-        password: str | None = None,
-        password_env: str | None = None,
-        first: str | None = None,
-        last: str | None = None,
-        email: str | None = None,
-        roles: list[str] | None = None,
+        target_server: TargetServer,
+        username: Username,
+        source_server: UserSourceServer = None,
+        password: UserPassword = None,
+        password_env: PasswordEnv = None,
+        first: UserFirst = None,
+        last: UserLast = None,
+        email: UserEmail = None,
+        roles: UserRoles = None,
         *,
-        disabled: bool | None = None,
-        overwrite: bool = True,
-        validate_after: bool = True,
+        disabled: UserDisabled = None,
+        overwrite: UserOverwrite = True,
+        validate_after: UserValidateAfter = True,
     ) -> dict[str, Any]:
         """Create or replicate a local user."""
         await ctx.info(f"Syncing local Cribl user '{username}' to '{target_server}'.")

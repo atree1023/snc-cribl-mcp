@@ -130,7 +130,17 @@ PRODUCTS: tuple[ProductsCore, ...] = (
 
 app = FastMCP(
     name="snc-cribl-mcp",
-    instructions=("Expose tools that query a customer-managed Cribl deployment for metadata."),
+    instructions=(
+        "Operates one or more Cribl Stream and Edge leaders (on-prem or Cribl.Cloud). Each leader is a named section in "
+        "config.toml: pass that name as server, source_server, or target_server, or omit server to use the first configured "
+        "leader. An unknown name returns an error that lists the configured names. Read tools inspect configuration, runtime "
+        "health, Edge node files, and Git and deployment state. Mutating tools copy configuration between leaders, manage "
+        "Packs, local users, and Edge fleets, and commit, deploy, and push configuration. Tools that take dry_run default to "
+        "dry_run=true and return a plan with plan_sha256; they change nothing until called with dry_run=false and that exact "
+        "hash as expected_plan_sha256. Pack installs, upgrades, and removals, local-user sync, and whole-group or "
+        "system-settings replication have no dry run and apply immediately. Copied configuration stays uncommitted on the "
+        "target until it is committed and deployed."
+    ),
 )
 _STATE_DATABASE_PATH = state_database_path()
 version_control_jobs = VersionControlJobManager(database_path=_STATE_DATABASE_PATH)

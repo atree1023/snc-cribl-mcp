@@ -11,6 +11,19 @@ from typing import Any
 from fastmcp import Context, FastMCP
 
 from ..operations.edge_teleport import extract_datacenter_from_edge_host, normalize_edge_hostname
+from .params import (
+    EdgeDatacenter,
+    EdgeEarliestTime,
+    EdgeFile,
+    EdgeHost,
+    EdgeInfoType,
+    EdgeLimit,
+    EdgeOffset,
+    EdgeQuery,
+    EdgeRulesets,
+    EdgeSearchWindow,
+    EdgeServer,
+)
 
 
 def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
@@ -27,10 +40,9 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
         name="get_edge_info",
         description=(
             "Return JSON from a Cribl Edge node using the leader-proxied teleport API. "
-            "Currently supports info_type='file' for reading a file with an empty query or searching a file "
-            "when query is provided. Use file for the absolute Edge node path. If server is omitted, "
-            "the tool extracts the three-letter datacenter "
-            "from edge_host and selects the matching configured leader."
+            "info_type='file' reads the file at the absolute Edge node path given in file when query is empty, "
+            "and searches that file when query is set. If server is omitted, the tool takes the three-letter "
+            "datacenter from edge_host (or datacenter) and selects the matching configured leader."
         ),
         annotations={
             "title": "Get Edge node information",
@@ -40,17 +52,17 @@ def register(app: FastMCP, *, deps: SimpleNamespace) -> None:
     )
     async def get_edge_info(
         ctx: Context,
-        edge_host: str,
-        file: str,
-        query: str | None = None,
-        offset: int = 0,
-        limit: int = 50,
-        earliest_time: int | None = None,
-        search_window_seconds: int = 3600,
-        rulesets: list[str] | None = None,
-        info_type: str = "file",
-        datacenter: str | None = None,
-        server: str | None = None,
+        edge_host: EdgeHost,
+        file: EdgeFile,
+        query: EdgeQuery = None,
+        offset: EdgeOffset = 0,
+        limit: EdgeLimit = 50,
+        earliest_time: EdgeEarliestTime = None,
+        search_window_seconds: EdgeSearchWindow = 3600,
+        rulesets: EdgeRulesets = None,
+        info_type: EdgeInfoType = "file",
+        datacenter: EdgeDatacenter = None,
+        server: EdgeServer = None,
     ) -> dict[str, Any]:
         normalized_host = normalize_edge_hostname(edge_host, datacenter=datacenter)
         dc = extract_datacenter_from_edge_host(normalized_host, datacenter=datacenter)

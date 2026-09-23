@@ -142,7 +142,7 @@ class PackUpgradeOptions:
     """Optional fields accepted by the SDK Pack upgrade endpoint."""
 
     allow_custom_functions: bool | None = None
-    minor: str | None = None
+    minor: bool | None = None
     spec: str | None = None
 
 
