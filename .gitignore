@@ -26,3 +26,5 @@ docs/cribl-openapi-spec.yml
 .snc-cribl-mcp/
 
 TODO.md
+
+manifests/
